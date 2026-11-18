@@ -41,6 +41,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerWord(mux, config.WordPython)
 	store.registerSurveys(mux)
 	manuscriptReviews{store: store, model: config.Model}.register(mux)
+	selectionEdits{store: store, model: config.Model}.register(mux)
 	source := config.literature
 	if source == nil {
 		source = literature.New()

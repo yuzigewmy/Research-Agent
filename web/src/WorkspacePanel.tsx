@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ManuscriptReview } from './ManuscriptReview'
+import { SelectionEdit } from './SelectionEdit'
+import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
 import { errorMessage, ProjectApiError } from './projects'
 import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText } from './workspace'
@@ -8,6 +10,16 @@ import type { Document, FilePage } from './workspace'
 import './workspace.css'
 
 const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
+const encoder = new TextEncoder()
+
+// The textarea uses LF even when a saved line ending occupies two code units.
+function savedOffset(source: string, offset: number) {
+  for (const breakPair of source.matchAll(/\r\n/g)) {
+    if (breakPair.index >= offset) break
+    offset++
+  }
+  return offset
+}
 
 function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
@@ -159,6 +171,8 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   const [name, setName] = useState('')
   const [document, setDocument] = useState<Document>()
   const [draft, setDraft] = useState('')
+  const [selection, setSelection] = useState<SelectionEditRange>()
+  const [applying, setApplying] = useState(false)
   const [history, setHistory] = useState(false)
   const [destination, setDestination] = useState<Destination>()
   const [busy, setBusy] = useState<Operation>()
@@ -169,17 +183,46 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   const discardPrompt = useRef<HTMLDivElement>(null)
   const currentPath = document?.path
   const dirty = document !== undefined && draft !== document.content
+  const locked = !!busy || applying
   const paths = [...new Set([...publishedPaths, ...createdPaths, ...page.items.map(({ path }) => path)])]
   const restoreBlocked = conflict ? '请先重新加载当前文件。'
     : dirty ? '请先保存草稿或放弃修改。'
-      : busy ? progress[busy] : undefined
+      : applying ? '正在应用修改建议。' : busy ? progress[busy] : undefined
 
   useEffect(() => () => operation.current?.abort(), [])
   useEffect(() => { if (currentPath !== undefined) editor.current?.focus() }, [currentPath])
   useEffect(() => { if (destination) discardPrompt.current?.focus() }, [destination])
 
+  function loadDocument(next: Document) {
+    setDocument(next)
+    setDraft(next.content)
+    setSelection(undefined)
+    setConflict(false)
+  }
+
+  function selectText(control: HTMLTextAreaElement) {
+    if (!document || dirty || control.selectionStart === control.selectionEnd) {
+      setSelection(undefined)
+      return
+    }
+    const source = document.content
+    const start = savedOffset(source, control.selectionStart)
+    const end = savedOffset(source, control.selectionEnd)
+    const splitsCharacter = (offset: number) => {
+      const codeUnit = source.charCodeAt(offset)
+      return codeUnit >= 0xdc00 && codeUnit <= 0xdfff
+    }
+    if (splitsCharacter(start) || splitsCharacter(end)) {
+      setSelection(undefined)
+      return
+    }
+    const text = source.slice(start, end)
+    const startByte = encoder.encode(source.slice(0, start)).length
+    setSelection({ startByte, endByte: startByte + encoder.encode(text).length, text })
+  }
+
   async function run(kind: Operation, send: (signal: AbortSignal) => Promise<Document>) {
-    if (operation.current) return
+    if (operation.current || applying) return
     const controller = new AbortController()
     operation.current = controller
     setBusy(kind)
@@ -188,9 +231,7 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
     try {
       const next = await send(requestSignal(controller))
       if (controller.signal.aborted) return
-      setDocument(next)
-      setDraft(next.content)
-      setConflict(false)
+      loadDocument(next)
       if (kind === 'open' || kind === 'create') setHistory(false)
       if (kind === 'create') {
         setCreatedPaths((paths) => [next.path, ...paths])
@@ -216,7 +257,7 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   }
 
   function requestDestination(next: Destination) {
-    if (operation.current) return
+    if (operation.current || applying) return
     if (next.kind === 'open' && next.path === currentPath) {
       setDestination(undefined)
       editor.current?.focus()
@@ -241,18 +282,18 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
         onClick={() => {
           if (creating && destination?.kind === 'create') setDestination(undefined)
           setCreating(!creating)
-        }} disabled={!!busy}>{creating ? '取消新建' : '新建文件'}</button>
+        }} disabled={locked}>{creating ? '取消新建' : '新建文件'}</button>
     </div>
     <div id={`${id}-create`} hidden={!creating}>
       {creating && <form className="field" onSubmit={create}>
         <label htmlFor={`${id}-name`}>文件路径</label>
         <div className="workspace-create-row">
           <input id={`${id}-name`} value={name} required autoFocus autoComplete="off" spellCheck={false}
-            readOnly={!!busy} aria-describedby={`${id}-path-hint`} onChange={(event) => {
+            readOnly={locked} aria-describedby={`${id}-path-hint`} onChange={(event) => {
               setName(event.target.value)
               if (destination?.kind === 'create') setDestination(undefined)
             }} />
-          <button className="button primary" type="submit" disabled={!!busy || !name.trim()}>创建文本文件</button>
+          <button className="button primary" type="submit" disabled={locked || !name.trim()}>创建文本文件</button>
         </div>
         <p id={`${id}-path-hint`} className="workspace-note">输入项目内的相对路径，例如 paper/main.md。</p>
       </form>}
@@ -261,7 +302,7 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
       {paths.map((path) => (
         <li key={path}>
           <button className="workspace-row" type="button" aria-current={currentPath === path ? 'true' : undefined}
-            disabled={!!busy} onClick={() => requestDestination({ kind: 'open', path })}>
+            disabled={locked} onClick={() => requestDestination({ kind: 'open', path })}>
             <bdi>{path}</bdi>
           </button>
         </li>
@@ -293,11 +334,14 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
         <span className="workspace-note" role="status">{dirty ? '有未保存的修改' : '已保存'}</span>
       </div>
       <textarea className="workspace-text" id={`${id}-text`} ref={editor} rows={9} dir="auto" spellCheck={false}
-        value={draft} readOnly={!!busy} onChange={(event) => setDraft(event.target.value)} />
+        value={draft} readOnly={locked} onSelect={(event) => selectText(event.currentTarget)} onChange={(event) => {
+          setDraft(event.currentTarget.value)
+          setSelection(undefined)
+        }} />
       <div className="workspace-actions">
-        <button className="button primary" type="button" disabled={!!busy || !dirty || conflict}
+        <button className="button primary" type="button" disabled={locked || !dirty || conflict}
           onClick={() => void run('save', (signal) => saveText(projectId, document.path, draft, document.sha256, signal))}>保存</button>
-        <button className="button outline" type="button" disabled={!!busy}
+        <button className="button outline" type="button" disabled={locked}
           onClick={() => void run('reload', (signal) => readText(projectId, document.path, signal))}>
           {dirty ? '放弃草稿并重新加载' : '重新加载'}
         </button>
@@ -305,6 +349,8 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
           onClick={() => setHistory((value) => !value)}>版本历史</button>
       </div>
       {document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
+        <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
+          disabled={locked || dirty || conflict} onApplying={setApplying} onApplied={loadDocument} />
         <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
         <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
       </>}

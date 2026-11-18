@@ -49,13 +49,25 @@ func scanWorkspaceFile(row interface{ Scan(...any) error }) (WorkspaceFile, erro
 	return file, err
 }
 
+type workspaceQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func (s *Store) workspaceFile(ctx context.Context, projectID, name string) (WorkspaceFile, error) {
-	return scanWorkspaceFile(s.db.QueryRowContext(ctx, `SELECT `+workspaceFileColumns+` FROM workspace_versions
+	return currentWorkspaceFile(ctx, s.db, projectID, name)
+}
+
+func currentWorkspaceFile(ctx context.Context, db workspaceQuery, projectID, name string) (WorkspaceFile, error) {
+	return scanWorkspaceFile(db.QueryRowContext(ctx, `SELECT `+workspaceFileColumns+` FROM workspace_versions
 		WHERE project_id = ? AND path = ? ORDER BY ordinal DESC LIMIT 1`, projectID, name))
 }
 
 func (s *Store) workspaceVersion(ctx context.Context, projectID, versionID string) (WorkspaceFile, error) {
-	return scanWorkspaceFile(s.db.QueryRowContext(ctx, `SELECT `+workspaceFileColumns+` FROM workspace_versions
+	return lookupWorkspaceVersion(ctx, s.db, projectID, versionID)
+}
+
+func lookupWorkspaceVersion(ctx context.Context, db workspaceQuery, projectID, versionID string) (WorkspaceFile, error) {
+	return scanWorkspaceFile(db.QueryRowContext(ctx, `SELECT `+workspaceFileColumns+` FROM workspace_versions
 		WHERE project_id = ? AND version_id = ?`, projectID, versionID))
 }
 
@@ -95,7 +107,7 @@ func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, 
 }
 
 func (s *Store) saveWorkspaceDocument(ctx context.Context, projectID, name, baseSHA256, content string) (WorkspaceDocument, error) {
-	file := WorkspaceFile{Path: name, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(content))), Size: len(content)}
+	file := workspaceTextFile(name, content)
 	// The object is written only if the current version can be advanced.
 	file, err := s.publishWorkspaceVersion(ctx, projectID, baseSHA256, file, &content)
 	return WorkspaceDocument{WorkspaceFile: file, Content: content}, err
@@ -120,8 +132,7 @@ func (s *Store) publishWorkspaceVersion(ctx context.Context, projectID, baseSHA2
 		return WorkspaceFile{}, err
 	}
 	defer tx.Rollback()
-	latest, err := scanWorkspaceFile(tx.QueryRowContext(ctx, `SELECT `+workspaceFileColumns+` FROM workspace_versions
-		WHERE project_id = ? AND path = ? ORDER BY ordinal DESC LIMIT 1`, projectID, file.Path))
+	latest, err := currentWorkspaceFile(ctx, tx, projectID, file.Path)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return WorkspaceFile{}, err
 	}
@@ -131,18 +142,26 @@ func (s *Store) publishWorkspaceVersion(ctx context.Context, projectID, baseSHA2
 	if latest.SHA256 != baseSHA256 {
 		return WorkspaceFile{}, errWorkspaceConflict
 	}
+	file, err = s.insertWorkspaceVersion(ctx, tx, projectID, file, content)
+	if err != nil {
+		return WorkspaceFile{}, err
+	}
+	return file, tx.Commit()
+}
+
+func workspaceTextFile(name, content string) WorkspaceFile {
+	return WorkspaceFile{Path: name, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(content))), Size: len(content)}
+}
+
+func (s *Store) insertWorkspaceVersion(ctx context.Context, tx *sql.Tx, projectID string, file WorkspaceFile, content *string) (WorkspaceFile, error) {
 	if content != nil {
 		if err := s.saveTextObject(file.SHA256, *content); err != nil {
 			return WorkspaceFile{}, err
 		}
 	}
-	file, err = scanWorkspaceFile(tx.QueryRowContext(ctx, `INSERT INTO workspace_versions
+	return scanWorkspaceFile(tx.QueryRowContext(ctx, `INSERT INTO workspace_versions
 		(version_id, project_id, path, sha256, size, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING `+workspaceFileColumns,
 		rand.Text(), projectID, file.Path, file.SHA256, file.Size, time.Now().UTC().Format(createdAtLayout)))
-	if err != nil {
-		return WorkspaceFile{}, err
-	}
-	return file, tx.Commit()
 }
 
 func (s *Store) saveTextObject(digest, content string) error {

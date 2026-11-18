@@ -75,7 +75,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			return
 		}
 		deadline := planTimeout
-		if task.workflowRunID != "" || task.reviewVersionID != "" {
+		if task.workflowRunID != "" || task.reviewVersionID != "" || task.selectionEdit {
 			deadline = 2 * time.Minute
 		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
@@ -95,6 +95,12 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			message = "评审未完成。检查模型连接后，可按原稿版本重试。"
 			if errors.Is(err, errManuscriptReviewOutput) {
 				message = "评审结果的评分、格式或原文定位有误，可以重试。"
+			}
+		}
+		if task.selectionEdit && status == taskFailed {
+			message = "生成修改建议失败，可重新提交。"
+			if errors.Is(err, errSelectionOutput) {
+				message = "模型没有返回可用的替换建议，可调整要求后重新提交。"
 			}
 		}
 		stop()
@@ -128,6 +134,9 @@ func (workers *taskWorkers) close() {
 }
 
 func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Client, projectID string, task Task) (string, error) {
+	if task.selectionEdit {
+		return s.generateSelectionEdit(ctx, model, projectID, task)
+	}
 	if task.reviewVersionID != "" {
 		return s.generateManuscriptReview(ctx, model, projectID, task)
 	}
