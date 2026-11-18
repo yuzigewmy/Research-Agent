@@ -30,6 +30,7 @@ go build -trimpath -o ./dist/research-agent.exe ./cmd/research-agent
 - 文本工作区支持创建和编辑项目文件，例如 `paper/main.md`。单文件支持 512 KiB 的 UTF-8 正文。并发保存冲突时，编辑器保留本页草稿。恢复旧稿会把选中的内容保存为新版本。
 - 启用 Word 组件后，可从当前稿件或指定历史版本生成 DOCX。标题、段落、基本强调、列表、代码和表格可以在 Word 中编辑。每个稿件版本保存自己的导出结果，可重复下载。
 - 在问卷分析中选择项目内不超过 8 MiB 的 UTF-8 CSV，设置必答列和查重列，复核待处理答卷。每次分析保存来源文件版本、判定原因和有效答卷的统计汇总，可下载为 JSON。汇总会排除常见的姓名、电话和邮箱列。带 `__synthetic__` 列的资料会标记为演示数据。
+- 文献综述项目支持在 [Crossref](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) 检索文献，按 DOI 核对登记元数据并保存至项目文献库，可导出 BibTeX。检索词和待核对的 DOI 会发送给 Crossref，记录只代表元数据核对。
 
 ## 启用 Word 导出
 

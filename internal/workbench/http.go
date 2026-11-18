@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"research-agent/internal/inference"
+	"research-agent/internal/literature"
 )
 
 const projectsPath = "/api/v1/projects"
@@ -26,6 +27,7 @@ const projectsPath = "/api/v1/projects"
 type HandlerConfig struct {
 	Model      *inference.Client
 	WordPython string
+	literature literatureSource
 }
 
 // NewHandler serves the API and files from a trusted web build directory.
@@ -38,6 +40,11 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerWorkspace(mux)
 	store.registerWord(mux, config.WordPython)
 	store.registerSurveys(mux)
+	source := config.literature
+	if source == nil {
+		source = literature.New()
+	}
+	literatureLibrary{store: store, source: source}.register(mux)
 	mux.HandleFunc("GET "+projectsPath, store.handleListProjects)
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
