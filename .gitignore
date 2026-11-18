@@ -1,0 +1,9 @@
+/.local/
+/data/
+/dist/
+/web/dist/
+/web/node_modules/
+/research-agent
+/research-agent.exe
+.env
+.env.*.local
