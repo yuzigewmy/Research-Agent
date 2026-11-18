@@ -60,7 +60,7 @@ function isProjectPage(value: unknown): value is ProjectPage {
     && (value.nextCursor === undefined || typeof value.nextCursor === 'string')
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   validate: (value: unknown) => value is T,
   init: RequestInit = {},

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Conversation } from './Conversation'
 import { errorMessage, getProject, ProjectApiError, templates } from './projects'
 import type { Project } from './projects'
 
@@ -65,6 +66,7 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
         <div><dt>创建时间</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
         <div><dt>修订</dt><dd>{project.revision}</dd></div>
       </dl>
+      <Conversation projectId={project.projectId} />
     </div>
   )
 }

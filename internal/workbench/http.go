@@ -17,14 +17,17 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"research-agent/internal/inference"
 )
 
 const projectsPath = "/api/v1/projects"
 
 // NewHandler serves the API and files from a trusted web build directory.
-// A nil filesystem disables static file serving.
-func NewHandler(store *Store, webFS fs.FS) http.Handler {
+// A nil model keeps saved conversations readable without starting new replies.
+func NewHandler(store *Store, webFS fs.FS, model *inference.Client) http.Handler {
 	mux := http.NewServeMux()
+	conversation{store: store, model: model}.register(mux)
 	mux.HandleFunc("GET "+projectsPath, store.handleListProjects)
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
@@ -86,25 +89,11 @@ func isLoopbackHost(host string) bool {
 }
 
 func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		writeError(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	var input createProjectInput
-	if err := decoder.Decode(&input); err != nil {
-		writeBodyError(w, err)
+	if !readJSON(w, r, &input, 8<<10) {
 		return
 	}
-	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
-		writeBodyError(w, err)
-		return
-	}
-
-	if strings.TrimSpace(input.RequestID) == "" || len(input.RequestID) > 128 || strings.ContainsFunc(input.RequestID, unicode.IsControl) {
+	if !validRequestID(input.RequestID) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "requestId must be nonblank, at most 128 bytes, and contain no control characters")
 		return
 	}
@@ -214,13 +203,36 @@ func methodNotAllowed(allow string) http.HandlerFunc {
 	}
 }
 
+func validRequestID(value string) bool {
+	return strings.TrimSpace(value) != "" && len(value) <= 128 && !strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, input any, limit int64) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json")
+		return false
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(input); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+		writeBodyError(w, err)
+		return false
+	}
+	return true
+}
+
 func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "Request body is too large")
 		return
 	}
-	writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Expected one project JSON object")
+	writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交一个 JSON 对象。")
 }
 
 func writeStoreError(w http.ResponseWriter, operation string, err error) {

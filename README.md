@@ -22,3 +22,8 @@ go build -trimpath -o ./dist/research-agent.exe ./cmd/research-agent
 - 从自由研究、文献综述、论文写作和实验计划四种入口创建项目。
 - 浏览项目列表、打开项目详情，并通过地址中的项目编号再次打开同一项目。
 - 创建请求带有请求编号，重复提交同一内容会返回相同的项目。
+- 在项目详情向模型提问。对话和回复进度保存在本机，刷新或返回项目后可继续查看。
+
+## 连接对话模型
+
+启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求设置环境变量 `RESEARCH_MODEL_API_KEY`，然后启动应用。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。没有配置模型时仍可浏览项目和已有会话。一个数据目录运行一个服务实例。

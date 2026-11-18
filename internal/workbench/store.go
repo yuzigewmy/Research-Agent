@@ -65,7 +65,7 @@ func Open(dataDir string) (*Store, error) {
 	if !strings.HasPrefix(filename, "/") {
 		filename = "/" + filename
 	}
-	dsn := url.URL{Scheme: "file", Path: filename, RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"}
+	dsn := url.URL{Scheme: "file", Path: filename, RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=journal_mode(WAL)"}
 	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -92,8 +92,10 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	switch version {
-	case 0:
+	if version < 0 || version > 2 {
+		return fmt.Errorf("unsupported database version %d", version)
+	}
+	if version == 0 {
 		if _, err := tx.Exec(`
 			CREATE TABLE projects (
 				project_id TEXT NOT NULL PRIMARY KEY,
@@ -109,9 +111,14 @@ func migrate(db *sql.DB) error {
 		`); err != nil {
 			return err
 		}
-	case 1:
-	default:
-		return fmt.Errorf("unsupported database version %d", version)
+	}
+	if version < 2 {
+		if _, err := tx.Exec(turnsSchema); err != nil {
+			return err
+		}
+	}
+	if err := recoverInterruptedTurns(tx); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

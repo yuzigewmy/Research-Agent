@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"research-agent/internal/inference"
 	"research-agent/internal/workbench"
 )
 
@@ -40,8 +41,21 @@ func run(address, dataDir, webDir string) error {
 	}
 	defer store.Close()
 
+	config := inference.Config{
+		BaseURL: os.Getenv("RESEARCH_MODEL_BASE_URL"),
+		Model:   os.Getenv("RESEARCH_MODEL_NAME"),
+		APIKey:  os.Getenv("RESEARCH_MODEL_API_KEY"),
+	}
+	var model *inference.Client
+	if config.BaseURL != "" || config.Model != "" {
+		model, err = inference.New(config)
+		if err != nil {
+			return err
+		}
+	}
+
 	server := &http.Server{
-		Handler:           workbench.NewHandler(store, os.DirFS(webDir)),
+		Handler:           workbench.NewHandler(store, os.DirFS(webDir), model),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		IdleTimeout:       60 * time.Second,

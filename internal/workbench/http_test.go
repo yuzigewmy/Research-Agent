@@ -19,7 +19,7 @@ func TestProjectCreationSurvivesReopening(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	web := fstest.MapFS{"index.html": {Data: []byte("<title>Workspace</title>")}}
-	handler := NewHandler(store, web)
+	handler := NewHandler(store, web, nil)
 	index := httptest.NewRecorder()
 	handler.ServeHTTP(index, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/?project=p1", nil))
 	if index.Code != http.StatusOK || index.Body.String() != "<title>Workspace</title>" {
@@ -73,7 +73,7 @@ func TestProjectCreationSurvivesReopening(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	handler = NewHandler(reopened, nil)
+	handler = NewHandler(reopened, nil, nil)
 
 	request(http.MethodPost, collection, input, http.StatusOK, &replayed)
 	var fetched Project
