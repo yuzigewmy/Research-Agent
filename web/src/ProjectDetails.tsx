@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Conversation } from './Conversation'
 import { MaterialPanel } from './MaterialPanel'
 import { TaskPanel } from './TaskPanel'
 import { WorkflowPanel } from './WorkflowPanel'
+import type { Material } from './materials'
 import { errorMessage, getProject, ProjectApiError, templates } from './projects'
 import type { Project } from './projects'
+import { isTurnReferences, turnReferenceLimit } from './turns'
+import type { TurnReference } from './turns'
 
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' })
 const dateTimeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
@@ -33,9 +36,38 @@ export function RequestError({ message, onRetry }: { message: string; onRetry: (
 
 type DetailState = { kind: 'loading' } | { kind: 'ready'; project: Project } | { kind: 'error'; message: string }
 
+function readReferences(key: string): TurnReference[] {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? 'null')
+    return isTurnReferences(saved) ? saved : []
+  } catch {
+    return []
+  }
+}
+
 export function ProjectDetails({ projectId }: { projectId: string }) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
   const [retry, setRetry] = useState(0)
+  const referenceKey = `research.references.${projectId}`
+  const [references, setReferences] = useState(() => readReferences(referenceKey))
+
+  useEffect(() => {
+    if (references.length) sessionStorage.setItem(referenceKey, JSON.stringify(references))
+    else sessionStorage.removeItem(referenceKey)
+  }, [referenceKey, references])
+
+  const clearReferences = useCallback((ids: string[]) => {
+    if (ids.length) setReferences((current) => current.filter((reference) => !ids.includes(reference.materialId)))
+  }, [])
+
+  function toggleReference({ materialId, name, sha256 }: Material) {
+    setReferences((current) => {
+      if (current.some((reference) => reference.materialId === materialId)) {
+        return current.filter((reference) => reference.materialId !== materialId)
+      }
+      return current.length < turnReferenceLimit ? [...current, { materialId, name, sha256 }] : current
+    })
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -69,10 +101,11 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
         <div><dt>创建时间</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
         <div><dt>修订</dt><dd>{project.revision}</dd></div>
       </dl>
-      <MaterialPanel key={project.projectId} projectId={project.projectId} />
+      <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
+        referenceIds={references.map(({ materialId }) => materialId)} />
       {project.templateId === 'experiment' && <WorkflowPanel projectId={project.projectId} />}
       <TaskPanel projectId={project.projectId} />
-      <Conversation projectId={project.projectId} />
+      <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} />
     </div>
   )
 }

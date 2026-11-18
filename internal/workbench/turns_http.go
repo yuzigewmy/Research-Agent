@@ -35,8 +35,9 @@ func (c conversation) register(mux *http.ServeMux) {
 
 func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		RequestID string `json:"requestId"`
-		Text      string `json:"text"`
+		RequestID    string   `json:"requestId"`
+		Text         string   `json:"text"`
+		ReferenceIDs []string `json:"referenceIds"`
 	}
 	if !readJSON(w, r, &input, 128<<10) {
 		return
@@ -45,12 +46,18 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请发送有效的请求编号和 16 KiB 以内的消息。")
 		return
 	}
-	turn, project, created, err := c.store.beginTurn(r.Context(), r.PathValue("id"), input.RequestID, input.Text, c.model != nil)
+	if !validTurnReferenceIDs(input.ReferenceIDs) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。")
+		return
+	}
+	turn, project, created, err := c.store.beginTurn(r.Context(), r.PathValue("id"), input.RequestID, input.Text, input.ReferenceIDs, c.model != nil)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "项目不存在。")
 	case errors.Is(err, errRequestConflict):
-		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联另一条消息。")
+		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联另一条消息或另一组资料。")
+	case errors.Is(err, errInvalidTurnReference):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请引用当前项目中可读取的文本资料。")
 	case errors.Is(err, errTurnBusy):
 		writeError(w, http.StatusConflict, "TURN_RUNNING", "上一轮仍在回复。")
 	case errors.Is(err, errModelUnavailable):
@@ -100,7 +107,11 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 			messages = append(messages, inference.Message{Role: "user", Content: previous[i].Text}, inference.Message{Role: "assistant", Content: previous[i].Answer})
 		}
 	}
-	messages = append(messages, inference.Message{Role: "user", Content: turn.Text})
+	input, err := c.store.turnInput(turn)
+	if err != nil {
+		return err
+	}
+	messages = append(messages, inference.Message{Role: "user", Content: input})
 	var bytesWritten int
 	err = c.model.Stream(ctx, messages, func(delta string) error {
 		bytesWritten += len(delta)

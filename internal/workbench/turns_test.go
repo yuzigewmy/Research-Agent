@@ -14,7 +14,19 @@ import (
 )
 
 func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	const cited = "第一组样本水温为 18°C。"
+	const uncited = "未选中版本的温度为 22°C。"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct{ Messages []inference.Message }
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			http.Error(w, "invalid model input", http.StatusBadRequest)
+			return
+		}
+		last := input.Messages[len(input.Messages)-1].Content
+		if !strings.Contains(last, cited) || strings.Contains(last, uncited) {
+			http.Error(w, "wrong material version", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"基线\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"与对照组\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
@@ -31,6 +43,14 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	project, _, err := store.createProject(context.Background(), createProjectInput{RequestID: "project", Title: "实验记录", TemplateID: "experiment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, _, err := store.saveMaterial(context.Background(), project.ProjectID, "采样记录.txt", strings.NewReader(cited))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := store.saveMaterial(context.Background(), project.ProjectID, material.Name, strings.NewReader(uncited))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,13 +71,14 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 	}
 
 	handler := NewHandler(store, nil, model)
-	const input = `{"requestId":"turn-1","text":"设计实验"}`
+	input := fmt.Sprintf(`{"requestId":"turn-1","text":"设计实验","referenceIds":[%q]}`, material.MaterialID)
+	request(handler, "POST", base, `{"requestId":"bad-reference","text":"设计实验","referenceIds":["missing"]}`, http.StatusUnprocessableEntity)
 	started := request(handler, "POST", base, input, http.StatusAccepted)
 	var turn Turn
 	if err := json.Unmarshal(started.Body.Bytes(), &turn); err != nil || turn.TurnID == "" {
 		t.Fatalf("invalid receipt: %v, %s", err, started.Body.String())
 	}
-	request(handler, "POST", base, `{"requestId":"turn-1","text":"另一项实验"}`, http.StatusConflict)
+	request(handler, "POST", base, fmt.Sprintf(`{"requestId":"turn-1","text":"设计实验","referenceIds":[%q]}`, other.MaterialID), http.StatusConflict)
 
 	streamPath := base + "/" + turn.TurnID + "/stream"
 	stream := request(handler, "GET", streamPath, "", http.StatusOK)
@@ -89,6 +110,9 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 	stored := request(handler, "POST", base, input, http.StatusOK)
 	if err := json.Unmarshal(stored.Body.Bytes(), &turn); err != nil || turn.Answer != "基线与对照组" || turn.Status != "COMPLETED" {
 		t.Fatalf("invalid saved turn: %v, %s", err, stored.Body.String())
+	}
+	if len(turn.References) != 1 || turn.References[0].MaterialID != material.MaterialID || turn.References[0].SHA256 != material.SHA256 {
+		t.Fatalf("saved turn lost its original material version: %+v", turn.References)
 	}
 	replay := request(handler, "GET", streamPath+"?after="+strconv.FormatInt(firstDelta, 10), "", http.StatusOK)
 	if strings.Contains(replay.Body.String(), `"text":"基线"`) || !strings.Contains(replay.Body.String(), `"text":"与对照组"`) {

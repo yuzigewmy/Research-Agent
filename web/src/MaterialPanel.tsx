@@ -3,6 +3,7 @@ import type { ChangeEvent } from 'react'
 import { getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
 import { errorMessage } from './projects'
+import { turnReferenceLimit } from './turns'
 import './materials.css'
 
 const materialDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
@@ -64,9 +65,10 @@ function MaterialPreviewContent({ projectId, material }: { projectId: string; ma
 interface MaterialPanelProps {
   projectId: string
   onReference?: (material: Material) => void
+  referenceIds?: string[]
 }
 
-export function MaterialPanel({ projectId, onReference }: MaterialPanelProps) {
+export function MaterialPanel({ projectId, onReference, referenceIds = [] }: MaterialPanelProps) {
   const headingId = useId()
   const [items, setItems] = useState<Material[]>([])
   const [nextCursor, setNextCursor] = useState<string>()
@@ -78,6 +80,8 @@ export function MaterialPanel({ projectId, onReference }: MaterialPanelProps) {
   const [failures, setFailures] = useState<UploadFailure[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
   const uploadRequest = useRef<AbortController | null>(null)
+  const referenceLimitReached = referenceIds.length >= turnReferenceLimit
+  const referenceLimitHint = `${headingId}-reference-limit`
 
   useEffect(() => {
     const controller = new AbortController()
@@ -140,6 +144,9 @@ export function MaterialPanel({ projectId, onReference }: MaterialPanelProps) {
           {uploading ? '正在上传…' : '上传文件'}
         </button>
       </div>
+      {onReference && referenceLimitReached && <p id={referenceLimitHint} className="material-note" role="status">
+        已选满 {turnReferenceLimit} 份资料，移除一份后可继续选择。
+      </p>}
       {uploadedCount > 0 && !uploading && <p className="material-note" role="status">上传成功 {uploadedCount} 个文件</p>}
       {failures.length > 0 && <div role="alert">
         <ul className="material-failures form-error">
@@ -151,6 +158,8 @@ export function MaterialPanel({ projectId, onReference }: MaterialPanelProps) {
           const isOpen = previewId === material.materialId
           const previewRegion = `${headingId}-preview-${material.materialId}`
           const previewLabel = isOpen ? '收起预览' : '预览'
+          const referenced = referenceIds.includes(material.materialId)
+          const atLimit = referenceLimitReached && !referenced
           return (
             <li className="material-row" key={material.materialId}>
               <div className="material-info">
@@ -167,8 +176,10 @@ export function MaterialPanel({ projectId, onReference }: MaterialPanelProps) {
                   onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
                 <a className="button outline" href={materialDownloadPath(projectId, material.materialId)}
                   aria-label={`下载原件：${material.name}`} download>下载原件</a>
-                {onReference && <button className="button outline" type="button"
-                  aria-label={`引用资料：${material.name}`} onClick={() => onReference(material)}>引用</button>}
+                {material.kind === 'text' && onReference && <button className="button outline" type="button"
+                  aria-label={`引用资料：${material.name}`} aria-pressed={referenced} aria-disabled={atLimit}
+                  aria-describedby={atLimit ? referenceLimitHint : undefined}
+                  onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
               </div>
               {material.kind === 'text' && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
                 {isOpen && <MaterialPreviewContent material={material} projectId={projectId} />}

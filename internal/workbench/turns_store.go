@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
-const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at`
+const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at, references_json`
 
 var (
 	errTurnBusy         = errors.New("project already has a running turn")
@@ -16,15 +18,16 @@ var (
 )
 
 type Turn struct {
-	ordinal   int64
-	TurnID    string `json:"turnId"`
-	RequestID string `json:"requestId"`
-	Text      string `json:"text"`
-	Answer    string `json:"answer"`
-	Status    string `json:"status"`
-	Message   string `json:"message,omitempty"`
-	AfterSeq  int64  `json:"afterSeq"`
-	CreatedAt string `json:"createdAt"`
+	ordinal    int64
+	TurnID     string          `json:"turnId"`
+	RequestID  string          `json:"requestId"`
+	Text       string          `json:"text"`
+	Answer     string          `json:"answer"`
+	Status     string          `json:"status"`
+	Message    string          `json:"message,omitempty"`
+	AfterSeq   int64           `json:"afterSeq"`
+	CreatedAt  string          `json:"createdAt"`
+	References []TurnReference `json:"references,omitempty"`
 }
 
 type TurnEvent struct {
@@ -78,11 +81,17 @@ func recoverInterruptedTurns(tx *sql.Tx) error {
 
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var t Turn
-	err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message, &t.AfterSeq, &t.CreatedAt)
-	return t, err
+	var references []byte
+	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message, &t.AfterSeq, &t.CreatedAt, &references); err != nil {
+		return Turn{}, err
+	}
+	if err := json.Unmarshal(references, &t.References); err != nil {
+		return Turn{}, err
+	}
+	return t, nil
 }
 
-func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string, modelReady bool) (Turn, Project, bool, error) {
+func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string, referenceIDs []string, modelReady bool) (Turn, Project, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Turn{}, Project{}, false, err
@@ -91,7 +100,9 @@ func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string
 
 	turn, err := scanTurn(tx.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND request_id = ?`, projectID, requestID))
 	if err == nil {
-		if turn.Text != text {
+		if turn.Text != text || !slices.EqualFunc(turn.References, referenceIDs, func(ref TurnReference, id string) bool {
+			return ref.MaterialID == id
+		}) {
 			return Turn{}, Project{}, false, errRequestConflict
 		}
 		return turn, Project{}, false, nil
@@ -113,9 +124,17 @@ func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string
 	if running {
 		return Turn{}, Project{}, false, errTurnBusy
 	}
-	turn = Turn{TurnID: rand.Text(), RequestID: requestID, Text: text, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
-	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, requestID, turn.Text, turn.Status, turn.CreatedAt).Scan(&turn.ordinal)
+	references, err := resolveTurnReferences(ctx, tx, projectID, referenceIDs)
+	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
+	referenceJSON, err := json.Marshal(references)
+	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
+	turn = Turn{TurnID: rand.Text(), RequestID: requestID, Text: text, References: references, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at, references_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, requestID, turn.Text, turn.Status, turn.CreatedAt, string(referenceJSON)).Scan(&turn.ordinal)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}

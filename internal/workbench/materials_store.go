@@ -161,7 +161,11 @@ func (s *Store) previewMaterial(material Material, limit int) (MaterialPreview, 
 	if material.Kind != "text" {
 		return MaterialPreview{}, errMaterialNotText
 	}
-	file, err := os.Open(s.materialObject(material.SHA256))
+	return s.previewObject(material.SHA256, limit)
+}
+
+func (s *Store) previewObject(digest string, limit int) (MaterialPreview, error) {
+	file, err := os.Open(s.materialObject(digest))
 	if err != nil {
 		return MaterialPreview{}, err
 	}

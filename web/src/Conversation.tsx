@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { materialDownloadPath } from './materials'
 import { errorMessage } from './projects'
 import { listTurns, sendTurn, turnsPath } from './turns'
-import type { Turn, TurnEvent, TurnInput } from './turns'
+import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
 
 type StreamTarget = { id: string; after: number }
 
@@ -11,7 +12,17 @@ function readAttempt(key: string): TurnInput | null {
   return value ? JSON.parse(value) as TurnInput : null
 }
 
-export function Conversation({ projectId }: { projectId: string }) {
+function sameReferenceIds(first: string[] = [], second: string[]) {
+  return first.length === second.length && first.every((id, index) => id === second[index])
+}
+
+interface ConversationProps {
+  projectId: string
+  references: TurnReference[]
+  onClearReferences: (ids: string[]) => void
+}
+
+export function Conversation({ projectId, references, onClearReferences }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
   const attempt = useRef<TurnInput | null>(null)
@@ -34,18 +45,21 @@ export function Conversation({ projectId }: { projectId: string }) {
     setStream(turn.status === 'RUNNING' ? { id: turn.turnId, after: turn.afterSeq } : null)
   }
 
+  const finishAttempt = useCallback((input: TurnInput) => {
+    attempt.current = null
+    sessionStorage.removeItem(attemptKey)
+    if (sessionStorage.getItem(draftKey) === input.text) sessionStorage.removeItem(draftKey)
+    setDraft((current) => current === input.text ? '' : current)
+    if (input.referenceIds?.length) onClearReferences(input.referenceIds)
+  }, [attemptKey, draftKey, onClearReferences])
+
   useEffect(() => {
     const controller = new AbortController()
     attempt.current = readAttempt(attemptKey)
     listTurns(projectId, controller.signal).then((page) => {
       if (controller.signal.aborted) return
-      const saved = page.items.find((turn) => turn.requestId === attempt.current?.requestId)
-      if (saved) {
-        sessionStorage.removeItem(attemptKey)
-        attempt.current = null
-        if (sessionStorage.getItem(draftKey) === saved.text) sessionStorage.removeItem(draftKey)
-        setDraft((current) => current === saved.text ? '' : current)
-      }
+      const pending = attempt.current
+      if (pending && page.items.some((turn) => turn.requestId === pending.requestId)) finishAttempt(pending)
       const running = page.items.find((turn) => turn.status === 'RUNNING')
       setTurns(page.items.reverse())
       setCursor(page.nextCursor)
@@ -58,7 +72,7 @@ export function Conversation({ projectId }: { projectId: string }) {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [attemptKey, draftKey, projectId, reload])
+  }, [attemptKey, finishAttempt, projectId, reload])
 
   useEffect(() => () => submission.current?.abort(), [])
 
@@ -97,7 +111,11 @@ export function Conversation({ projectId }: { projectId: string }) {
       setError('这条消息超过 16 KiB，请拆成几条发送。')
       return
     }
-    const input = attempt.current?.text === draft ? attempt.current : { requestId: crypto.randomUUID(), text: draft }
+    const referenceIds = references.map(({ materialId }) => materialId)
+    const previous = attempt.current
+    const input = previous?.text === draft && sameReferenceIds(previous.referenceIds, referenceIds)
+      ? previous
+      : { requestId: crypto.randomUUID(), text: draft, referenceIds: referenceIds.length ? referenceIds : undefined }
     attempt.current = input
     sessionStorage.setItem(attemptKey, JSON.stringify(input))
     const controller = new AbortController()
@@ -107,10 +125,7 @@ export function Conversation({ projectId }: { projectId: string }) {
     try {
       const turn = await sendTurn(projectId, input, controller.signal)
       if (controller.signal.aborted) return
-      sessionStorage.removeItem(attemptKey)
-      sessionStorage.removeItem(draftKey)
-      attempt.current = null
-      setDraft('')
+      finishAttempt(input)
       accept(turn)
     } catch (err) {
       if (!controller.signal.aborted) setError(errorMessage(err))
@@ -158,6 +173,16 @@ export function Conversation({ projectId }: { projectId: string }) {
           <li key={turn.turnId} className="turn">
             <p className="turn-role">你</p>
             <p className="turn-content" dir="auto">{turn.text}</p>
+            {!!turn.references?.length && <div className="turn-references">
+              <p className="turn-status">随消息发送的资料</p>
+              <ul aria-label="随消息发送的资料">
+                {turn.references.map(({ materialId, name, sha256 }) => <li key={materialId}>
+                  <a href={materialDownloadPath(projectId, materialId)} download
+                    aria-label={`下载原件：${name}`}><bdi>{name}</bdi></a>
+                  <code className="turn-status" title={sha256}>{sha256.slice(0, 8)}</code>
+                </li>)}
+              </ul>
+            </div>}
             <p className="turn-role">研究助手</p>
             {turn.answer && <p className="turn-content" dir="auto">{turn.answer}</p>}
             {turn.status === 'RUNNING' && <p className="turn-status" role="status">{connectionLost ? '连接中断，正在续接…' : '正在回复…'}</p>}
@@ -168,6 +193,18 @@ export function Conversation({ projectId }: { projectId: string }) {
       {error && <p className="form-error" role="alert">{error}</p>}
       {error && <button className="button outline" type="button" disabled={loading || sending} onClick={refresh}>刷新会话</button>}
       {!loading && !configured && !error && <p className="turn-status">配置对话模型后即可提问。</p>}
+      {references.length > 0 && <div className="turn-references draft-references" aria-labelledby="draft-references-title">
+        <p id="draft-references-title">已选资料</p>
+        <p className="turn-status">发送时会将所选文本的节选一并发给模型。</p>
+        <ul aria-labelledby="draft-references-title">
+          {references.map(({ materialId, name, sha256 }) => <li key={materialId}>
+            <bdi>{name}</bdi>
+            <code className="turn-status" title={sha256}>{sha256.slice(0, 8)}</code>
+            <button className="button outline" type="button" aria-label={`移除资料：${name}`}
+              onClick={() => onClearReferences([materialId])}>移除</button>
+          </li>)}
+        </ul>
+      </div>}
       {configured && (
         <form className="create-form" onSubmit={send} aria-busy={sending}>
           <div className="field">
