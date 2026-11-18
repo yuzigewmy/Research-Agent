@@ -1,0 +1,58 @@
+.project-filters {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-block-end: 1px solid var(--line);
+}
+
+.project-scope,
+.project-search-controls,
+.project-name-controls,
+.project-management-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.project-search-controls > input,
+.project-name-controls > input {
+  flex: 1 1 8rem;
+}
+
+.project-scope .outline[aria-pressed='true'] {
+  background: var(--selected);
+}
+
+.project-row-research-title {
+  flex-basis: 100%;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.project-administration {
+  display: grid;
+  gap: 0.875rem;
+  margin-block-start: 1.5rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--line);
+}
+
+.project-administration .button[aria-disabled='true'] {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: default;
+}
+
+.project-management-help {
+  color: var(--muted);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.project-conflict {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}

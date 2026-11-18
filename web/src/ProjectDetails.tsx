@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Conversation } from './Conversation'
 import { LiteraturePanel } from './LiteraturePanel'
 import { MaterialPanel } from './MaterialPanel'
+import { ProjectAdministration } from './ProjectAdministration'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
 import { WorkflowPanel } from './WorkflowPanel'
@@ -48,7 +49,7 @@ function readReferences(key: string): TurnReference[] {
   }
 }
 
-export function ProjectDetails({ projectId }: { projectId: string }) {
+export function ProjectDetails({ projectId, onUpdated }: { projectId: string; onUpdated: (project: Project) => void }) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
   const [retry, setRetry] = useState(0)
   const referenceKey = `research.references.${projectId}`
@@ -98,13 +99,19 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
   const { project } = detail
   return (
     <div className="project-detail">
-      <h3 dir="auto">{project.title}</h3>
+      <h3 dir="auto">{project.displayName || project.title}</h3>
       <dl className="project-properties">
+        {project.displayName && project.displayName !== project.title &&
+          <div><dt>研究题目</dt><dd dir="auto">{project.title}</dd></div>}
         <div><dt>项目模板</dt><dd>{templates[project.templateId]}</dd></div>
-        <div><dt>状态</dt><dd><span className="ready-label">已就绪</span></dd></div>
+        <div><dt>状态</dt><dd>{project.status === 'ARCHIVED' ? '已归档' : <span className="ready-label">已就绪</span>}</dd></div>
         <div><dt>创建时间</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
         <div><dt>修订</dt><dd>{project.revision}</dd></div>
       </dl>
+      <ProjectAdministration project={project} onUpdated={(updated) => {
+        setDetail({ kind: 'ready', project: updated })
+        onUpdated(updated)
+      }} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         referenceIds={references.map(({ materialId }) => materialId)} />
       <SurveyPanel projectId={project.projectId} />

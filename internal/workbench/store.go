@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	projectColumns = `project_id, title, template_id, status, revision, created_at`
+	projectColumns = `project_id, title, display_name, template_id, status, revision, created_at`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -25,12 +25,13 @@ var errRequestConflict = errors.New("request ID is already used for a different 
 
 // Project is the API representation of a research project.
 type Project struct {
-	ProjectID  string `json:"projectId"`
-	Title      string `json:"title"`
-	TemplateID string `json:"templateId"`
-	Status     string `json:"status"`
-	Revision   int    `json:"revision"`
-	CreatedAt  string `json:"createdAt"`
+	ProjectID   string `json:"projectId"`
+	Title       string `json:"title"`
+	DisplayName string `json:"displayName"`
+	TemplateID  string `json:"templateId"`
+	Status      string `json:"status"`
+	Revision    int    `json:"revision"`
+	CreatedAt   string `json:"createdAt"`
 }
 
 type createProjectInput struct {
@@ -101,7 +102,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 11 {
+	if version < 0 || version > 12 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -171,6 +172,11 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if version < 12 {
+		if _, err := tx.Exec(projectLifecycleSchema); err != nil {
+			return err
+		}
+	}
 	if err := recoverInterruptedTurns(tx); err != nil {
 		return err
 	}
@@ -186,10 +192,10 @@ func migrate(db *sql.DB) error {
 func (s *Store) createProject(ctx context.Context, input createProjectInput) (Project, bool, error) {
 	project := Project{
 		ProjectID: rand.Text(), Title: input.Title, TemplateID: input.TemplateID,
-		Status: "READY", Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout),
+		Status: projectReady, Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout),
 	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO projects (`+projectColumns+`, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO projects (project_id, title, template_id, status, revision, created_at, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (request_id) DO NOTHING
 	`, project.ProjectID, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID)
 	if err != nil {
@@ -218,11 +224,15 @@ func (s *Store) getProject(ctx context.Context, id string) (Project, error) {
 	return scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE project_id = ?`, id))
 }
 
-func (s *Store) listProjects(ctx context.Context, cursor projectCursor, limit int) ([]Project, error) {
-	query := `SELECT ` + projectColumns + ` FROM projects`
-	var args []any
+func (s *Store) listProjects(ctx context.Context, cursor projectCursor, limit int, status, search string) ([]Project, error) {
+	query := `SELECT ` + projectColumns + ` FROM projects WHERE status = ?`
+	args := []any{status}
+	if search != "" {
+		query += ` AND (instr(title, ?) > 0 OR instr(display_name, ?) > 0)`
+		args = append(args, search, search)
+	}
 	if cursor.projectID != "" {
-		query += ` WHERE (created_at, project_id) < (?, ?)`
+		query += ` AND (created_at, project_id) < (?, ?)`
 		args = append(args, cursor.createdAt, cursor.projectID)
 	}
 	query += ` ORDER BY created_at DESC, project_id DESC LIMIT ?`
@@ -245,6 +255,6 @@ func (s *Store) listProjects(ctx context.Context, cursor projectCursor, limit in
 
 func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	var project Project
-	err := row.Scan(&project.ProjectID, &project.Title, &project.TemplateID, &project.Status, &project.Revision, &project.CreatedAt)
+	err := row.Scan(&project.ProjectID, &project.Title, &project.DisplayName, &project.TemplateID, &project.Status, &project.Revision, &project.CreatedAt)
 	return project, err
 }

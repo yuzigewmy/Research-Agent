@@ -49,7 +49,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
 	mux.HandleFunc("GET "+projectsPath+"/{id}", store.handleGetProject)
-	mux.HandleFunc(projectsPath+"/{id}", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc("PATCH "+projectsPath+"/{id}", store.handlePatchProject)
+	mux.HandleFunc(projectsPath+"/{id}", methodNotAllowed("GET, HEAD, PATCH"))
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -180,7 +181,20 @@ func (s *Store) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Invalid project cursor")
 		return
 	}
-	projects, err := s.listProjects(r.Context(), cursor, limit+1)
+	status := projectReady
+	if query.Has("status") {
+		status = query.Get("status")
+		if status != projectReady && status != projectArchived {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "项目状态必须是 READY 或 ARCHIVED。")
+			return
+		}
+	}
+	search := strings.TrimSpace(query.Get("q"))
+	if !utf8.ValidString(search) || strings.ContainsRune(search, 0) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "搜索词必须是有效文本，且不能包含空字符。")
+		return
+	}
+	projects, err := s.listProjects(r.Context(), cursor, limit+1, status, search)
 	if err != nil {
 		writeStoreError(w, "list projects", err)
 		return

@@ -56,7 +56,7 @@ export function App() {
   }
 
   function handleCreated(project: Project) {
-    list.addProject(project)
+    list.refresh()
     if (selectedFromUrl() === null) navigate(project.projectId)
   }
 
@@ -76,7 +76,7 @@ export function App() {
             )}
           </header>
           <div hidden={selectedId !== null}><CreateProjectForm onCreated={handleCreated} /></div>
-          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} />}
+          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} onUpdated={list.refresh} />}
         </section>
         <ProjectList list={list} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>

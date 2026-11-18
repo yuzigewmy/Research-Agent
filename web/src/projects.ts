@@ -6,12 +6,14 @@ export const templates = {
 } as const
 
 export type TemplateId = keyof typeof templates
+export type ProjectStatus = 'READY' | 'ARCHIVED'
 
 export interface Project {
   projectId: string
   title: string
+  displayName: string
   templateId: TemplateId
-  status: 'READY'
+  status: ProjectStatus
   revision: number
   createdAt: string
 }
@@ -26,6 +28,17 @@ export interface CreateProject {
   title: string
   templateId: TemplateId
 }
+
+export interface ProjectFilters {
+  status: ProjectStatus
+  q: string
+}
+
+export type ProjectChanges =
+  | { displayName: string; status?: ProjectStatus }
+  | { displayName?: string; status: ProjectStatus }
+
+export type UpdateProject = ProjectChanges & { requestId: string; expectedRevision: number }
 
 const endpoint = '/api/v1/projects'
 
@@ -48,8 +61,9 @@ function isProject(value: unknown): value is Project {
   return isRecord(value)
     && typeof value.projectId === 'string' && value.projectId.length > 0
     && typeof value.title === 'string' && value.title.trim().length > 0
+    && typeof value.displayName === 'string'
     && isTemplateId(value.templateId)
-    && value.status === 'READY'
+    && (value.status === 'READY' || value.status === 'ARCHIVED')
     && typeof value.revision === 'number' && Number.isSafeInteger(value.revision)
     && typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
 }
@@ -89,17 +103,30 @@ export async function request<T>(
   return body
 }
 
-export function listProjects(cursor: string | undefined, signal: AbortSignal) {
-  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
-  return request(`${endpoint}${query}`, isProjectPage, { signal })
+export function listProjects(filters: ProjectFilters, cursor: string | undefined, signal: AbortSignal) {
+  const params = new URLSearchParams({ status: filters.status })
+  if (filters.q) params.set('q', filters.q)
+  if (cursor) params.set('cursor', cursor)
+  return request(`${endpoint}?${params}`, isProjectPage, { signal })
 }
 
-export function getProject(projectId: string, signal: AbortSignal) {
+function projectPath(projectId: string) {
   // URL parsing folds dot segments even when their dots are percent-encoded.
-  if (!projectId || projectId === '.' || projectId === '..') {
-    return Promise.reject(new ProjectApiError('项目链接无效。', 400))
-  }
-  return request(`${endpoint}/${encodeURIComponent(projectId)}`, isProject, { signal })
+  if (!projectId || projectId === '.' || projectId === '..') throw new ProjectApiError('项目链接无效。', 400)
+  return `${endpoint}/${encodeURIComponent(projectId)}`
+}
+
+export async function getProject(projectId: string, signal: AbortSignal) {
+  return request(projectPath(projectId), isProject, { signal })
+}
+
+export async function updateProject(projectId: string, input: UpdateProject, signal: AbortSignal) {
+  return request(projectPath(projectId), isProject, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    signal,
+  })
 }
 
 export function createProject(input: CreateProject) {

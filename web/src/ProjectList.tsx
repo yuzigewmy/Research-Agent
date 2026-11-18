@@ -1,10 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { LoadingState, ProjectDate, RequestError } from './ProjectDetails'
 import { errorMessage, listProjects, templates } from './projects'
-import type { Project } from './projects'
+import type { Project, ProjectFilters, ProjectStatus } from './projects'
+import './project-management.css'
 
 type ListStatus = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string }
+type ListRequest = { filters: ProjectFilters; cursor?: string }
+
+const projectScopes = [
+  ['READY', '当前项目'],
+  ['ARCHIVED', '归档项目'],
+] as const satisfies ReadonlyArray<readonly [ProjectStatus, string]>
 
 function mergeItems(first: Project[], second: Project[]): Project[] {
   const byId = new Map(first.map((project) => [project.projectId, project]))
@@ -12,44 +19,65 @@ function mergeItems(first: Project[], second: Project[]): Project[] {
   return [...byId.values()]
 }
 
+interface ListState {
+  request: ListRequest
+  items: Project[]
+  nextCursor?: string
+  status: ListStatus
+}
+
+function firstPage(filters: ProjectFilters): ListState {
+  return { request: { filters }, items: [], status: { kind: 'loading' } }
+}
+
 export function useProjectList() {
-  const [items, setItems] = useState<Project[]>([])
-  const [nextCursor, setNextCursor] = useState<string>()
-  const [status, setStatus] = useState<ListStatus>({ kind: 'loading' })
-  const [request, setRequest] = useState<{ cursor?: string }>({})
+  const [state, setState] = useState(() => firstPage({ q: '', status: 'READY' }))
+  const { request, items, nextCursor, status } = state
 
   useEffect(() => {
     const controller = new AbortController()
-    listProjects(request.cursor, controller.signal).then((page) => {
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+    listProjects(request.filters, request.cursor, signal).then((page) => {
       if (controller.signal.aborted) return
-      setItems((current) => mergeItems(current, page.items))
-      setNextCursor(page.nextCursor)
-      setStatus({ kind: 'ready' })
+      setState((current) => current.request === request ? {
+        ...current,
+        items: request.cursor ? mergeItems(current.items, page.items) : page.items,
+        nextCursor: page.nextCursor,
+        status: { kind: 'ready' },
+      } : current)
     }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setStatus({ kind: 'error', message: errorMessage(error) })
+      if (controller.signal.aborted) return
+      setState((current) => current.request === request
+        ? { ...current, status: { kind: 'error', message: errorMessage(error) } }
+        : current)
     })
     return () => controller.abort()
   }, [request])
 
-  function load(cursor?: string) {
-    setStatus({ kind: 'loading' })
-    setRequest({ cursor })
-  }
-
-  function addProject(project: Project) {
-    setItems((current) => current.some((item) => item.projectId === project.projectId)
-      ? mergeItems(current, [project])
-      : [project, ...current],
-    )
+  function filter(changes: Partial<ProjectFilters>) {
+    setState((current) => {
+      const previous = current.request.filters
+      const next = { ...previous, ...changes }
+      return next.q === previous.q && next.status === previous.status ? current : firstPage(next)
+    })
   }
 
   return {
     items,
     status,
     nextCursor,
-    addProject,
-    loadMore: () => load(nextCursor),
-    retry: () => load(request.cursor),
+    filters: request.filters,
+    filter,
+    refresh: () => setState((current) => firstPage(current.request.filters)),
+    loadMore: () => setState((current) => {
+      if (current.status.kind !== 'ready' || !current.nextCursor) return current
+      return {
+        ...current,
+        request: { filters: current.request.filters, cursor: current.nextCursor },
+        status: { kind: 'loading' },
+      }
+    }),
+    retry: () => setState((current) => ({ ...current, request: { ...current.request }, status: { kind: 'loading' } })),
   }
 }
 
@@ -61,10 +89,41 @@ interface ProjectListProps {
 }
 
 export function ProjectList({ list, selectedId, hrefFor, onOpen }: ProjectListProps) {
-  const { items, status, nextCursor, retry, loadMore } = list
+  const { items, status, nextCursor, retry, loadMore, filters, filter } = list
+  const [query, setQuery] = useState(filters.q)
+  const queryId = useId()
+  const queryInput = useRef<HTMLInputElement>(null)
   return (
     <section className="project-index" aria-labelledby="project-index-title">
       <header className="panel-heading"><h2 id="project-index-title">项目列表</h2></header>
+      <div className="project-filters">
+        <div role="group" aria-label="项目范围" className="project-scope">
+          {projectScopes.map(([value, label]) => (
+            <button key={value} className="button outline" type="button"
+              aria-pressed={filters.status === value} onClick={() => filter({ status: value })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <form className="field" role="search" aria-label="项目检索" onSubmit={(event) => {
+          event.preventDefault()
+          const q = query.trim()
+          setQuery(q)
+          filter({ q })
+        }}>
+          <label htmlFor={queryId}>搜索显示名或研究题目</label>
+          <div className="project-search-controls">
+            <input id={queryId} ref={queryInput} type="search" value={query} autoComplete="off"
+              onChange={(event) => setQuery(event.currentTarget.value)} />
+            <button className="button outline" type="submit">搜索</button>
+            {filters.q && <button className="button outline" type="button" onClick={() => {
+              setQuery('')
+              filter({ q: '' })
+              queryInput.current?.focus()
+            }}>清除</button>}
+          </div>
+        </form>
+      </div>
       {items.length > 0 && (
         <ul className="project-list" role="list">
           {items.map((project) => (
@@ -75,8 +134,11 @@ export function ProjectList({ list, selectedId, hrefFor, onOpen }: ProjectListPr
                 onClick={(event) => onOpen(event, project.projectId)}
                 aria-current={selectedId === project.projectId ? 'page' : undefined}
               >
-                <span className="project-row-title" dir="auto">{project.title}</span>
+                <span className="project-row-title" dir="auto">{project.displayName || project.title}</span>
                 <span className="project-row-meta">
+                  {project.displayName && project.displayName !== project.title && (
+                    <span className="project-row-research-title">题目：<bdi>{project.title}</bdi></span>
+                  )}
                   <span>{templates[project.templateId]}</span>
                   <ProjectDate value={project.createdAt} />
                 </span>
@@ -90,8 +152,9 @@ export function ProjectList({ list, selectedId, hrefFor, onOpen }: ProjectListPr
       {status.kind === 'error' && <RequestError message={status.message} onRetry={retry} />}
       {status.kind === 'ready' && items.length === 0 && (
         <div className="empty-state" role="status">
-          <p><strong>暂无项目</strong></p>
-          <p>新建的项目会显示在这里。</p>
+          <p><strong>{filters.q ? '没有匹配的项目' : filters.status === 'ARCHIVED' ? '暂无归档项目' : '暂无当前项目'}</strong></p>
+          {filters.q && <p>可以换个关键词或切换项目范围。</p>}
+          {!filters.q && filters.status === 'READY' && <p>新建的项目会显示在这里。</p>}
         </div>
       )}
       {nextCursor && status.kind === 'ready' && (
