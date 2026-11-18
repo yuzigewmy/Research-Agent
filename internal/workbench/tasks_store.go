@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message`
+const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
+	COALESCE(experiment_run_id, ''), COALESCE(experiment_step, 0)`
+
+const nextTaskQueuePosition = `(SELECT COALESCE(MAX(queued_seq), 0) + 1 FROM tasks
+	WHERE project_id = ? AND status = 'QUEUED')`
 
 const (
 	taskProposed    = "PROPOSED"
@@ -34,13 +38,15 @@ var (
 
 // Task is the public record of a research plan proposal and its execution.
 type Task struct {
-	ordinal     int64
-	TaskID      string `json:"taskId"`
-	Instruction string `json:"instruction"`
-	Revision    int    `json:"revision"`
-	Status      string `json:"status"`
-	CreatedAt   string `json:"createdAt"`
-	Message     string `json:"message,omitempty"`
+	ordinal         int64
+	experimentRunID string
+	experimentStep  int
+	TaskID          string `json:"taskId"`
+	Instruction     string `json:"instruction"`
+	Revision        int    `json:"revision"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"createdAt"`
+	Message         string `json:"message,omitempty"`
 }
 
 type taskRequest struct {
@@ -81,20 +87,26 @@ const tasksSchema = `
 func recoverInterruptedTasks(tx *sql.Tx) error {
 	_, err := tx.Exec(`UPDATE tasks SET revision = revision + 1,
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,
-		message = CASE WHEN status = 'CANCELLING' THEN '' ELSE ? END
-		WHERE status IN ('QUEUED', 'RUNNING', 'CANCELLING')`, "服务重启中断了已确认的任务，可以提议一项新任务。")
+		message = CASE
+			WHEN status = 'CANCELLING' THEN ''
+			WHEN experiment_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
+			ELSE '服务重启中断了已确认的任务，可以提议一项新任务。'
+		END
+		WHERE status IN ('RUNNING', 'CANCELLING') OR (status = 'QUEUED' AND experiment_run_id IS NULL)`)
 	return err
 }
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
-	err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message)
+	err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
+		&t.experimentRunID, &t.experimentStep)
 	return t, err
 }
 
 func (s *Store) listTasks(ctx context.Context, projectID string, before int64, limit int) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM tasks
-		WHERE project_id = ? AND (? = 0 OR ordinal < ?) ORDER BY ordinal DESC LIMIT ?`, projectID, before, before, limit)
+		WHERE project_id = ? AND experiment_run_id IS NULL AND (? = 0 OR ordinal < ?)
+		ORDER BY ordinal DESC LIMIT ?`, projectID, before, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -153,17 +165,16 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 		return Task{}, false, err
 	}
 
-	var seq int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision)
-		VALUES (?, ?, ?, ?, ?) RETURNING seq`, req.ProjectID, task.TaskID, req.RequestID, req.Action, req.ExpectedRevision).Scan(&seq)
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision)
+		VALUES (?, ?, ?, ?, ?)`, req.ProjectID, task.TaskID, req.RequestID, req.Action, req.ExpectedRevision)
 	if err != nil {
 		return Task{}, false, err
 	}
 	if nextStatus != "" {
 		task, err = scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = ?, revision = revision + 1,
-			queued_seq = CASE WHEN ? = 'QUEUED' THEN ? ELSE queued_seq END
+			queued_seq = CASE WHEN ? = 'QUEUED' THEN `+nextTaskQueuePosition+` ELSE queued_seq END
 			WHERE project_id = ? AND task_id = ? AND revision = ? RETURNING `+taskColumns,
-			nextStatus, nextStatus, seq, req.ProjectID, task.TaskID, req.ExpectedRevision))
+			nextStatus, nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
 		if err != nil {
 			return Task{}, false, err
 		}
@@ -172,7 +183,8 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 }
 
 func lookupTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (Task, error) {
-	return scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks WHERE project_id = ? AND task_id = ?`, projectID, taskID))
+	return scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks
+		WHERE project_id = ? AND task_id = ? AND experiment_run_id IS NULL`, projectID, taskID))
 }
 
 func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, error) {
@@ -199,27 +211,57 @@ func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, e
 }
 
 func (s *Store) claimQueuedTask(ctx context.Context, projectID string) (Task, error) {
-	return scanTask(s.db.QueryRowContext(ctx, `UPDATE tasks SET status = 'RUNNING', revision = revision + 1
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Task{}, err
+	}
+	defer tx.Rollback()
+	task, err := scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = 'RUNNING', revision = revision + 1
 		WHERE project_id = ? AND status = 'QUEUED' AND ordinal = (
-			SELECT ordinal FROM tasks WHERE project_id = ? AND status = 'QUEUED' ORDER BY queued_seq LIMIT 1
+			SELECT ordinal FROM tasks WHERE project_id = ? AND status = 'QUEUED' ORDER BY queued_seq, ordinal LIMIT 1
 		) AND NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = ? AND status IN ('RUNNING', 'CANCELLING'))
 		RETURNING `+taskColumns, projectID, projectID, projectID))
+	if err != nil {
+		return Task{}, err
+	}
+	if task.experimentRunID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE experiment_runs SET status = 'RUNNING', revision = revision + 1
+			WHERE run_id = ?`, task.experimentRunID); err != nil {
+			return Task{}, err
+		}
+	}
+	return task, tx.Commit()
 }
 
 // The committed cancellation wins against success or failure. A completed
 // plan is visible in the same write that marks the task SUCCEEDED.
-func (s *Store) finishTask(ctx context.Context, projectID, taskID, status, message, markdown string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET revision = revision + 1,
+func (s *Store) finishTask(ctx context.Context, projectID string, task Task, status, message, markdown string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `UPDATE tasks SET revision = revision + 1,
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
 		message = CASE WHEN status = 'RUNNING' THEN ? ELSE '' END,
 		markdown = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END
-		WHERE project_id = ? AND task_id = ? AND status IN ('RUNNING', 'CANCELLING')`, status, message, status, markdown, projectID, taskID)
-	return err
+		WHERE project_id = ? AND task_id = ? AND status IN ('RUNNING', 'CANCELLING')
+		RETURNING status`, status, message, status, markdown, projectID, task.TaskID).Scan(&status)
+	if err != nil {
+		return err
+	}
+	if task.experimentRunID != "" {
+		if err := finishExperimentStep(ctx, tx, projectID, task, status); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) taskMarkdown(ctx context.Context, projectID, taskID string) (string, error) {
 	var markdown string
-	err := s.db.QueryRowContext(ctx, `SELECT markdown FROM tasks WHERE project_id = ? AND task_id = ? AND status = 'SUCCEEDED'`,
+	err := s.db.QueryRowContext(ctx, `SELECT markdown FROM tasks WHERE project_id = ? AND task_id = ?
+		AND experiment_run_id IS NULL AND status = 'SUCCEEDED'`,
 		projectID, taskID).Scan(&markdown)
 	return markdown, err
 }

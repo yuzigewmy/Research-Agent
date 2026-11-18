@@ -74,15 +74,22 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			}
 			return
 		}
-		ctx, stop := context.WithTimeout(context.Background(), planTimeout)
+		deadline := planTimeout
+		if task.experimentRunID != "" {
+			deadline = 2 * time.Minute
+		}
+		ctx, stop := context.WithTimeout(context.Background(), deadline)
 		worker.taskID, worker.stop = task.TaskID, stop
 		workers.mu.Unlock()
 
-		markdown, err := s.generatePlan(ctx, model, projectID, task.Instruction)
+		markdown, err := s.generateTaskMarkdown(ctx, model, projectID, task)
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
+		if task.experimentRunID != "" && status == taskFailed {
+			message = "此步骤未生成成果。检查模型连接后，可从此步骤继续。"
+		}
 		stop()
 		saveCtx, stopSave := context.WithTimeout(context.Background(), taskDBLimit)
-		err = s.finishTask(saveCtx, projectID, task.TaskID, status, message, markdown)
+		err = s.finishTask(saveCtx, projectID, task, status, message, markdown)
 		stopSave()
 		if err != nil {
 			slog.Error("finish research task", "task_id", task.TaskID, "error", err)
@@ -110,14 +117,24 @@ func (workers *taskWorkers) close() {
 	workers.wg.Wait()
 }
 
-func (s *Store) generatePlan(ctx context.Context, model *inference.Client, projectID, instruction string) (string, error) {
+func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Client, projectID string, task Task) (string, error) {
 	project, err := s.getProject(ctx, projectID)
 	if err != nil {
 		return "", err
 	}
+	prompt := researchPlanPrompt
+	input := fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, task.Instruction)
+	if task.experimentRunID != "" {
+		prompt = experimentStages[task.experimentStep].prompt
+		previous, err := s.experimentContext(ctx, task)
+		if err != nil {
+			return "", err
+		}
+		input += previous
+	}
 	messages := []inference.Message{
-		{Role: "system", Content: strings.TrimSpace(researchPlanPrompt)},
-		{Role: "user", Content: fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, instruction)},
+		{Role: "system", Content: strings.TrimSpace(prompt)},
+		{Role: "user", Content: input},
 	}
 	var output strings.Builder
 	err = model.Stream(ctx, messages, func(delta string) error {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -53,6 +54,9 @@ func run(address, dataDir, webDir string) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := store.ResumeQueuedExperiments(context.Background(), model); err != nil {
+		return err
 	}
 
 	server := &http.Server{

@@ -143,8 +143,12 @@ func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "read research plan", err)
 		return
 	}
+	writeMarkdown(w, r, "research-plan.md", markdown)
+}
+
+func writeMarkdown(w http.ResponseWriter, r *http.Request, filename, markdown string) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="research-plan.md"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(markdown)))
 	if r.Method != http.MethodHead {

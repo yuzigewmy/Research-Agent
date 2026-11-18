@@ -1,0 +1,67 @@
+.workflow-panel {
+  display: grid;
+  gap: 0.875rem;
+  margin-block-start: 1.5rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--line);
+}
+
+.workflow-heading, .workflow-step-heading, .workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem 0.75rem;
+}
+
+.workflow-heading, .workflow-step-heading { justify-content: space-between; }
+.workflow-note, .workflow-step-status { color: var(--muted); font-size: 0.875rem; overflow-wrap: anywhere; }
+.workflow-note { max-inline-size: 65ch; }
+.workflow-run-status { color: var(--muted); font-size: 0.875rem; font-weight: 650; }
+.workflow-run-status[data-status='RUNNING'],
+.workflow-run-status[data-status='WAITING_CHECKPOINT'],
+.workflow-run-status[data-status='COMPLETED'],
+.workflow-step-status[data-status='RUNNING'],
+.workflow-step-status[data-status='SUCCEEDED'] { color: var(--green); }
+.workflow-run-status[data-status='FAILED'], .workflow-step-status[data-status='FAILED'] { color: var(--error); }
+
+.workflow-steps {
+  margin: 0;
+  padding: 0 0.75rem 0 2rem;
+  border-radius: var(--radius);
+  background: var(--background);
+}
+
+.workflow-steps li { padding-block: 0.75rem; padding-inline-start: 0.25rem; }
+.workflow-steps li + li { border-block-start: 1px solid var(--line); }
+.workflow-steps li::marker { color: var(--muted); font-size: 0.875rem; }
+.workflow-step-heading strong { min-inline-size: 0; overflow-wrap: anywhere; font-weight: 650; }
+.workflow-step-message { margin-block-start: 0.25rem; white-space: pre-wrap; }
+.workflow-download {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2rem;
+  margin-block-start: 0.125rem;
+  color: var(--green);
+  font-size: 0.875rem;
+  font-weight: 650;
+  text-underline-offset: 0.15em;
+}
+.workflow-download:hover { color: var(--green-active); }
+
+.workflow-controls { display: grid; gap: 0.75rem; justify-items: start; }
+.workflow-checkpoint {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+}
+.workflow-checkpoint:has(input:disabled) { color: var(--muted); }
+.workflow-checkpoint input {
+  flex: none;
+  margin: 0;
+  inline-size: 1rem;
+  block-size: 1rem;
+  align-self: center;
+  accent-color: var(--green);
+}
+.workflow-panel .button:disabled { background: var(--background); color: var(--muted); cursor: default; }
