@@ -46,7 +46,7 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 func (api workflows) change(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var input workflowRequest
-		if !readJSON(w, r, &input, 4<<10) {
+		if !readJSON(w, r, &input, 6*maxPaperOutlineBytes+(4<<10)) {
 			return
 		}
 		if !validRequestID(input.RequestID) || (action == workflowContinue && (input.RunID == "" || input.ExpectedRevision < 1)) {
@@ -62,6 +62,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusUnprocessableEntity, "SOURCE_REQUIRED", "请先在项目文献库核验并保存文献。")
 		case errors.Is(err, errReviewTarget):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "参考文献数量上限须在 10 至 80 之间。")
+		case errors.Is(err, errPaperOptions):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择有效的写作语言，大纲上限为 16 KiB。")
 		case err != nil:
 			writeTaskError(w, "change workflow run", err)
 		default:

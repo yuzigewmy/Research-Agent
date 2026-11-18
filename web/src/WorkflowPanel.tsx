@@ -79,16 +79,22 @@ function ManuscriptHandoff({ projectId, runId, onSaved }: {
 
 export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   projectId: string
-  templateId: 'experiment' | 'literature_review'
+  templateId: 'experiment' | 'literature_review' | 'paper'
   onManuscriptSaved: (path: string) => void
 }) {
   const isReview = templateId === 'literature_review'
+  const isPaper = templateId === 'paper'
+  const title = isPaper ? '论文写作工作流' : isReview ? '文献综述工作流' : '实验工作流'
+  const checkpointLabel = isPaper ? '生成大纲后，等待我确认再继续'
+    : isReview ? '整理主题后，等待我确认再继续' : '生成实验计划后，等待我确认再继续'
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
   const [checkpoints, setCheckpoints] = useState(false)
   const [targetPaperCount, setTargetPaperCount] = useState('20')
+  const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
+  const [paperOutline, setPaperOutline] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
   const [readError, setReadError] = useState('')
@@ -147,6 +153,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
 
   async function submit(kind: Attempt['kind']) {
     if (submission.current || actionDisabled || (kind === 'start' ? !canStart || !validTarget : !canContinue || !run)) return
+    const outline = paperOutline
+    if (kind === 'start' && isPaper && new TextEncoder().encode(outline).length > 16_384) {
+      setActionError('大纲超过 16 KiB，请缩短后提交。')
+      return
+    }
     const controller = new AbortController()
     const control = document.activeElement
     submission.current = controller
@@ -157,7 +168,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     try {
       if (!attempt) {
         const requestId = crypto.randomUUID()
-        if (kind === 'start') attempt = { kind, input: { requestId, checkpoints, targetPaperCount: isReview ? target : undefined } }
+        if (kind === 'start') attempt = { kind, input: {
+          requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
+          paper: isPaper ? { language: paperLanguage, outline } : undefined,
+        } }
         else if (run) attempt = { kind, input: { requestId, runId: run.runId, expectedRevision: run.revision } }
         else return
       }
@@ -195,7 +209,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   return (
     <section className="workflow-panel" aria-labelledby={headingId}>
       <div className="workflow-heading">
-        <h4 id={headingId} ref={heading} tabIndex={-1}>{isReview ? '文献综述工作流' : '实验工作流'}</h4>
+        <h4 id={headingId} ref={heading} tabIndex={-1}>{title}</h4>
         <p className="workflow-run-status" role="status" data-status={run?.status}>
           {run ? runStatusLabels[run.status] : snapshot && '尚未启动'}
         </p>
@@ -206,11 +220,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           <div className="loading-lines" aria-hidden="true"><span /><span /></div>
         </div>
       )}
-      {run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
+      {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
+      {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} />}
       {run?.steps.some((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED') &&
         <ManuscriptHandoff key={run.runId} projectId={projectId} runId={run.runId} onSaved={onManuscriptSaved} />}
-      {waiting && <p className="workflow-note">{isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
+      {waiting && <p className="workflow-note">{isPaper ? '确认论文大纲后生成正文。'
+        : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {readError && <p className="form-error" role="alert">{readError}</p>}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {feedback && <p className="workflow-note" role="status">{feedback}</p>}
@@ -224,11 +240,28 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
               onChange={(event) => setTargetPaperCount(event.currentTarget.value)} />
             <p className="workflow-note" id={`${headingId}-sources`}>从 10 至 80 中选择上限。当前文献库按核验时间从近到远纳入。</p>
           </div>}
+          {canStart && isPaper && <>
+            <div className="field">
+              <label htmlFor={`${headingId}-language`}>写作语言</label>
+              <select id={`${headingId}-language`} value={paperLanguage} disabled={actionDisabled || retryStart !== null}
+                onChange={(event) => setPaperLanguage(event.currentTarget.value === 'en' ? 'en' : 'zh')}>
+                <option value="zh">中文</option>
+                <option value="en">英文</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor={`${headingId}-outline`}>已有大纲（可选）</label>
+              <textarea id={`${headingId}-outline`} rows={4} maxLength={16_384} value={paperOutline}
+                readOnly={actionDisabled || retryStart !== null} aria-describedby={`${headingId}-paper-input`}
+                onChange={(event) => setPaperOutline(event.currentTarget.value)} />
+              <p className="workflow-note" id={`${headingId}-paper-input`}>大纲与最近核验的最多 20 条文献将随本轮写作请求发给模型。</p>
+            </div>
+          </>}
           {canStart && (
             <label className="workflow-checkpoint">
               <input type="checkbox" checked={checkpoints} disabled={actionDisabled || retryStart !== null}
                 onChange={(event) => setCheckpoints(event.currentTarget.checked)} />
-              <span>{isReview ? '整理主题后，等待我确认再继续' : '生成实验计划后，等待我确认再继续'}</span>
+              <span>{checkpointLabel}</span>
             </label>
           )}
           <div className="workflow-actions">

@@ -35,6 +35,7 @@ export interface WorkflowRun {
   createdAt: string
   targetPaperCount?: number
   sourceCount?: number
+  language?: 'zh' | 'en'
   steps: WorkflowStep[]
 }
 
@@ -47,6 +48,7 @@ export interface StartWorkflowInput {
   requestId: string
   checkpoints: boolean
   targetPaperCount?: number
+  paper?: { language: 'zh' | 'en'; outline?: string }
 }
 
 export interface ContinueWorkflowInput {
@@ -74,6 +76,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && typeof run.checkpoints === 'boolean' && typeof run.createdAt === 'string'
     && (run.sourceCount === undefined || Number.isSafeInteger(run.sourceCount))
     && (run.targetPaperCount === undefined || Number.isSafeInteger(run.targetPaperCount))
+    && (run.language === undefined || run.language === 'zh' || run.language === 'en')
     && Array.isArray(run.steps) && run.steps.every(isStep)
 }
 

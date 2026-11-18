@@ -86,7 +86,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
 		if task.workflowRunID != "" && status == taskFailed {
 			message = "此步骤未生成成果。检查模型连接后，可从此步骤继续。"
-			var invalid reviewCitationError
+			var invalid workflowOutputError
 			if errors.As(err, &invalid) {
 				message = invalid.Error() + "可以继续重试此步骤。"
 			}
@@ -128,7 +128,7 @@ func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Clien
 	}
 	input := fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, task.Instruction)
 	if task.workflowRunID != "" {
-		return s.generateWorkflowMarkdown(ctx, model, task, input)
+		return s.generateWorkflowMarkdown(ctx, model, projectID, task, input)
 	}
 	return streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
 }

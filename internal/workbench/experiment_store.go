@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -68,6 +69,7 @@ type WorkflowRun struct {
 	CreatedAt        string         `json:"createdAt"`
 	TargetPaperCount int            `json:"targetPaperCount,omitempty"`
 	SourceCount      int            `json:"sourceCount,omitempty"`
+	Language         string         `json:"language,omitempty"`
 	Steps            []WorkflowStep `json:"steps"`
 	step             int
 }
@@ -80,11 +82,12 @@ type WorkflowStep struct {
 }
 
 type workflowRequest struct {
-	RequestID        string `json:"requestId"`
-	RunID            string `json:"runId"`
-	ExpectedRevision int    `json:"expectedRevision"`
-	Checkpoints      bool   `json:"checkpoints"`
-	TargetPaperCount int    `json:"targetPaperCount"`
+	RequestID        string        `json:"requestId"`
+	RunID            string        `json:"runId"`
+	ExpectedRevision int           `json:"expectedRevision"`
+	Checkpoints      bool          `json:"checkpoints"`
+	TargetPaperCount int           `json:"targetPaperCount"`
+	Paper            *paperOptions `json:"paper"`
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -99,9 +102,9 @@ func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowR
 func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
 	err := tx.QueryRowContext(ctx, `SELECT run_id, workflow_key, revision, status, checkpoints, created_at, step_no,
-		target_paper_count, json_array_length(evidence_json) FROM workflow_runs
+		target_paper_count, json_array_length(evidence_json), COALESCE(json_extract(options_json, '$.language'), '') FROM workflow_runs
 		WHERE project_id = ? AND (? = '' OR run_id = ?) ORDER BY ordinal DESC LIMIT 1`, projectID, runID, runID).
-		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step, &run.TargetPaperCount, &run.SourceCount)
+		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step, &run.TargetPaperCount, &run.SourceCount, &run.Language)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -146,6 +149,10 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
+	options, err := workflowOptions(key, action, req.Paper)
+	if err != nil {
+		return WorkflowRun{}, false, err
+	}
 
 	var runID, recordedAction string
 	var revision int
@@ -156,8 +163,19 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, errRequestConflict
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
-		if err == nil && action == workflowStart && (req.Checkpoints != run.Checkpoints || target != run.TargetPaperCount) {
-			return WorkflowRun{}, false, errRequestConflict
+		if err == nil && action == workflowStart {
+			if req.Checkpoints != run.Checkpoints || target != run.TargetPaperCount {
+				return WorkflowRun{}, false, errRequestConflict
+			}
+			if run.WorkflowKey == paperWorkflow {
+				var saved string
+				if err := tx.QueryRowContext(ctx, `SELECT options_json FROM workflow_runs WHERE run_id = ?`, runID).Scan(&saved); err != nil {
+					return WorkflowRun{}, false, err
+				}
+				if saved != options {
+					return WorkflowRun{}, false, errRequestConflict
+				}
+			}
 		}
 		return run, false, err
 	}
@@ -177,16 +195,28 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, errWorkflowState
 		}
 		evidence := "[]"
-		if key == reviewWorkflow {
-			evidence, err = freezeReviewSources(ctx, tx, projectID, target)
+		if key == reviewWorkflow || key == paperWorkflow {
+			limit := target
+			if key == paperWorkflow {
+				limit = defaultReviewTarget
+			}
+			sources, err := freezeLiteratureSources(ctx, tx, projectID, limit)
 			if err != nil {
 				return WorkflowRun{}, false, err
 			}
+			if key == reviewWorkflow && len(sources) == 0 {
+				return WorkflowRun{}, false, errReviewSources
+			}
+			snapshot, err := json.Marshal(sources)
+			if err != nil {
+				return WorkflowRun{}, false, err
+			}
+			evidence = string(snapshot)
 		}
 		current = WorkflowRun{RunID: rand.Text(), WorkflowKey: key}
 		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs
-			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?)`, current.RunID, projectID, req.Checkpoints, time.Now().UTC().Format(createdAtLayout), key, evidence, target)
+			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json)
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?)`, current.RunID, projectID, req.Checkpoints, time.Now().UTC().Format(createdAtLayout), key, evidence, target, options)
 	} else {
 		if current.RunID != req.RunID || current.Revision != req.ExpectedRevision {
 			return WorkflowRun{}, false, errTaskRevision

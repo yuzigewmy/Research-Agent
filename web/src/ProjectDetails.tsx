@@ -115,8 +115,9 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         referenceIds={references.map(({ materialId }) => materialId)} />
       <SurveyPanel projectId={project.projectId} />
-      {project.templateId === 'literature_review' && <LiteraturePanel projectId={project.projectId} />}
-      {(project.templateId === 'experiment' || project.templateId === 'literature_review') &&
+      {(project.templateId === 'literature_review' || project.templateId === 'paper') &&
+        <LiteraturePanel projectId={project.projectId} />}
+      {project.templateId !== 'freeform' &&
         <WorkflowPanel projectId={project.projectId} templateId={project.templateId} onManuscriptSaved={(path) => {
           setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])
         }} />}

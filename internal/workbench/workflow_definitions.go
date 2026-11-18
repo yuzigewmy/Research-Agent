@@ -17,9 +17,16 @@ var reviewThemesPrompt string
 //go:embed prompts/review_manuscript.md
 var reviewManuscriptPrompt string
 
+//go:embed prompts/paper_outline.md
+var paperOutlinePrompt string
+
+//go:embed prompts/paper_draft.md
+var paperDraftPrompt string
+
 const (
 	experimentWorkflow = "experiment-v1"
 	reviewWorkflow     = "literature-v1"
+	paperWorkflow      = "paper-v1"
 )
 
 type workflowStage struct {
@@ -38,9 +45,15 @@ var workflowStages = map[string][]workflowStage{
 		{key: "themes", title: "整理主题与证据", prompt: reviewThemesPrompt, checkpoint: true},
 		{key: "manuscript", title: "撰写综述稿件", prompt: reviewManuscriptPrompt},
 	},
+	paperWorkflow: {
+		{key: "outline", title: "编制论文大纲", prompt: paperOutlinePrompt, checkpoint: true},
+		{key: "manuscript", title: "撰写论文稿件", prompt: paperDraftPrompt},
+		{key: "structure", title: "核对稿件结构"},
+	},
 }
 
 var projectWorkflows = map[string]string{
 	"experiment":        experimentWorkflow,
 	"literature_review": reviewWorkflow,
+	"paper":             paperWorkflow,
 }
