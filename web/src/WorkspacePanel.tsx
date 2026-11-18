@@ -1,0 +1,305 @@
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
+import { errorMessage, ProjectApiError } from './projects'
+import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText } from './workspace'
+import type { Document, FilePage } from './workspace'
+import './workspace.css'
+
+const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
+
+function requestSignal(controller: AbortController) {
+  return AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
+}
+
+function useFilePage(load: (signal: AbortSignal, cursor?: string) => Promise<FilePage>, key: 'path' | 'versionId') {
+  const [page, setPage] = useState<FilePage>({ items: [] })
+  const [query, setQuery] = useState<{ cursor?: string }>({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void load(requestSignal(controller), query.cursor).then((next) => {
+      if (controller.signal.aborted) return
+      setPage((current) => {
+        if (!query.cursor) return next
+        const combined = new Map(current.items.map((item) => [item[key], item]))
+        for (const item of next.items) combined.set(item[key], item)
+        return { items: [...combined.values()], nextCursor: next.nextCursor }
+      })
+      setLoading(false)
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      setError(errorMessage(error))
+      setLoading(false)
+    })
+    return () => controller.abort()
+  }, [key, load, query])
+
+  function loadPage(cursor?: string) {
+    setError('')
+    setLoading(true)
+    setQuery({ cursor })
+  }
+
+  return { ...page, loading, error, retry: () => loadPage(query.cursor), more: () => loadPage(page.nextCursor) }
+}
+
+function PageControls({ page, label }: { page: ReturnType<typeof useFilePage>; label: string }) {
+  if (page.loading) return <p className="workspace-note" role="status">正在加载{label}…</p>
+  if (page.error) return <>
+    <p className="form-error" role="alert">{page.error}</p>
+    <button className="button outline" type="button" onClick={page.retry}>重试加载{label}</button>
+  </>
+  if (page.nextCursor) return <button className="button outline" type="button" onClick={page.more}>加载更多{label}</button>
+  return null
+}
+
+type VersionPreviewProps = {
+  projectId: string
+  versionId: string
+  restoreBlocked: string | undefined
+  isCurrent: boolean
+  onRestore: (versionId: string) => void
+}
+
+function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRestore }: VersionPreviewProps) {
+  const [document, setDocument] = useState<Document>()
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void readVersion(projectId, versionId, requestSignal(controller)).then((document) => {
+      if (!controller.signal.aborted) setDocument(document)
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setError(errorMessage(error))
+    })
+    return () => controller.abort()
+  }, [projectId, versionId, attempt])
+
+  if (error) return <>
+    <p className="form-error" role="alert">{error}</p>
+    <button className="button outline" type="button" onClick={() => {
+      setError('')
+      setAttempt((value) => value + 1)
+    }}>重试查看版本</button>
+  </>
+  if (!document) return <p className="workspace-note" role="status">正在加载版本内容…</p>
+
+  return <div className="workspace-preview">
+    <p className="workspace-note">只读预览 · <time dateTime={document.createdAt}>{versionDate.format(new Date(document.createdAt))}</time></p>
+    {document.content
+      ? <pre className="workspace-text" tabIndex={0} aria-label="版本内容" dir="auto">{document.content}</pre>
+      : <p className="workspace-note">此版本为空文件。</p>}
+    {!isCurrent && <>
+      {restoreBlocked && <p className="workspace-note">{restoreBlocked}</p>}
+      <button className="button outline" type="button" disabled={!!restoreBlocked}
+        onClick={() => onRestore(versionId)}>恢复此版本</button>
+    </>}
+  </div>
+}
+
+function VersionHistory({ projectId, document, restoreBlocked, onRestore }: {
+  projectId: string
+  document: Document
+  restoreBlocked: string | undefined
+  onRestore: (versionId: string) => void
+}) {
+  const { path, versionId: currentId } = document
+  const load = useCallback((signal: AbortSignal, cursor?: string) => listVersions(projectId, path, signal, cursor), [projectId, path])
+  const page = useFilePage(load, 'versionId')
+  const [selected, setSelected] = useState<string>()
+
+  return <div className="workspace-history">
+    {page.items.length > 0 && <ul className="workspace-list" role="list" aria-label="版本历史">
+      {page.items.map(({ versionId, createdAt }) => (
+        <li key={versionId}>
+          <button className="workspace-row" type="button" aria-pressed={selected === versionId}
+            onClick={() => setSelected(versionId)}>
+            <time dateTime={createdAt}>{versionDate.format(new Date(createdAt))}</time>
+            <span className="workspace-note">{versionId === currentId ? '当前版本' : versionId.slice(-8)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>}
+    <PageControls page={page} label="版本" />
+    {!page.loading && !page.error && !page.items.length && <p className="workspace-note">暂无版本。</p>}
+    {selected && <VersionPreview key={selected} projectId={projectId} versionId={selected}
+      restoreBlocked={restoreBlocked} isCurrent={selected === currentId} onRestore={onRestore} />}
+  </div>
+}
+
+type Destination = { kind: 'open' | 'create'; path: string }
+type Operation = Destination['kind'] | 'save' | 'reload' | 'restore'
+
+const progress: Record<Operation, string> = {
+  open: '正在打开文件…', create: '正在创建文件…', save: '正在保存…',
+  reload: '正在重新加载…', restore: '正在恢复版本…',
+}
+
+export function WorkspacePanel({ projectId }: { projectId: string }) {
+  return <ProjectWorkspace key={projectId} projectId={projectId} />
+}
+
+function ProjectWorkspace({ projectId }: { projectId: string }) {
+  const id = useId()
+  const load = useCallback((signal: AbortSignal, cursor?: string) => listFiles(projectId, signal, cursor), [projectId])
+  const page = useFilePage(load, 'path')
+  const [createdPaths, setCreatedPaths] = useState<string[]>([])
+  const [creating, setCreating] = useState(false)
+  const [name, setName] = useState('')
+  const [document, setDocument] = useState<Document>()
+  const [draft, setDraft] = useState('')
+  const [history, setHistory] = useState(false)
+  const [destination, setDestination] = useState<Destination>()
+  const [busy, setBusy] = useState<Operation>()
+  const [error, setError] = useState('')
+  const [conflict, setConflict] = useState(false)
+  const operation = useRef<AbortController | null>(null)
+  const editor = useRef<HTMLTextAreaElement>(null)
+  const discardPrompt = useRef<HTMLDivElement>(null)
+  const currentPath = document?.path
+  const dirty = document !== undefined && draft !== document.content
+  const paths = [...new Set([...createdPaths, ...page.items.map(({ path }) => path)])]
+  const restoreBlocked = conflict ? '请先重新加载当前文件。'
+    : dirty ? '请先保存草稿或放弃修改。'
+      : busy ? progress[busy] : undefined
+
+  useEffect(() => () => operation.current?.abort(), [])
+  useEffect(() => { if (currentPath !== undefined) editor.current?.focus() }, [currentPath])
+  useEffect(() => { if (destination) discardPrompt.current?.focus() }, [destination])
+
+  async function run(kind: Operation, send: (signal: AbortSignal) => Promise<Document>) {
+    if (operation.current) return
+    const controller = new AbortController()
+    operation.current = controller
+    setBusy(kind)
+    setError('')
+    setDestination(undefined)
+    try {
+      const next = await send(requestSignal(controller))
+      if (controller.signal.aborted) return
+      setDocument(next)
+      setDraft(next.content)
+      setConflict(false)
+      if (kind === 'open' || kind === 'create') setHistory(false)
+      if (kind === 'create') {
+        setCreatedPaths((paths) => [next.path, ...paths])
+        setCreating(false)
+        setName('')
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return
+      if (error instanceof ProjectApiError && error.status === 409 && error.code === 'REVISION_CONFLICT') {
+        if (kind === 'create') setError('此路径已有文件，请选择其他路径。')
+        else setConflict(true)
+      } else setError(errorMessage(error))
+    } finally {
+      operation.current = null
+      if (!controller.signal.aborted) setBusy(undefined)
+    }
+  }
+
+  function goTo({ kind, path }: Destination) {
+    void run(kind, (signal) => kind === 'open'
+      ? readText(projectId, path, signal)
+      : saveText(projectId, path, '', '', signal))
+  }
+
+  function requestDestination(next: Destination) {
+    if (operation.current) return
+    if (next.kind === 'open' && next.path === currentPath) {
+      setDestination(undefined)
+      editor.current?.focus()
+    } else if (dirty) setDestination(next)
+    else goTo(next)
+  }
+
+  function create(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (name.trim()) requestDestination({ kind: 'create', path: name })
+  }
+
+  function restore(versionId: string) {
+    if (!document || dirty || conflict || versionId === document.versionId) return
+    void run('restore', (signal) => restoreVersion(projectId, versionId, document.sha256, signal))
+  }
+
+  return <section className="workspace-panel" aria-labelledby={id}>
+    <div className="workspace-heading">
+      <h4 id={id}>文本工作区</h4>
+      <button className="button outline" type="button" aria-expanded={creating} aria-controls={`${id}-create`}
+        onClick={() => {
+          if (creating && destination?.kind === 'create') setDestination(undefined)
+          setCreating(!creating)
+        }} disabled={!!busy}>{creating ? '取消新建' : '新建文件'}</button>
+    </div>
+    <div id={`${id}-create`} hidden={!creating}>
+      {creating && <form className="field" onSubmit={create}>
+        <label htmlFor={`${id}-name`}>文件路径</label>
+        <div className="workspace-create-row">
+          <input id={`${id}-name`} value={name} required autoFocus autoComplete="off" spellCheck={false}
+            readOnly={!!busy} aria-describedby={`${id}-path-hint`} onChange={(event) => {
+              setName(event.target.value)
+              if (destination?.kind === 'create') setDestination(undefined)
+            }} />
+          <button className="button primary" type="submit" disabled={!!busy || !name.trim()}>创建文本文件</button>
+        </div>
+        <p id={`${id}-path-hint`} className="workspace-note">输入项目内的相对路径，例如 paper/main.md。</p>
+      </form>}
+    </div>
+    {paths.length > 0 && <ul className="workspace-list" role="list" aria-label="工作区文件">
+      {paths.map((path) => (
+        <li key={path}>
+          <button className="workspace-row" type="button" aria-current={currentPath === path ? 'true' : undefined}
+            disabled={!!busy} onClick={() => requestDestination({ kind: 'open', path })}>
+            <bdi>{path}</bdi>
+          </button>
+        </li>
+      ))}
+    </ul>}
+    <PageControls page={page} label="文件" />
+    {!page.loading && !page.error && !paths.length && <p className="workspace-note">暂无文本文件，可新建文件开始编辑。</p>}
+    {destination && <div className="workspace-discard" ref={discardPrompt} tabIndex={-1}
+      role="group" aria-label="处理未保存的修改">
+      <p>当前有未保存的修改。{destination.kind === 'create' ? '创建' : '打开'} <bdi>{destination.path}</bdi> 前，请先保存或放弃草稿。</p>
+      <div className="workspace-actions">
+        <button className="button outline" type="button" onClick={() => {
+          setDestination(undefined)
+          editor.current?.focus()
+        }}>继续编辑</button>
+        <button className="button outline" type="button" onClick={() => goTo(destination)}>
+          {destination.kind === 'create' ? '放弃草稿并创建' : '放弃草稿并打开'}
+        </button>
+      </div>
+    </div>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {conflict && <p className="form-error" role="alert">
+      {dirty ? '文件已有更新，本地草稿仍保留。可先复制草稿，再重新加载。' : '文件已有更新，请重新加载后继续。'}
+    </p>}
+    {busy && <p className="workspace-note" role="status">{progress[busy]}</p>}
+    {document && <div className="workspace-editor">
+      <div className="workspace-heading">
+        <label htmlFor={`${id}-text`}>文件内容 <bdi>{document.path}</bdi></label>
+        <span className="workspace-note" role="status">{dirty ? '有未保存的修改' : '已保存'}</span>
+      </div>
+      <textarea className="workspace-text" id={`${id}-text`} ref={editor} rows={9} dir="auto" spellCheck={false}
+        value={draft} readOnly={!!busy} onChange={(event) => setDraft(event.target.value)} />
+      <div className="workspace-actions">
+        <button className="button primary" type="button" disabled={!!busy || !dirty || conflict}
+          onClick={() => void run('save', (signal) => saveText(projectId, document.path, draft, document.sha256, signal))}>保存</button>
+        <button className="button outline" type="button" disabled={!!busy}
+          onClick={() => void run('reload', (signal) => readText(projectId, document.path, signal))}>
+          {dirty ? '放弃草稿并重新加载' : '重新加载'}
+        </button>
+        <button className="button outline" type="button" aria-expanded={history} aria-controls={`${id}-history`}
+          onClick={() => setHistory((value) => !value)}>版本历史</button>
+      </div>
+      <div id={`${id}-history`} hidden={!history}>
+        {history && <VersionHistory key={document.versionId} projectId={projectId} document={document}
+          restoreBlocked={restoreBlocked} onRestore={restore} />}
+      </div>
+    </div>}
+  </section>
+}

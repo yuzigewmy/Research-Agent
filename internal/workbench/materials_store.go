@@ -92,23 +92,7 @@ func (s *Store) saveMaterial(ctx context.Context, projectID, name string, body i
 		strings.HasPrefix(http.DetectContentType([]byte(preview.Text)), "text/") {
 		kind = "text"
 	}
-	if err := file.Sync(); err != nil {
-		return Material{}, false, err
-	}
-	if err := file.Close(); err != nil {
-		return Material{}, false, err
-	}
-
-	// Place the object before publishing its record. Identical uploads share bytes.
-	destination := s.materialObject(digest)
-	if _, err := os.Stat(destination); errors.Is(err, os.ErrNotExist) {
-		if err := os.Rename(file.Name(), destination); err != nil {
-			// Another upload may have published the same digest in the meantime.
-			if _, statErr := os.Stat(destination); statErr != nil {
-				return Material{}, false, err
-			}
-		}
-	} else if err != nil {
+	if err := s.publishObject(file, digest); err != nil {
 		return Material{}, false, err
 	}
 

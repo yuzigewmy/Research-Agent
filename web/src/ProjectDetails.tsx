@@ -3,6 +3,7 @@ import { Conversation } from './Conversation'
 import { MaterialPanel } from './MaterialPanel'
 import { TaskPanel } from './TaskPanel'
 import { WorkflowPanel } from './WorkflowPanel'
+import { WorkspacePanel } from './WorkspacePanel'
 import type { Material } from './materials'
 import { errorMessage, getProject, ProjectApiError, templates } from './projects'
 import type { Project } from './projects'
@@ -105,6 +106,7 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
         referenceIds={references.map(({ materialId }) => materialId)} />
       {project.templateId === 'experiment' && <WorkflowPanel projectId={project.projectId} />}
       <TaskPanel projectId={project.projectId} />
+      <WorkspacePanel projectId={project.projectId} />
       <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} />
     </div>
   )

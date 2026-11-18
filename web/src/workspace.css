@@ -1,0 +1,97 @@
+.workspace-panel {
+  display: grid;
+  gap: 0.75rem;
+  margin-block-start: 1.5rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--line);
+}
+
+.workspace-panel > .button, .workspace-history > .button, .workspace-preview > .button {
+  justify-self: start;
+}
+
+.workspace-heading, .workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+}
+
+.workspace-heading { justify-content: space-between; }
+.workspace-heading label { font-weight: 650; overflow-wrap: anywhere; }
+.workspace-note { color: var(--muted); font-size: 0.875rem; }
+
+.workspace-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.625rem;
+}
+
+.workspace-create-row input { flex: 1 1 10rem; }
+
+.workspace-list {
+  max-block-size: 12rem;
+  overflow: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-block: 1px solid var(--line);
+}
+
+.workspace-list li + li { border-block-start: 1px solid var(--line); }
+
+.workspace-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+  min-block-size: 2.75rem;
+  inline-size: 100%;
+  padding: 0.4375rem 0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.workspace-row:hover:not(:disabled), .workspace-row:active:not(:disabled),
+.workspace-row[aria-current='true'], .workspace-row[aria-pressed='true'] {
+  background: var(--selected);
+}
+
+.workspace-row:focus-visible { outline-offset: -2px; }
+.workspace-panel button:disabled { cursor: default; opacity: 0.62; }
+.workspace-editor, .workspace-preview, .workspace-history, .workspace-discard { display: grid; gap: 0.625rem; }
+.workspace-editor { min-inline-size: 0; }
+.workspace-history { padding-block-start: 0.25rem; }
+
+.workspace-text {
+  inline-size: 100%;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9375rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+textarea.workspace-text { resize: vertical; }
+textarea.workspace-text[readonly], pre.workspace-text { background: var(--background); }
+pre.workspace-text { max-block-size: 16rem; overflow: auto; border-color: var(--line); }
+
+.workspace-discard {
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
+  background: var(--background);
+  overflow-wrap: anywhere;
+}
