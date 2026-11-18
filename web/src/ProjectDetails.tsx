@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Conversation } from './Conversation'
 import { MaterialPanel } from './MaterialPanel'
+import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
 import { WorkflowPanel } from './WorkflowPanel'
 import { WorkspacePanel } from './WorkspacePanel'
@@ -104,6 +105,7 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
       </dl>
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         referenceIds={references.map(({ materialId }) => materialId)} />
+      <SurveyPanel projectId={project.projectId} />
       {project.templateId === 'experiment' && <WorkflowPanel projectId={project.projectId} />}
       <TaskPanel projectId={project.projectId} />
       <WorkspacePanel projectId={project.projectId} />

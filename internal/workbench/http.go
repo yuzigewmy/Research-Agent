@@ -37,6 +37,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerMaterials(mux)
 	store.registerWorkspace(mux)
 	store.registerWord(mux, config.WordPython)
+	store.registerSurveys(mux)
 	mux.HandleFunc("GET "+projectsPath, store.handleListProjects)
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))

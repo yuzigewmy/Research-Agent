@@ -1,0 +1,359 @@
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { listMaterials } from './materials'
+import { errorMessage } from './projects'
+import { analyzeSurvey, listSurveys, readSurvey, surveyDownloadPath } from './surveys'
+import type { SurveyOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
+import './survey.css'
+
+const reportDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
+const numberFormat = new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 6 })
+const rowPageSize = 20
+const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
+const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
+type RuleName = typeof ruleNames[number]
+
+function useSurveyList<T>(load: (signal: AbortSignal, cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>, idOf: (item: T) => string) {
+  const [page, setPage] = useState<{ items: T[]; nextCursor?: string }>({ items: [] })
+  const [query, setQuery] = useState<{ cursor?: string }>({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void load(controller.signal, query.cursor).then((next) => {
+      if (controller.signal.aborted) return
+      setPage((current) => {
+        if (!query.cursor) return next
+        const byId = new Map(current.items.map((item) => [idOf(item), item]))
+        for (const item of next.items) byId.set(idOf(item), item)
+        return { items: [...byId.values()], nextCursor: next.nextCursor }
+      })
+      setLoading(false)
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return
+      setError(errorMessage(cause))
+      setLoading(false)
+    })
+    return () => controller.abort()
+  }, [load, idOf, query])
+
+  function loadPage(cursor?: string) {
+    setLoading(true)
+    setError('')
+    setQuery({ cursor })
+  }
+
+  return { ...page, loading, error, refresh: () => loadPage(), retry: () => loadPage(query.cursor), more: () => loadPage(page.nextCursor) }
+}
+
+function ListControls({ list, label }: { list: ReturnType<typeof useSurveyList<unknown>>; label: string }) {
+  if (list.loading) return <p className="survey-note" role="status">正在加载{label}…</p>
+  if (list.error) return <div className="survey-actions">
+    <p className="form-error" role="alert">{list.error}</p>
+    <button className="button outline" type="button" onClick={list.retry}>重试加载{label}</button>
+  </div>
+  if (list.nextCursor) return <button className="button outline" type="button" onClick={list.more}>加载更多{label}</button>
+  return null
+}
+
+function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid: number }) {
+  const selectId = useId()
+  const [column, setColumn] = useState(summaries[0]?.column ?? '')
+  const summary = summaries.find((item) => item.column === column)
+
+  return <section className="survey-section" aria-labelledby={`${selectId}-heading`}>
+    <h6 id={`${selectId}-heading`}>答卷统计</h6>
+    <p className="survey-note">仅统计有效答卷，分母为 {valid} 份。均值和范围根据数值回答计算。</p>
+    {summary ? <>
+      <div className="field">
+        <label htmlFor={selectId}>统计列</label>
+        <select id={selectId} value={column} onChange={(event) => setColumn(event.target.value)}>
+          {summaries.map(({ column }) => <option key={column} value={column}>{column}</option>)}
+        </select>
+      </div>
+      <p>已回答 {summary.answered} 份，缺失 {summary.missing} 份，数值回答 {summary.numeric} 份。</p>
+      {summary.mean !== undefined && summary.min !== undefined && summary.max !== undefined && (
+        <p>均值 {numberFormat.format(summary.mean)}，范围 {numberFormat.format(summary.min)} 至 {numberFormat.format(summary.max)}。</p>
+      )}
+      {summary.frequencies.length > 0 && <dl className="survey-frequencies" aria-label="常见回答及次数">
+        {summary.frequencies.map(({ value, count }) => <div key={value}>
+          <dt dir="auto">{value}</dt><dd>{count} 次</dd>
+        </div>)}
+      </dl>}
+    </> : <p className="survey-note">此报告没有可汇总的列。</p>}
+  </section>
+}
+
+type DraftReview = { accept: boolean; reason: string }
+
+function ReportRows({ rows, busy, rulesChanged, onReview }: {
+  rows: SurveyRow[]
+  busy: boolean
+  rulesChanged: boolean
+  onReview: (reviews: SurveyReview[]) => void
+}) {
+  const filterId = useId()
+  const [filter, setFilter] = useState<SurveyRow['status'] | 'all'>('all')
+  const [page, setPage] = useState(0)
+  const [drafts, setDrafts] = useState<Record<number, DraftReview>>({})
+  const [error, setError] = useState('')
+  const visible = filter === 'all' ? rows : rows.filter((row) => row.status === filter)
+  const start = page * rowPageSize
+  const end = Math.min(start + rowPageSize, visible.length)
+  const reviewCount = Object.keys(drafts).length
+
+  function updateReview(row: number, review?: DraftReview) {
+    setDrafts((current) => {
+      const next = { ...current }
+      if (review) next[row] = review
+      else delete next[row]
+      return next
+    })
+    setError('')
+  }
+
+  function submitReviews() {
+    const reviews = Object.entries(drafts).map(([row, review]) => ({ ...review, row: Number(row), reason: review.reason.trim() }))
+    const encoder = new TextEncoder()
+    const invalid = reviews.find(({ reason }) => !reason || encoder.encode(reason).length > 256)
+    if (invalid) {
+      setError(`第 ${invalid.row} 条答卷需要填写复核理由，最多 256 个 UTF-8 字节。`)
+      return
+    }
+    onReview(reviews)
+  }
+
+  return <section className="survey-section" aria-labelledby={`${filterId}-heading`}>
+    <h6 id={`${filterId}-heading`}>答卷明细</h6>
+    <div className="field">
+      <label htmlFor={filterId}>按状态筛选</label>
+      <select id={filterId} value={filter} onChange={(event) => {
+        setFilter(event.target.value as typeof filter)
+        setPage(0)
+      }}>
+        <option value="all">全部答卷</option>
+        <option value="PENDING">待复核</option>
+        <option value="INVALID">无效</option>
+        <option value="VALID">有效</option>
+      </select>
+    </div>
+    {rulesChanged && <p className="survey-note">请先应用清洗规则，再根据新报告复核。{reviewCount > 0 && '应用后会清空本次复核草稿。'}</p>}
+    {visible.length ? <ol className="survey-rows" role="list">
+      {visible.slice(start, end).map(({ row, status, reasons }) => {
+        const review = drafts[row]
+        return <li key={row}>
+          <div className="survey-heading">
+            <strong>第 {row} 条答卷</strong>
+            <span className={`survey-status survey-status-${status.toLowerCase()}`}>{rowLabels[status]}</span>
+          </div>
+          {reasons.length > 0 && <ul className="survey-reasons">
+            {reasons.map((reason, index) => <li key={index} dir="auto">{reason}</li>)}
+          </ul>}
+          {status === 'PENDING' && <div className="field survey-review">
+            <label htmlFor={`${filterId}-review-${row}`}>复核决定 <span className="survey-note">第 {row} 条</span></label>
+            <select id={`${filterId}-review-${row}`} disabled={busy || rulesChanged}
+              value={review ? (review.accept ? 'accept' : 'reject') : ''}
+              onChange={(event) => {
+                const decision = event.target.value
+                updateReview(row, decision ? { accept: decision === 'accept', reason: review?.reason ?? '' } : undefined)
+              }}>
+              <option value="">保持待复核</option>
+              <option value="accept">纳入有效答卷</option>
+              <option value="reject">判为无效答卷</option>
+            </select>
+            {review && <>
+              <label htmlFor={`${filterId}-reason-${row}`}>复核理由 <span className="survey-note">第 {row} 条</span></label>
+              <input id={`${filterId}-reason-${row}`} type="text" maxLength={256} readOnly={busy || rulesChanged}
+                value={review.reason} onChange={(event) => updateReview(row, { ...review, reason: event.target.value })} />
+            </>}
+          </div>}
+        </li>
+      })}
+    </ol> : <p className="survey-note">暂无符合此筛选条件的答卷。</p>}
+    {visible.length > 0 && <div className="survey-actions">
+      <p className="survey-note" role="status">显示 {start + 1} 至 {end} 条，共 {visible.length} 条</p>
+      {visible.length > rowPageSize && <>
+        <button className="button outline" type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button>
+        <button className="button outline" type="button" disabled={end === visible.length} onClick={() => setPage(page + 1)}>下一页</button>
+      </>}
+    </div>}
+    {reviewCount > 0 && <button className="button primary" type="button" disabled={busy || rulesChanged}
+      onClick={submitReviews}>保存 {reviewCount} 条复核决定</button>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </section>
+}
+
+function SurveyAnalysis({ projectId, run, busy, onAnalyze }: {
+  projectId: string
+  run: SurveyRun
+  busy: boolean
+  onAnalyze: (materialId: string, options: SurveyOptions) => void
+}) {
+  const { report, options } = run
+  const heading = useRef<HTMLHeadingElement>(null)
+  const [initialRules] = useState(() => {
+    function columnsFor(key: RuleName) {
+      const selected = new Set(options[key]?.map((name) => name.trim().toLowerCase()))
+      return report.columns.filter((column) => selected.has(column.toLowerCase()))
+    }
+    return { requiredColumns: columnsFor('requiredColumns'), duplicateColumns: columnsFor('duplicateColumns') }
+  })
+  const [rules, setRules] = useState(initialRules)
+  const rulesChanged = ruleNames.some((key) => rules[key].length !== initialRules[key].length
+    || rules[key].some((column, index) => column !== initialRules[key][index]))
+  const ruleOptions = {
+    requiredColumns: rules.requiredColumns.length ? rules.requiredColumns : undefined,
+    duplicateColumns: rules.duplicateColumns.length ? rules.duplicateColumns : undefined,
+  }
+
+  useEffect(() => { heading.current?.focus() }, [])
+
+  function toggleColumn(key: RuleName, column: string) {
+    setRules((current) => {
+      const selected = new Set(current[key])
+      if (!selected.delete(column)) selected.add(column)
+      return { ...current, [key]: report.columns.filter((entry) => selected.has(entry)) }
+    })
+  }
+
+  return <article className="survey-report">
+    <div className="survey-heading">
+      <h5 ref={heading} tabIndex={-1} dir="auto">{run.materialName}</h5>
+      {report.demo && <strong className="survey-demo">演示数据</strong>}
+    </div>
+    <div className="survey-actions">
+      <time className="survey-note" dateTime={run.createdAt}>{reportDate.format(new Date(run.createdAt))}</time>
+      <a className="button outline" href={surveyDownloadPath(projectId, run.analysisId)} download>下载报告 JSON</a>
+    </div>
+    <dl className="survey-counts">
+      <div><dt>总答卷</dt><dd>{report.total}</dd></div>
+      <div><dt>有效</dt><dd>{report.valid}</dd></div>
+      <div><dt>无效</dt><dd>{report.invalid}</dd></div>
+      <div><dt>待复核</dt><dd>{report.pending}</dd></div>
+    </dl>
+    <details className="survey-details">
+      <summary>清洗规则（{options.requiredColumns?.length ?? 0} 列必答，{options.duplicateColumns?.length ?? 0} 列查重）</summary>
+      <div className="survey-section">
+        <p className="survey-note">必答列缺失超过 20% 判为无效。查重按所选列组合比较，保留第一条。应用规则会生成新报告，需要重新复核。</p>
+        <div className="survey-rules" role="region" aria-label="选择用于必答检查和查重的列" tabIndex={0}>
+          <table>
+            <thead><tr><th scope="col">列名</th><th scope="col">必答</th><th scope="col">查重</th></tr></thead>
+            <tbody>{report.columns.map((column) => <tr key={column}>
+              <th scope="row" dir="auto">{column}</th>
+              {ruleNames.map((key) => <td key={key}>
+                <input type="checkbox" aria-label={`${key === 'requiredColumns' ? '必答列' : '查重列'}：${column}`}
+                  checked={rules[key].includes(column)} disabled={busy} onChange={() => toggleColumn(key, column)} />
+              </td>)}
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <button className="button outline" type="button" disabled={busy || !rulesChanged}
+          onClick={() => onAnalyze(run.materialId, ruleOptions)}>应用清洗规则</button>
+      </div>
+    </details>
+    <ReportSummary summaries={report.summaries} valid={report.valid} />
+    <ReportRows rows={report.rows} busy={busy} rulesChanged={rulesChanged} onReview={(reviews) => {
+      onAnalyze(run.materialId, { ...options, reviews: [...(options.reviews ?? []), ...reviews].sort((a, b) => a.row - b.row) })
+    }} />
+  </article>
+}
+
+const materialIdOf = (item: { materialId: string }) => item.materialId
+const analysisIdOf = (item: { analysisId: string }) => item.analysisId
+
+export function SurveyPanel({ projectId }: { projectId: string }) {
+  return <ProjectSurveys key={projectId} projectId={projectId} />
+}
+
+function ProjectSurveys({ projectId }: { projectId: string }) {
+  const id = useId()
+  const loadMaterials = useCallback((signal: AbortSignal, cursor?: string) => listMaterials(projectId, signal, cursor), [projectId])
+  const loadReports = useCallback((signal: AbortSignal, cursor?: string) => listSurveys(projectId, signal, cursor), [projectId])
+  const materials = useSurveyList(loadMaterials, materialIdOf)
+  const reports = useSurveyList(loadReports, analysisIdOf)
+  const csvFiles = materials.items.filter(({ name }) => name.toLowerCase().endsWith('.csv'))
+  const [materialId, setMaterialId] = useState('')
+  const [run, setRun] = useState<SurveyRun>()
+  const [busy, setBusy] = useState<'analyze' | 'read'>()
+  const [error, setError] = useState('')
+  const active = useRef<AbortController | null>(null)
+  const attempt = useRef<{ key: string; requestId: string } | null>(null)
+  const currentMaterialId = csvFiles.some((file) => file.materialId === materialId) ? materialId : ''
+  useEffect(() => () => active.current?.abort(), [])
+
+  async function open(kind: 'analyze' | 'read', request: (signal: AbortSignal) => Promise<SurveyRun>) {
+    if (active.current) return
+    const controller = new AbortController()
+    active.current = controller
+    setBusy(kind)
+    setError('')
+    try {
+      const next = await request(controller.signal)
+      if (controller.signal.aborted) return
+      setRun(next)
+      if (kind === 'analyze') {
+        attempt.current = null
+        reports.refresh()
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(errorMessage(cause))
+    } finally {
+      active.current = null
+      if (!controller.signal.aborted) setBusy(undefined)
+    }
+  }
+
+  function analyze(materialId: string, options: SurveyOptions) {
+    if (active.current) return
+    const key = JSON.stringify({ materialId, options })
+    if (attempt.current?.key !== key) attempt.current = { key, requestId: crypto.randomUUID() }
+    const { requestId } = attempt.current
+    void open('analyze', (signal) => analyzeSurvey(projectId, { requestId, materialId, options }, signal))
+  }
+
+  return <section className="survey-panel" aria-labelledby={id}>
+    <h4 id={id}>问卷分析</h4>
+    <div className="field">
+      <label htmlFor={`${id}-csv`}>已上传的问卷 CSV</label>
+      <select id={`${id}-csv`} value={currentMaterialId} disabled={!!busy || !csvFiles.length}
+        onChange={(event) => setMaterialId(event.target.value)}>
+        <option value="">请选择文件</option>
+        {csvFiles.map(({ materialId, name, createdAt }) => (
+          <option key={materialId} value={materialId}>{name} · {reportDate.format(new Date(createdAt))}</option>
+        ))}
+      </select>
+    </div>
+    <div className="survey-actions">
+      <button className="button primary" type="button" disabled={!!busy || !currentMaterialId}
+        onClick={() => analyze(currentMaterialId, {})}>开始分析</button>
+      <button className="button outline" type="button" disabled={materials.loading} onClick={materials.refresh}>刷新文件列表</button>
+    </div>
+    <ListControls list={materials} label="文件" />
+    {!materials.loading && !materials.error && !csvFiles.length && <p className="survey-note">
+      此页未找到 CSV。上传后可刷新文件列表，有更多文件时可继续加载。
+    </p>}
+    <details className="survey-details">
+      <summary>已保存的报告</summary>
+      <div className="survey-section">
+        {reports.items.length > 0 && <ul className="survey-history" role="list">
+          {reports.items.map((report) => <li key={report.analysisId}>
+            <button type="button" className="survey-report-link" aria-current={run?.analysisId === report.analysisId ? 'true' : undefined}
+              disabled={!!busy} onClick={() => void open('read', (signal) => readSurvey(projectId, report.analysisId, signal))}>
+              <strong dir="auto">{report.materialName}</strong>
+              <span className="survey-note">
+                <time dateTime={report.createdAt}>{reportDate.format(new Date(report.createdAt))}</time>
+                {' · '}{report.valid}/{report.total} 份有效{report.pending > 0 ? ` · ${report.pending} 份待复核` : ''}
+                {report.invalid > 0 ? ` · ${report.invalid} 份无效` : ''}{report.demo ? ' · 演示数据' : ''}
+              </span>
+            </button>
+          </li>)}
+        </ul>}
+        <ListControls list={reports} label="报告" />
+        {!reports.loading && !reports.error && !reports.items.length && <p className="survey-note">暂无保存的报告。</p>}
+      </div>
+    </details>
+    {busy && <p className="survey-note" role="status">{busy === 'analyze' ? '正在分析并保存报告…' : '正在打开报告…'}</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {run && <SurveyAnalysis key={run.analysisId} run={run} projectId={projectId} busy={!!busy} onAnalyze={analyze} />}
+  </section>
+}
