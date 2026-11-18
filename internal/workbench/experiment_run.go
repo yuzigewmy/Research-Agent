@@ -2,35 +2,17 @@ package workbench
 
 import (
 	"context"
-	_ "embed"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"research-agent/internal/inference"
 )
 
-//go:embed prompts/experiment_scope.md
-var experimentScopePrompt string
-
-//go:embed prompts/experiment_plan.md
-var experimentPlanPrompt string
-
-//go:embed prompts/experiment_checklist.md
-var experimentChecklistPrompt string
-
-var experimentStages = [...]struct {
-	key, title, prompt string
-	checkpoint         bool
-}{
-	{key: "scope", title: "界定研究范围", prompt: experimentScopePrompt},
-	{key: "plan", title: "编制实验计划", prompt: experimentPlanPrompt, checkpoint: true},
-	{key: "checklist", title: "生成验收清单", prompt: experimentChecklistPrompt},
-}
-
-func (s *Store) experimentContext(ctx context.Context, task Task) (string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT experiment_step, markdown FROM tasks
-		WHERE experiment_run_id = ? AND experiment_step < ? AND status = 'SUCCEEDED'
-		ORDER BY experiment_step`, task.experimentRunID, task.experimentStep)
+func (s *Store) workflowContext(ctx context.Context, task Task, stages []workflowStage, first int) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT workflow_step, markdown FROM tasks
+		WHERE workflow_run_id = ? AND workflow_step >= ? AND workflow_step < ? AND status = 'SUCCEEDED'
+		ORDER BY workflow_step`, task.workflowRunID, first, task.workflowStep)
 	if err != nil {
 		return "", err
 	}
@@ -42,17 +24,54 @@ func (s *Store) experimentContext(ctx context.Context, task Task) (string, error
 		if err := rows.Scan(&stage, &markdown); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&previous, "\n\n--- %s ---\n%s", experimentStages[stage].title, markdown)
+		fmt.Fprintf(&previous, "\n\n--- %s ---\n%s", stages[stage].title, markdown)
 	}
 	return previous.String(), rows.Err()
 }
 
-// ResumeQueuedExperiments submits persisted stages that had not begun at shutdown.
-func (s *Store) ResumeQueuedExperiments(ctx context.Context, model *inference.Client) error {
+type reviewCitationError struct{ err error }
+
+func (e reviewCitationError) Error() string { return e.err.Error() }
+
+func (s *Store) generateWorkflowMarkdown(ctx context.Context, model *inference.Client, task Task, input string) (string, error) {
+	var key, evidence string
+	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json FROM workflow_runs WHERE run_id = ?`,
+		task.workflowRunID).Scan(&key, &evidence); err != nil {
+		return "", err
+	}
+	stages := workflowStages[key]
+	stage := stages[task.workflowStep]
+	var sources []reviewSource
+	first := 0
+	if key == reviewWorkflow {
+		if err := json.Unmarshal([]byte(evidence), &sources); err != nil {
+			return "", err
+		}
+		if stage.key == "sources" {
+			return reviewSourcesMarkdown(sources), nil
+		}
+		input += "\n\n本轮固定的文献元数据（JSON）：\n" + evidence
+		first = 1
+	}
+	previous, err := s.workflowContext(ctx, task, stages, first)
+	if err != nil {
+		return "", err
+	}
+	markdown, err := streamTaskMarkdown(ctx, model, stage.prompt, input+previous)
+	if err == nil && key == reviewWorkflow {
+		if invalid := checkReviewCitations(markdown, sources); invalid != nil {
+			return "", reviewCitationError{invalid}
+		}
+	}
+	return markdown, err
+}
+
+// ResumeQueuedWorkflows submits persisted stages that had not begun at shutdown.
+func (s *Store) ResumeQueuedWorkflows(ctx context.Context, model *inference.Client) error {
 	if model == nil {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT project_id FROM experiment_runs WHERE status = 'QUEUED'`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT project_id FROM workflow_runs WHERE status = 'QUEUED'`)
 	if err != nil {
 		return err
 	}

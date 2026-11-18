@@ -108,7 +108,8 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
         referenceIds={references.map(({ materialId }) => materialId)} />
       <SurveyPanel projectId={project.projectId} />
       {project.templateId === 'literature_review' && <LiteraturePanel projectId={project.projectId} />}
-      {project.templateId === 'experiment' && <WorkflowPanel projectId={project.projectId} />}
+      {(project.templateId === 'experiment' || project.templateId === 'literature_review') &&
+        <WorkflowPanel projectId={project.projectId} templateId={project.templateId} />}
       <TaskPanel projectId={project.projectId} />
       <WorkspacePanel projectId={project.projectId} />
       <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} />

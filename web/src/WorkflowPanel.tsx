@@ -4,23 +4,23 @@ import {
   continueWorkflow, getWorkflow, isWorkflowActive, runStatusLabels, startWorkflow, stepStatusLabels,
   workflowArtifactPath,
 } from './workflow'
-import type { ContinueExperimentInput, ExperimentRun, StartExperimentInput, WorkflowSnapshot } from './workflow'
+import type { ContinueWorkflowInput, WorkflowRun, StartWorkflowInput, WorkflowSnapshot } from './workflow'
 import './workflow.css'
 
 const pollInterval = 1_000
 const requestTimeout = 10_000
 
 type Attempt =
-  | { kind: 'start'; input: StartExperimentInput }
-  | { kind: 'continue'; input: ContinueExperimentInput }
+  | { kind: 'start'; input: StartWorkflowInput }
+  | { kind: 'continue'; input: ContinueWorkflowInput }
 
 function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
 }
 
-function WorkflowSteps({ projectId, run }: { projectId: string; run: ExperimentRun }) {
+function WorkflowSteps({ projectId, run }: { projectId: string; run: WorkflowRun }) {
   return (
-    <ol className="workflow-steps" aria-label="实验步骤">
+    <ol className="workflow-steps" aria-label="工作流步骤">
       {run.steps.map((step) => (
         <li key={step.key}>
           <div className="workflow-step-heading">
@@ -38,12 +38,17 @@ function WorkflowSteps({ projectId, run }: { projectId: string; run: ExperimentR
   )
 }
 
-export function WorkflowPanel({ projectId }: { projectId: string }) {
+export function WorkflowPanel({ projectId, templateId }: {
+  projectId: string
+  templateId: 'experiment' | 'literature_review'
+}) {
+  const isReview = templateId === 'literature_review'
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
   const [checkpoints, setCheckpoints] = useState(false)
+  const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
   const [readError, setReadError] = useState('')
@@ -59,6 +64,8 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   const retryContinue = retry?.kind === 'continue' && retry.input.runId === run?.runId ? retry : null
   const modelUnavailable = snapshot?.modelConfigured === false
   const actionDisabled = refreshing || readError !== '' || modelUnavailable || pending
+  const target = Number(targetPaperCount)
+  const validTarget = !isReview || (Number.isInteger(target) && target >= 10 && target <= 80)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -99,7 +106,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   }
 
   async function submit(kind: Attempt['kind']) {
-    if (submission.current || actionDisabled || (kind === 'start' ? !canStart : !canContinue || !run)) return
+    if (submission.current || actionDisabled || (kind === 'start' ? !canStart || !validTarget : !canContinue || !run)) return
     const controller = new AbortController()
     const control = document.activeElement
     submission.current = controller
@@ -110,7 +117,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
     try {
       if (!attempt) {
         const requestId = crypto.randomUUID()
-        if (kind === 'start') attempt = { kind, input: { requestId, checkpoints } }
+        if (kind === 'start') attempt = { kind, input: { requestId, checkpoints, targetPaperCount: isReview ? target : undefined } }
         else if (run) attempt = { kind, input: { requestId, runId: run.runId, expectedRevision: run.revision } }
         else return
       }
@@ -148,7 +155,7 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
   return (
     <section className="workflow-panel" aria-labelledby={headingId}>
       <div className="workflow-heading">
-        <h4 id={headingId} ref={heading} tabIndex={-1}>实验工作流</h4>
+        <h4 id={headingId} ref={heading} tabIndex={-1}>{isReview ? '文献综述工作流' : '实验工作流'}</h4>
         <p className="workflow-run-status" role="status" data-status={run?.status}>
           {run ? runStatusLabels[run.status] : snapshot && '尚未启动'}
         </p>
@@ -159,24 +166,32 @@ export function WorkflowPanel({ projectId }: { projectId: string }) {
           <div className="loading-lines" aria-hidden="true"><span /><span /></div>
         </div>
       )}
+      {run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} />}
-      {waiting && <p className="workflow-note">确认实验计划后生成验收清单。</p>}
+      {waiting && <p className="workflow-note">{isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {readError && <p className="form-error" role="alert">{readError}</p>}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {feedback && <p className="workflow-note" role="status">{feedback}</p>}
       {modelUnavailable && <p className="workflow-note">请配置研究模型，然后刷新工作流状态。</p>}
       {(canStart || canContinue || readError || modelUnavailable) && (
         <div className="workflow-controls">
+          {canStart && isReview && <div className="field">
+            <label htmlFor={`${headingId}-papers`}>纳入文献数量上限</label>
+            <input id={`${headingId}-papers`} type="number" min={10} max={80} step={1} value={targetPaperCount}
+              disabled={actionDisabled || retryStart !== null} aria-describedby={`${headingId}-sources`}
+              onChange={(event) => setTargetPaperCount(event.currentTarget.value)} />
+            <p className="workflow-note" id={`${headingId}-sources`}>从 10 至 80 中选择上限。当前文献库按核验时间从近到远纳入。</p>
+          </div>}
           {canStart && (
             <label className="workflow-checkpoint">
               <input type="checkbox" checked={checkpoints} disabled={actionDisabled || retryStart !== null}
                 onChange={(event) => setCheckpoints(event.currentTarget.checked)} />
-              <span>生成实验计划后，等待我确认再继续</span>
+              <span>{isReview ? '整理主题后，等待我确认再继续' : '生成实验计划后，等待我确认再继续'}</span>
             </label>
           )}
           <div className="workflow-actions">
             {canStart && (
-              <button className="button primary" type="button" disabled={actionDisabled && !pending}
+              <button className="button primary" type="button" disabled={!validTarget || (actionDisabled && !pending)}
                 aria-disabled={pending} onClick={() => void submit('start')}>
                 {pending ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>

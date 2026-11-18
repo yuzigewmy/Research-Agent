@@ -75,7 +75,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			return
 		}
 		deadline := planTimeout
-		if task.experimentRunID != "" {
+		if task.workflowRunID != "" {
 			deadline = 2 * time.Minute
 		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
@@ -84,8 +84,12 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 
 		markdown, err := s.generateTaskMarkdown(ctx, model, projectID, task)
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
-		if task.experimentRunID != "" && status == taskFailed {
+		if task.workflowRunID != "" && status == taskFailed {
 			message = "此步骤未生成成果。检查模型连接后，可从此步骤继续。"
+			var invalid reviewCitationError
+			if errors.As(err, &invalid) {
+				message = invalid.Error() + "可以继续重试此步骤。"
+			}
 		}
 		stop()
 		saveCtx, stopSave := context.WithTimeout(context.Background(), taskDBLimit)
@@ -122,22 +126,20 @@ func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Clien
 	if err != nil {
 		return "", err
 	}
-	prompt := researchPlanPrompt
 	input := fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, task.Instruction)
-	if task.experimentRunID != "" {
-		prompt = experimentStages[task.experimentStep].prompt
-		previous, err := s.experimentContext(ctx, task)
-		if err != nil {
-			return "", err
-		}
-		input += previous
+	if task.workflowRunID != "" {
+		return s.generateWorkflowMarkdown(ctx, model, task, input)
 	}
+	return streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
+}
+
+func streamTaskMarkdown(ctx context.Context, model *inference.Client, prompt, input string) (string, error) {
 	messages := []inference.Message{
 		{Role: "system", Content: strings.TrimSpace(prompt)},
 		{Role: "user", Content: input},
 	}
 	var output strings.Builder
-	err = model.Stream(ctx, messages, func(delta string) error {
+	err := model.Stream(ctx, messages, func(delta string) error {
 		if len(delta) > planMaxSize-output.Len() {
 			return errors.New("research plan exceeds output limit")
 		}

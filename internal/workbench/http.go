@@ -35,7 +35,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 	conversation{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model}.register(mux)
-	experiments{store: store, model: config.Model}.register(mux)
+	workflows{store: store, model: config.Model}.register(mux)
 	store.registerMaterials(mux)
 	store.registerWorkspace(mux)
 	store.registerWord(mux, config.WordPython)

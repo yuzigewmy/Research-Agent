@@ -101,7 +101,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 10 {
+	if version < 0 || version > 11 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -166,13 +166,18 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if version < 11 {
+		if _, err := tx.Exec(workflowSchema); err != nil {
+			return err
+		}
+	}
 	if err := recoverInterruptedTurns(tx); err != nil {
 		return err
 	}
 	if err := recoverInterruptedTasks(tx); err != nil {
 		return err
 	}
-	if err := recoverInterruptedExperiments(tx); err != nil {
+	if err := recoverInterruptedWorkflows(tx); err != nil {
 		return err
 	}
 	return tx.Commit()

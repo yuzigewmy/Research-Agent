@@ -55,7 +55,7 @@ func run(address, dataDir, webDir string) error {
 			return err
 		}
 	}
-	if err := store.ResumeQueuedExperiments(context.Background(), model); err != nil {
+	if err := store.ResumeQueuedWorkflows(context.Background(), model); err != nil {
 		return err
 	}
 

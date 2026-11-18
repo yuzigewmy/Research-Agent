@@ -67,15 +67,15 @@ func TestExperimentContinuesFromSavedCheckpoint(t *testing.T) {
 		}
 		return res
 	}
-	readRun := func() ExperimentRun {
+	readRun := func() WorkflowRun {
 		t.Helper()
-		var page struct{ Run *ExperimentRun }
+		var page struct{ Run *WorkflowRun }
 		if err := json.Unmarshal(request("GET", base, "", http.StatusOK).Body.Bytes(), &page); err != nil || page.Run == nil {
 			t.Fatalf("missing workflow: %v", err)
 		}
 		return *page.Run
 	}
-	waitFor := func(status string) ExperimentRun {
+	waitFor := func(status string) WorkflowRun {
 		t.Helper()
 		deadline := time.Now().Add(4 * time.Second)
 		for {
