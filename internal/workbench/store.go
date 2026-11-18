@@ -46,7 +46,8 @@ type projectCursor struct {
 
 // Store holds the workspace database and serializes access through one connection.
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	tasks taskWorkers
 }
 
 // Open creates the data directory if necessary and opens and migrates its database.
@@ -78,8 +79,11 @@ func Open(dataDir string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Close releases the database connection.
-func (s *Store) Close() error { return s.db.Close() }
+// Close stops research task workers and releases the database connection.
+func (s *Store) Close() error {
+	s.tasks.close()
+	return s.db.Close()
+}
 
 func migrate(db *sql.DB) error {
 	tx, err := db.Begin()
@@ -92,7 +96,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 2 {
+	if version < 0 || version > 3 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -117,7 +121,15 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if version < 3 {
+		if _, err := tx.Exec(tasksSchema); err != nil {
+			return err
+		}
+	}
 	if err := recoverInterruptedTurns(tx); err != nil {
+		return err
+	}
+	if err := recoverInterruptedTasks(tx); err != nil {
 		return err
 	}
 	return tx.Commit()

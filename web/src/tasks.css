@@ -1,0 +1,35 @@
+.task-panel {
+  display: grid;
+  gap: 0.875rem;
+  margin-block-start: 1.5rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--line);
+}
+
+.task-panel .create-form { gap: 0.75rem; }
+.task-panel textarea {
+  inline-size: 100%;
+  min-inline-size: 0;
+  padding: 0.5rem 0.75rem;
+  resize: vertical;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--surface);
+}
+.task-panel textarea[aria-invalid='true'] { border-color: var(--error); }
+.task-panel textarea[readonly] { background: var(--background); }
+.task-panel .button:disabled,
+.task-panel .outline[aria-disabled='true'] {
+  background: var(--background);
+  color: var(--muted);
+  cursor: default;
+}
+
+.task-note { color: var(--muted); font-size: 0.875rem; overflow-wrap: anywhere; }
+.task-actions, .task-card-header { display: flex; flex-wrap: wrap; gap: 0.375rem 0.75rem; }
+.task-card-header { justify-content: space-between; align-items: baseline; }
+.task-list { display: grid; gap: 0.75rem; list-style: none; margin: 0; padding: 0; }
+.task-card { display: grid; gap: 0.5rem; padding: 0.75rem; border-radius: var(--radius); background: var(--background); }
+.task-status strong { color: var(--green); font-size: 0.875rem; }
+.task-instruction { white-space: pre-wrap; overflow-wrap: anywhere; }
