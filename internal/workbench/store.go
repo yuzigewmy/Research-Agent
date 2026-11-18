@@ -46,8 +46,9 @@ type projectCursor struct {
 
 // Store holds the workspace database and serializes access through one connection.
 type Store struct {
-	db    *sql.DB
-	tasks taskWorkers
+	db         *sql.DB
+	tasks      taskWorkers
+	objectsDir string
 }
 
 // Open creates the data directory if necessary and opens and migrates its database.
@@ -61,6 +62,10 @@ func Open(dataDir string) (*Store, error) {
 	filename, err := filepath.Abs(filepath.Join(dataDir, "projects.sqlite3"))
 	if err != nil {
 		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+	objectsDir := filepath.Join(filepath.Dir(filename), "objects")
+	if err := os.MkdirAll(objectsDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create object directory: %w", err)
 	}
 	filename = filepath.ToSlash(filename)
 	if !strings.HasPrefix(filename, "/") {
@@ -76,7 +81,7 @@ func Open(dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, objectsDir: objectsDir}, nil
 }
 
 // Close stops research task workers and releases the database connection.
@@ -96,7 +101,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 4 {
+	if version < 0 || version > 5 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -128,6 +133,11 @@ func migrate(db *sql.DB) error {
 	}
 	if version < 4 {
 		if _, err := tx.Exec(experimentSchema); err != nil {
+			return err
+		}
+	}
+	if version < 5 {
+		if _, err := tx.Exec(materialsSchema); err != nil {
 			return err
 		}
 	}

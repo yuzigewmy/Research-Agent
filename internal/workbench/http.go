@@ -30,6 +30,7 @@ func NewHandler(store *Store, webFS fs.FS, model *inference.Client) http.Handler
 	conversation{store: store, model: model}.register(mux)
 	researchTasks{store: store, model: model}.register(mux)
 	experiments{store: store, model: model}.register(mux)
+	store.registerMaterials(mux)
 	mux.HandleFunc("GET "+projectsPath, store.handleListProjects)
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
