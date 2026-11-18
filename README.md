@@ -28,6 +28,17 @@ go build -trimpath -o ./dist/research-agent.exe ./cmd/research-agent
 - 项目资料可依次上传多个文件，按名称和 SHA-256 区分同名版本。每份文件上限为 64 MiB。可下载原件并预览 UTF-8 文本的前 64 KiB。备份时保留数据目录中的数据库和资料对象。
 - 每轮对话可引用最多四份文本资料。模型收到所选文件各自最多 8 KiB 的 UTF-8 正文节选。会话历史保存文件名和版本，重开后仍可下载当时引用的原件。
 - 文本工作区支持创建和编辑项目文件，例如 `paper/main.md`。单文件支持 512 KiB 的 UTF-8 正文。并发保存冲突时，编辑器保留本页草稿。恢复旧稿会把选中的内容保存为新版本。
+- 启用 Word 组件后，可从当前稿件或指定历史版本生成 DOCX。标题、段落、基本强调、列表、代码和表格可以在 Word 中编辑。每个稿件版本保存自己的导出结果，可重复下载。
+
+## 启用 Word 导出
+
+在专用 Python 环境安装 [Word 导出依赖](internal/wordexport/requirements.txt)，并把 `RESEARCH_WORD_PYTHON` 设为该环境的 Python 可执行文件绝对路径。重启服务即可在 Markdown 文件的编辑器和版本历史中导出。组件支持基础 Markdown，链接、图片和 HTML 作为文本保留。
+
+```powershell
+python -m venv .local/word
+.\.local\word\Scripts\python.exe -m pip install -r internal/wordexport/requirements.txt
+$env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
+```
 
 ## 连接对话模型
 

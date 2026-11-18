@@ -35,7 +35,7 @@ func TestMaterialsKeepOriginalBytesAndProjectScope(t *testing.T) {
 	}
 	first, second := create("河流记录"), create("其他项目")
 	base := projectsPath + "/" + first + "/materials"
-	handler := NewHandler(store, nil, nil)
+	handler := NewHandler(store, nil, HandlerConfig{})
 	request := func(method, route, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, "http://127.0.0.1"+route, strings.NewReader(body))
@@ -69,7 +69,7 @@ func TestMaterialsKeepOriginalBytesAndProjectScope(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	handler = NewHandler(open(), nil, nil)
+	handler = NewHandler(open(), nil, HandlerConfig{})
 
 	item := base + "/" + material.MaterialID
 	preview := request(http.MethodGet, item+"/preview", "", http.StatusOK)

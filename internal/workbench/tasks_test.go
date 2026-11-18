@@ -58,7 +58,7 @@ func TestResearchTaskQueueCancellationAndPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(store, nil, model)
+	handler := NewHandler(store, nil, HandlerConfig{Model: model})
 	base := projectsPath + "/" + project.ProjectID + "/tasks"
 	request := func(method, path, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -161,7 +161,7 @@ func TestResearchTaskQueueCancellationAndPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	handler = NewHandler(reopened, nil, nil)
+	handler = NewHandler(reopened, nil, HandlerConfig{})
 	request("GET", firstPath+"/artifact", "", http.StatusNotFound)
 	artifact := request("GET", secondPath+"/artifact", "", http.StatusOK)
 	if artifact.Body.String() != markdown || artifact.Header().Get("Content-Type") != "text/markdown; charset=utf-8" || !strings.HasPrefix(artifact.Header().Get("Content-Disposition"), "attachment;") {

@@ -70,7 +70,7 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 		return res
 	}
 
-	handler := NewHandler(store, nil, model)
+	handler := NewHandler(store, nil, HandlerConfig{Model: model})
 	input := fmt.Sprintf(`{"requestId":"turn-1","text":"设计实验","referenceIds":[%q]}`, material.MaterialID)
 	request(handler, "POST", base, `{"requestId":"bad-reference","text":"设计实验","referenceIds":["missing"]}`, http.StatusUnprocessableEntity)
 	started := request(handler, "POST", base, input, http.StatusAccepted)
@@ -106,7 +106,7 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	handler = NewHandler(reopened, nil, nil)
+	handler = NewHandler(reopened, nil, HandlerConfig{})
 	stored := request(handler, "POST", base, input, http.StatusOK)
 	if err := json.Unmarshal(stored.Body.Bytes(), &turn); err != nil || turn.Answer != "基线与对照组" || turn.Status != "COMPLETED" {
 		t.Fatalf("invalid saved turn: %v, %s", err, stored.Body.String())

@@ -59,8 +59,12 @@ func run(address, dataDir, webDir string) error {
 		return err
 	}
 
+	handler := workbench.NewHandler(store, os.DirFS(webDir), workbench.HandlerConfig{
+		Model:      model,
+		WordPython: os.Getenv("RESEARCH_WORD_PYTHON"),
+	})
 	server := &http.Server{
-		Handler:           workbench.NewHandler(store, os.DirFS(webDir), model),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		IdleTimeout:       60 * time.Second,

@@ -53,7 +53,7 @@ func TestExperimentContinuesFromSavedCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := projectsPath + "/" + project.ProjectID + "/workflow"
-	handler := NewHandler(store, nil, model)
+	handler := NewHandler(store, nil, HandlerConfig{Model: model})
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
@@ -99,7 +99,7 @@ func TestExperimentContinuesFromSavedCheckpoint(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	handler = NewHandler(open(), nil, model)
+	handler = NewHandler(open(), nil, HandlerConfig{Model: model})
 	restored := readRun()
 	if restored.RunID != checkpoint.RunID || restored.Revision != checkpoint.Revision || restored.Status != checkpoint.Status {
 		t.Fatalf("checkpoint changed during reopening: %+v", restored)

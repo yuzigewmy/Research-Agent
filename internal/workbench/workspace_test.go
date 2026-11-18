@@ -26,7 +26,7 @@ func TestWorkspaceConflictAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := projectsPath + "/" + project.ProjectID + "/files"
-	handler := NewHandler(s, nil, nil)
+	handler := NewHandler(s, nil, HandlerConfig{})
 	request := func(method, path string, input any, status int, output any) {
 		t.Helper()
 		body, err := json.Marshal(input)
@@ -64,7 +64,7 @@ func TestWorkspaceConflictAndRestore(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	handler = NewHandler(open(), nil, nil)
+	handler = NewHandler(open(), nil, HandlerConfig{})
 	request(http.MethodGet, "/text?path=paper%2Fmain.md", nil, http.StatusOK, &current)
 	var versions struct{ Items []WorkspaceFile }
 	request(http.MethodGet, "/versions?path=paper%2Fmain.md", nil, http.StatusOK, &versions)
