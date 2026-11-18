@@ -1,4 +1,5 @@
 import { request } from './projects'
+import { isFileRecord } from './workspace'
 
 export const runStatusLabels = {
   QUEUED: '排队中',
@@ -109,4 +110,8 @@ export function continueWorkflow(projectId: string, input: ContinueWorkflowInput
 
 export function workflowArtifactPath(projectId: string, runId: string, key: string) {
   return `${workflowPath(projectId)}/${encodeURIComponent(runId)}/steps/${encodeURIComponent(key)}/artifact`
+}
+
+export function saveManuscript(projectId: string, runId: string, signal: AbortSignal) {
+  return request(`${workflowPath(projectId)}/${encodeURIComponent(runId)}/manuscript`, isFileRecord, { method: 'POST', signal })
 }

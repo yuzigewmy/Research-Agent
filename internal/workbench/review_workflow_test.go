@@ -133,4 +133,24 @@ func TestReviewWorkflowKeepsSourcesAndRejectsUnknownCitations(t *testing.T) {
 	if !strings.Contains(body, citation) || calls.Load() != 3 {
 		t.Fatalf("wrong manuscript or too many calls: %s, calls %d", body, calls.Load())
 	}
+	publish := func() WorkspaceFile {
+		t.Helper()
+		var file WorkspaceFile
+		if err := json.Unmarshal([]byte(request("POST", "/"+checkpoint.RunID+"/manuscript", "", http.StatusOK)), &file); err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	first := publish()
+	doc, err := store.readWorkspaceDocument(first)
+	if err != nil || doc.Content != body {
+		t.Fatalf("workspace differs from the workflow result: %v", err)
+	}
+	edited, err := store.saveWorkspaceDocument(ctx, project.ProjectID, first.Path, first.SHA256, body+"\n编辑补充。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened := publish(); reopened.VersionID != edited.VersionID {
+		t.Fatalf("reopening changed the edited version: %+v", reopened)
+	}
 }

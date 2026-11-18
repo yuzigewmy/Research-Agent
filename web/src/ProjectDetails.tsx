@@ -53,6 +53,7 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
   const [retry, setRetry] = useState(0)
   const referenceKey = `research.references.${projectId}`
   const [references, setReferences] = useState(() => readReferences(referenceKey))
+  const [publishedPaths, setPublishedPaths] = useState<string[]>([])
 
   useEffect(() => {
     if (references.length) sessionStorage.setItem(referenceKey, JSON.stringify(references))
@@ -109,9 +110,11 @@ export function ProjectDetails({ projectId }: { projectId: string }) {
       <SurveyPanel projectId={project.projectId} />
       {project.templateId === 'literature_review' && <LiteraturePanel projectId={project.projectId} />}
       {(project.templateId === 'experiment' || project.templateId === 'literature_review') &&
-        <WorkflowPanel projectId={project.projectId} templateId={project.templateId} />}
+        <WorkflowPanel projectId={project.projectId} templateId={project.templateId} onManuscriptSaved={(path) => {
+          setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])
+        }} />}
       <TaskPanel projectId={project.projectId} />
-      <WorkspacePanel projectId={project.projectId} />
+      <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths} />
       <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} />
     </div>
   )

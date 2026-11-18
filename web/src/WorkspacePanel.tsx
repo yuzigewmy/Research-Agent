@@ -141,11 +141,13 @@ const progress: Record<Operation, string> = {
   reload: '正在重新加载…', restore: '正在恢复版本…',
 }
 
-export function WorkspacePanel({ projectId }: { projectId: string }) {
-  return <ProjectWorkspace key={projectId} projectId={projectId} />
+type WorkspaceProps = { projectId: string; publishedPaths: string[] }
+
+export function WorkspacePanel(props: WorkspaceProps) {
+  return <ProjectWorkspace key={props.projectId} {...props} />
 }
 
-function ProjectWorkspace({ projectId }: { projectId: string }) {
+function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   const id = useId()
   const load = useCallback((signal: AbortSignal, cursor?: string) => listFiles(projectId, signal, cursor), [projectId])
   const page = useFilePage(load, 'path')
@@ -164,7 +166,7 @@ function ProjectWorkspace({ projectId }: { projectId: string }) {
   const discardPrompt = useRef<HTMLDivElement>(null)
   const currentPath = document?.path
   const dirty = document !== undefined && draft !== document.content
-  const paths = [...new Set([...createdPaths, ...page.items.map(({ path }) => path)])]
+  const paths = [...new Set([...publishedPaths, ...createdPaths, ...page.items.map(({ path }) => path)])]
   const restoreBlocked = conflict ? '请先重新加载当前文件。'
     : dirty ? '请先保存草稿或放弃修改。'
       : busy ? progress[busy] : undefined
@@ -229,7 +231,7 @@ function ProjectWorkspace({ projectId }: { projectId: string }) {
     void run('restore', (signal) => restoreVersion(projectId, versionId, document.sha256, signal))
   }
 
-  return <section className="workspace-panel" aria-labelledby={id}>
+  return <section className="workspace-panel" id="project-workspace" aria-labelledby={id}>
     <div className="workspace-heading">
       <h4 id={id}>文本工作区</h4>
       <button className="button outline" type="button" aria-expanded={creating} aria-controls={`${id}-create`}

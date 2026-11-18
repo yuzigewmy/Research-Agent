@@ -21,7 +21,7 @@ function isPathId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
 }
 
-function isFileRecord(value: unknown): value is FileRecord {
+export function isFileRecord(value: unknown): value is FileRecord {
   const record = value as Partial<FileRecord> | null
   return !!record && typeof record.path === 'string' && record.path.length > 0
     && isPathId(record.versionId)

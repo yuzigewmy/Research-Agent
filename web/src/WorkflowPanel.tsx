@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import {
-  continueWorkflow, getWorkflow, isWorkflowActive, runStatusLabels, startWorkflow, stepStatusLabels,
+  continueWorkflow, getWorkflow, isWorkflowActive, runStatusLabels, saveManuscript, startWorkflow, stepStatusLabels,
   workflowArtifactPath,
 } from './workflow'
 import type { ContinueWorkflowInput, WorkflowRun, StartWorkflowInput, WorkflowSnapshot } from './workflow'
@@ -38,9 +38,49 @@ function WorkflowSteps({ projectId, run }: { projectId: string; run: WorkflowRun
   )
 }
 
-export function WorkflowPanel({ projectId, templateId }: {
+function ManuscriptHandoff({ projectId, runId, onSaved }: {
+  projectId: string
+  runId: string
+  onSaved: (path: string) => void
+}) {
+  const active = useRef<AbortController | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => () => active.current?.abort(), [])
+
+  async function save() {
+    if (active.current) return
+    const controller = new AbortController()
+    active.current = controller
+    setSaving(true)
+    setError('')
+    try {
+      const file = await saveManuscript(projectId, runId, requestSignal(controller))
+      if (controller.signal.aborted) return
+      onSaved(file.path)
+      setSaved(true)
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(errorMessage(cause))
+    } finally {
+      active.current = null
+      if (!controller.signal.aborted) setSaving(false)
+    }
+  }
+
+  return <div className="workflow-actions">
+    {saved ? <a className="workflow-download" href="#project-workspace">前往文本工作区</a> :
+      <button className="button outline" type="button" disabled={saving} onClick={() => void save()}>
+        {saving ? '正在保存稿件…' : '保存稿件到工作区'}
+      </button>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </div>
+}
+
+export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   projectId: string
   templateId: 'experiment' | 'literature_review'
+  onManuscriptSaved: (path: string) => void
 }) {
   const isReview = templateId === 'literature_review'
   const headingId = useId()
@@ -168,6 +208,8 @@ export function WorkflowPanel({ projectId, templateId }: {
       )}
       {run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} />}
+      {run?.steps.some((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED') &&
+        <ManuscriptHandoff key={run.runId} projectId={projectId} runId={run.runId} onSaved={onManuscriptSaved} />}
       {waiting && <p className="workflow-note">{isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {readError && <p className="form-error" role="alert">{readError}</p>}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}

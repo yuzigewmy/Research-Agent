@@ -19,6 +19,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path, api.change(workflowStart))
 	mux.HandleFunc("POST "+path+"/continue", api.change(workflowContinue))
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
+	mux.HandleFunc("POST "+path+"/{runId}/manuscript", api.saveManuscript)
 }
 
 func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
