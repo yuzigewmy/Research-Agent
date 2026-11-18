@@ -26,4 +26,6 @@ go build -trimpath -o ./dist/research-agent.exe ./cmd/research-agent
 
 ## 连接对话模型
 
-启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求设置环境变量 `RESEARCH_MODEL_API_KEY`，然后启动应用。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。没有配置模型时仍可浏览项目和已有会话。一个数据目录运行一个服务实例。
+启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求设置 `RESEARCH_MODEL_API_KEY`。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。项目和已有会话可离线浏览。一个数据目录运行一个服务实例。
+
+使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。推理请求的 8192 token 上限包含推理和正文。

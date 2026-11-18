@@ -15,12 +15,16 @@ import (
 func TestChatStream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
-			Model    string    `json:"model"`
-			Messages []Message `json:"messages"`
-			Stream   bool      `json:"stream"`
+			Model               string    `json:"model"`
+			Messages            []Message `json:"messages"`
+			Stream              bool      `json:"stream"`
+			ReasoningEffort     string    `json:"reasoning_effort"`
+			MaxCompletionTokens int       `json:"max_completion_tokens"`
+			MaxTokens           int       `json:"max_tokens"`
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer fixture" ||
-			json.NewDecoder(r.Body).Decode(&request) != nil || request.Model != "fixture-model" || !request.Stream ||
+			json.NewDecoder(r.Body).Decode(&request) != nil || request.Model != "gpt-6.2-sol" || !request.Stream ||
+			request.ReasoningEffort != "max" || request.MaxCompletionTokens != 8192 || request.MaxTokens != 0 ||
 			len(request.Messages) != 1 || request.Messages[0].Content != "梳理实验变量" {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
@@ -40,7 +44,7 @@ data: [DONE]
 	}))
 	defer upstream.Close()
 
-	client, err := New(Config{BaseURL: upstream.URL + "/v1", Model: "fixture-model", APIKey: "fixture"})
+	client, err := New(Config{BaseURL: upstream.URL + "/v1", Model: "gpt-6.2-sol", APIKey: "fixture", ReasoningEffort: "max"})
 	if err != nil {
 		t.Fatal(err)
 	}

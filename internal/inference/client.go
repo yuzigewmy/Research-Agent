@@ -16,9 +16,10 @@ import (
 )
 
 type Config struct {
-	BaseURL string
-	Model   string
-	APIKey  string
+	BaseURL         string
+	Model           string
+	APIKey          string
+	ReasoningEffort string
 }
 
 type Message struct {
@@ -27,10 +28,11 @@ type Message struct {
 }
 
 type Client struct {
-	endpoint string
-	model    string
-	apiKey   string
-	http     *http.Client
+	endpoint        string
+	model           string
+	apiKey          string
+	reasoningEffort string
+	http            *http.Client
 }
 
 func New(config Config) (*Client, error) {
@@ -46,9 +48,10 @@ func New(config Config) (*Client, error) {
 		return nil, errors.New("请指定模型名称")
 	}
 	return &Client{
-		endpoint: base.JoinPath("chat", "completions").String(),
-		model:    config.Model,
-		apiKey:   config.APIKey,
+		endpoint:        base.JoinPath("chat", "completions").String(),
+		model:           config.Model,
+		apiKey:          config.APIKey,
+		reasoningEffort: config.ReasoningEffort,
 		http: &http.Client{
 			Timeout: 3 * time.Minute,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -58,15 +61,25 @@ func New(config Config) (*Client, error) {
 	}, nil
 }
 
+type chatRequest struct {
+	Model               string    `json:"model"`
+	Messages            []Message `json:"messages"`
+	Stream              bool      `json:"stream"`
+	ReasoningEffort     string    `json:"reasoning_effort,omitempty"`
+	MaxCompletionTokens int       `json:"max_completion_tokens,omitempty"`
+	MaxTokens           int       `json:"max_tokens,omitempty"`
+}
+
 // Stream forwards public text from the Chat Completions SSE response.
-// https://api-docs.deepseek.com/api/create-chat-completion/#request
+// https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
 func (c *Client) Stream(ctx context.Context, messages []Message, emit func(string) error) error {
-	body, err := json.Marshal(struct {
-		Model     string    `json:"model"`
-		Messages  []Message `json:"messages"`
-		Stream    bool      `json:"stream"`
-		MaxTokens int       `json:"max_tokens"`
-	}{c.model, messages, true, 2048})
+	payload := chatRequest{Model: c.model, Messages: messages, Stream: true, ReasoningEffort: c.reasoningEffort}
+	if c.reasoningEffort == "" {
+		payload.MaxTokens = 2048
+	} else {
+		payload.MaxCompletionTokens = 8192
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}

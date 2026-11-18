@@ -42,9 +42,10 @@ func run(address, dataDir, webDir string) error {
 	defer store.Close()
 
 	config := inference.Config{
-		BaseURL: os.Getenv("RESEARCH_MODEL_BASE_URL"),
-		Model:   os.Getenv("RESEARCH_MODEL_NAME"),
-		APIKey:  os.Getenv("RESEARCH_MODEL_API_KEY"),
+		BaseURL:         os.Getenv("RESEARCH_MODEL_BASE_URL"),
+		Model:           os.Getenv("RESEARCH_MODEL_NAME"),
+		APIKey:          os.Getenv("RESEARCH_MODEL_API_KEY"),
+		ReasoningEffort: os.Getenv("RESEARCH_MODEL_REASONING_EFFORT"),
 	}
 	var model *inference.Client
 	if config.BaseURL != "" || config.Model != "" {
