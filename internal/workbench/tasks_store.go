@@ -9,7 +9,7 @@ import (
 )
 
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
-	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0)`
+	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, '')`
 
 const nextTaskQueuePosition = `(SELECT COALESCE(MAX(queued_seq), 0) + 1 FROM tasks
 	WHERE project_id = ? AND status = 'QUEUED')`
@@ -38,15 +38,16 @@ var (
 
 // Task is the public record of a research plan proposal and its execution.
 type Task struct {
-	ordinal       int64
-	workflowRunID string
-	workflowStep  int
-	TaskID        string `json:"taskId"`
-	Instruction   string `json:"instruction"`
-	Revision      int    `json:"revision"`
-	Status        string `json:"status"`
-	CreatedAt     string `json:"createdAt"`
-	Message       string `json:"message,omitempty"`
+	ordinal         int64
+	workflowRunID   string
+	workflowStep    int
+	reviewVersionID string
+	TaskID          string `json:"taskId"`
+	Instruction     string `json:"instruction"`
+	Revision        int    `json:"revision"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"createdAt"`
+	Message         string `json:"message,omitempty"`
 }
 
 type taskRequest struct {
@@ -89,23 +90,24 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,
 		message = CASE
 			WHEN status = 'CANCELLING' THEN ''
+			WHEN review_version_id IS NOT NULL THEN '服务重启中断了评审，可以按原稿版本重试。'
 			WHEN workflow_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
 			ELSE '服务重启中断了已确认的任务，可以提议一项新任务。'
 		END
-		WHERE status IN ('RUNNING', 'CANCELLING') OR (status = 'QUEUED' AND workflow_run_id IS NULL)`)
+		WHERE status IN ('RUNNING', 'CANCELLING') OR (status = 'QUEUED' AND workflow_run_id IS NULL AND review_version_id IS NULL)`)
 	return err
 }
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
-		&t.workflowRunID, &t.workflowStep)
+		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID)
 	return t, err
 }
 
 func (s *Store) listTasks(ctx context.Context, projectID string, before int64, limit int) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM tasks
-		WHERE project_id = ? AND workflow_run_id IS NULL AND (? = 0 OR ordinal < ?)
+		WHERE project_id = ? AND workflow_run_id IS NULL AND review_version_id IS NULL AND (? = 0 OR ordinal < ?)
 		ORDER BY ordinal DESC LIMIT ?`, projectID, before, before, limit)
 	if err != nil {
 		return nil, err
@@ -184,7 +186,7 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 
 func lookupTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (Task, error) {
 	return scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks
-		WHERE project_id = ? AND task_id = ? AND workflow_run_id IS NULL`, projectID, taskID))
+		WHERE project_id = ? AND task_id = ? AND workflow_run_id IS NULL AND review_version_id IS NULL`, projectID, taskID))
 }
 
 func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, error) {
@@ -261,7 +263,7 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 func (s *Store) taskMarkdown(ctx context.Context, projectID, taskID string) (string, error) {
 	var markdown string
 	err := s.db.QueryRowContext(ctx, `SELECT markdown FROM tasks WHERE project_id = ? AND task_id = ?
-		AND workflow_run_id IS NULL AND status = 'SUCCEEDED'`,
+		AND workflow_run_id IS NULL AND review_version_id IS NULL AND status = 'SUCCEEDED'`,
 		projectID, taskID).Scan(&markdown)
 	return markdown, err
 }

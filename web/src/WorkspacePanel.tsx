@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { ManuscriptReview } from './ManuscriptReview'
 import { WordExport } from './WordExport'
 import { errorMessage, ProjectApiError } from './projects'
 import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText } from './workspace'
@@ -93,8 +94,10 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
     {document.content
       ? <pre className="workspace-text" tabIndex={0} aria-label="版本内容" dir="auto">{document.content}</pre>
       : <p className="workspace-note">此版本为空文件。</p>}
-    {!isCurrent && document.content.trim() && /\.(md|markdown)$/i.test(document.path) &&
-      <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />}
+    {!isCurrent && document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
+      <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
+      <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
+    </>}
     {!isCurrent && <>
       {restoreBlocked && <p className="workspace-note">{restoreBlocked}</p>}
       <button className="button outline" type="button" disabled={!!restoreBlocked}
@@ -301,8 +304,10 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
         <button className="button outline" type="button" aria-expanded={history} aria-controls={`${id}-history`}
           onClick={() => setHistory((value) => !value)}>版本历史</button>
       </div>
-      {document.content.trim() && /\.(md|markdown)$/i.test(document.path) &&
-        <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />}
+      {document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
+        <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
+        <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
+      </>}
       <div id={`${id}-history`} hidden={!history}>
         {history && <VersionHistory key={document.versionId} projectId={projectId} document={document}
           restoreBlocked={restoreBlocked} onRestore={restore} />}

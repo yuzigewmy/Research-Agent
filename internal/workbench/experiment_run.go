@@ -78,12 +78,12 @@ func (s *Store) generateWorkflowMarkdown(ctx context.Context, model *inference.C
 	return markdown, err
 }
 
-// ResumeQueuedWorkflows submits persisted stages that had not begun at shutdown.
-func (s *Store) ResumeQueuedWorkflows(ctx context.Context, model *inference.Client) error {
+// ResumeQueuedTasks starts the persisted work that had not begun at shutdown.
+func (s *Store) ResumeQueuedTasks(ctx context.Context, model *inference.Client) error {
 	if model == nil {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT project_id FROM workflow_runs WHERE status = 'QUEUED'`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT project_id FROM tasks WHERE status = 'QUEUED'`)
 	if err != nil {
 		return err
 	}
