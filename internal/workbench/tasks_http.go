@@ -30,6 +30,8 @@ func (api researchTasks) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path, api.list)
 	mux.HandleFunc("POST "+path, api.propose)
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
+	mux.HandleFunc("PATCH "+path+"/{taskId}", api.edit)
+	mux.HandleFunc(path+"/{taskId}", methodNotAllowed("PATCH"))
 	for _, action := range []string{confirmTask, cancelTask} {
 		mutation := path + "/{taskId}/" + action
 		mux.HandleFunc("POST "+mutation, api.change(action))
@@ -85,11 +87,33 @@ func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Instruction = strings.TrimSpace(input.Instruction)
-	if !validRequestID(input.RequestID) || input.Instruction == "" || len(input.Instruction) > taskInstructionLimit || strings.ContainsRune(input.Instruction, 0) {
+	if !validRequestID(input.RequestID) || !validTaskInstruction(input.Instruction) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号和 8 KiB 以内的非空任务说明。")
 		return
 	}
 	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), Action: proposeTask, RequestID: input.RequestID, Instruction: input.Instruction})
+}
+
+func validTaskInstruction(instruction string) bool {
+	return instruction != "" && len(instruction) <= taskInstructionLimit && !strings.ContainsRune(instruction, 0)
+}
+
+func (api researchTasks) edit(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		RequestID        string `json:"requestId"`
+		ExpectedRevision int    `json:"expectedRevision"`
+		Instruction      string `json:"instruction"`
+	}
+	if !readJSON(w, r, &input, 64<<10) {
+		return
+	}
+	instruction := strings.TrimSpace(input.Instruction)
+	if !validRequestID(input.RequestID) || input.ExpectedRevision < 1 || !validTaskInstruction(instruction) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供请求编号、当前修订和 8 KiB 以内的非空任务说明。")
+		return
+	}
+	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), TaskID: r.PathValue("taskId"), Action: editTask,
+		RequestID: input.RequestID, ExpectedRevision: input.ExpectedRevision, Instruction: instruction})
 }
 
 func (api researchTasks) change(action string) http.HandlerFunc {
@@ -112,6 +136,10 @@ func (api researchTasks) change(action string) http.HandlerFunc {
 
 func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskRequest) {
 	task, applied, err := api.store.applyTaskRequest(r.Context(), req, api.model != nil)
+	if req.Action == editTask && errors.Is(err, errTaskState) {
+		writeError(w, http.StatusConflict, "TASK_STATE_CONFLICT", "只有待确认的任务可以修改说明。")
+		return
+	}
 	if err != nil {
 		writeTaskError(w, "apply task request", err)
 		return

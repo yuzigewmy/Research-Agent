@@ -30,6 +30,7 @@ const (
 
 const (
 	proposeTask = "propose"
+	editTask    = "edit"
 	confirmTask = "confirm"
 	cancelTask  = "cancel"
 )
@@ -90,6 +91,14 @@ const tasksSchema = `
 	PRAGMA user_version = 3;
 `
 
+const taskEditSchema = `
+	ALTER TABLE task_requests ADD COLUMN instruction TEXT NOT NULL DEFAULT '';
+	UPDATE task_requests SET instruction = (
+		SELECT instruction FROM tasks WHERE tasks.project_id = task_requests.project_id AND tasks.task_id = task_requests.task_id
+	) WHERE action = 'propose';
+	PRAGMA user_version = 18;
+`
+
 func recoverInterruptedTasks(tx *sql.Tx) error {
 	_, err := tx.Exec(`UPDATE tasks SET revision = revision + 1,
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,
@@ -140,18 +149,15 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 	}
 	defer tx.Rollback()
 
-	var taskID, action string
+	var taskID, action, instruction string
 	var revision int
-	err = tx.QueryRowContext(ctx, `SELECT task_id, action, expected_revision FROM task_requests
-		WHERE project_id = ? AND request_id = ?`, req.ProjectID, req.RequestID).Scan(&taskID, &action, &revision)
+	err = tx.QueryRowContext(ctx, `SELECT task_id, action, expected_revision, instruction FROM task_requests
+		WHERE project_id = ? AND request_id = ?`, req.ProjectID, req.RequestID).Scan(&taskID, &action, &revision, &instruction)
 	if err == nil {
-		if action != req.Action || revision != req.ExpectedRevision || (action != proposeTask && taskID != req.TaskID) {
+		if action != req.Action || revision != req.ExpectedRevision || instruction != req.Instruction || (action != proposeTask && taskID != req.TaskID) {
 			return Task{}, false, errRequestConflict
 		}
 		task, err := lookupTask(ctx, tx, req.ProjectID, taskID)
-		if err == nil && action == proposeTask && task.Instruction != req.Instruction {
-			return Task{}, false, errRequestConflict
-		}
 		return task, false, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -174,16 +180,20 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 		return Task{}, false, err
 	}
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision)
-		VALUES (?, ?, ?, ?, ?)`, req.ProjectID, task.TaskID, req.RequestID, req.Action, req.ExpectedRevision)
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision, instruction)
+		VALUES (?, ?, ?, ?, ?, ?)`, req.ProjectID, task.TaskID, req.RequestID, req.Action, req.ExpectedRevision, req.Instruction)
 	if err != nil {
 		return Task{}, false, err
 	}
 	if nextStatus != "" {
-		task, err = scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = ?, revision = revision + 1,
+		instruction := task.Instruction
+		if req.Action == editTask {
+			instruction = req.Instruction
+		}
+		task, err = scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = ?, instruction = ?, revision = revision + 1,
 			queued_seq = CASE WHEN ? = 'QUEUED' THEN `+nextTaskQueuePosition+` ELSE queued_seq END
 			WHERE project_id = ? AND task_id = ? AND revision = ? RETURNING `+taskColumns,
-			nextStatus, nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
+			nextStatus, instruction, nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
 		if err != nil {
 			return Task{}, false, err
 		}
@@ -199,6 +209,12 @@ func lookupTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (Task
 func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, error) {
 	if task.Revision != req.ExpectedRevision {
 		return "", errTaskRevision
+	}
+	if req.Action == editTask {
+		if task.Status != taskProposed {
+			return "", errTaskState
+		}
+		return taskProposed, nil
 	}
 	if req.Action == confirmTask {
 		if task.Status != taskProposed {

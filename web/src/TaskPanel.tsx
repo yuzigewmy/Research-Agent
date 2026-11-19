@@ -2,7 +2,7 @@ import { useCallback, useEffect, useEffectEvent, useId, useRef, useState } from 
 import type { FormEvent } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import {
-  changeTask, isTaskActive, listTasks, proposeTask, refreshTasks,
+  changeTask, editTask, isTaskActive, listTasks, proposeTask, refreshTasks,
   taskArtifactPath, taskInstructionLimit, taskStatusLabels,
 } from './tasks'
 import type { Task, TaskAction, TaskPage } from './tasks'
@@ -12,8 +12,20 @@ const refreshInterval = 2_000
 const requestTimeout = 10_000
 const taskDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 
-type Mutation = { kind: 'propose'; instruction: string } | { kind: TaskAction; task: Task }
-type ChangeAttempt = { requestId: string; expectedRevision: number }
+type CardMutation = { kind: TaskAction; task: Task }
+  | { kind: 'edit'; task: Task; instruction: string; expectedRevision: number }
+type Mutation = { kind: 'propose'; instruction: string } | CardMutation
+type ChangeAttempt = { requestId: string; expectedRevision: number; instruction?: string }
+type MutationResult = { ok: true } | { ok: false; message: string }
+type InstructionDraft = { text: string; revision: number }
+const instructionEncoder = new TextEncoder()
+
+function instructionError(instruction: string) {
+  if (!instruction) return '请输入任务说明。'
+  if (instruction.includes('\0')) return '说明中不能包含空字符。'
+  if (instructionEncoder.encode(instruction).length > taskInstructionLimit) return '任务说明不能超过 8 KiB。'
+  return ''
+}
 
 function mergeTasks(current: Task[], incoming: Task[]) {
   const byId = new Map(current.map((task) => [task.taskId, task]))
@@ -32,28 +44,100 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   statusId: string
   modelConfigured: boolean
   pending: string | null
-  onAction: (kind: TaskAction, task: Task) => void
+  onAction: (mutation: CardMutation) => Promise<MutationResult | undefined>
 }) {
+  const [edit, setEdit] = useState<InstructionDraft>()
+  const [editError, setEditError] = useState<{ message: string; invalid?: boolean }>()
+  const editField = useRef<HTMLTextAreaElement>(null)
   const proposed = task.status === 'PROPOSED'
   const canCancel = proposed || task.status === 'QUEUED' || task.status === 'RUNNING'
+  const editing = edit !== undefined
+  const saving = pending === `edit:${task.taskId}`
+  const outdated = editing && edit.revision !== task.revision
+  const changed = editing && edit.text.trim() !== task.instruction
+  const editProblem = proposed && outdated
+    ? '任务已有新修订。草稿已保留，请核对上方卡片再继续。'
+    : editError?.message
+
+  useEffect(() => {
+    if (editing) editField.current?.focus()
+  }, [editing])
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!edit || !changed || !proposed || outdated || pending !== null) return
+    const instruction = edit.text.trim()
+    const message = instructionError(instruction)
+    if (message) {
+      setEditError({ message, invalid: true })
+      editField.current?.focus()
+      return
+    }
+    setEditError(undefined)
+    const result = await onAction({ kind: 'edit', task, instruction, expectedRevision: edit.revision })
+    if (result?.ok) setEdit(undefined)
+    else if (result) setEditError({ message: result.message })
+  }
+
   return (
     <li className="task-card">
       <div className="task-card-header">
-        <div className="task-status" id={statusId} role="status" tabIndex={-1}>
+        <div className="task-status" id={statusId} role="status" tabIndex={-1} aria-describedby={`${statusId}-revision`}>
           <strong>{taskStatusLabels[task.status]}</strong>
           {task.message && <p className="task-note" dir="auto">{task.message}</p>}
         </div>
-        <time className="task-note" dateTime={task.createdAt}>{taskDate.format(new Date(task.createdAt))}</time>
+        <div className="task-card-meta task-note">
+          <time dateTime={task.createdAt}>{taskDate.format(new Date(task.createdAt))}</time>
+          <span id={`${statusId}-revision`}>修订 {task.revision}</span>
+        </div>
       </div>
+      {edit && <p className="task-note">当前任务说明</p>}
       <p className="task-instruction" dir="auto">{task.instruction}</p>
+      {edit && <form className="field" onSubmit={(event) => void save(event)} noValidate aria-busy={saving}>
+        <label htmlFor={`${statusId}-edit`}>修改任务说明</label>
+        <textarea id={`${statusId}-edit`} value={edit.text} rows={3} required ref={editField}
+          readOnly={saving || !proposed} aria-invalid={editError?.invalid || undefined}
+          aria-describedby={editProblem ? `${statusId}-edit-error` : undefined}
+          onChange={(event) => {
+            setEdit({ ...edit, text: event.currentTarget.value })
+            setEditError(undefined)
+          }} />
+        {!proposed && <p className="task-note" role="status">任务已离开待确认状态。草稿仍可复制。</p>}
+        {editProblem && <p className="form-error" role="alert" id={`${statusId}-edit-error`}>{editProblem}</p>}
+        <div className="task-actions">
+          {proposed && outdated && <button className="button outline" type="button"
+            disabled={pending !== null} onClick={() => {
+              setEdit({ ...edit, revision: task.revision })
+              setEditError(undefined)
+              editField.current?.focus()
+            }}>继续编辑最新修订</button>}
+          {proposed && !outdated && <button className="button primary" type="submit"
+            disabled={!changed} aria-disabled={pending !== null}>
+            {saving ? '正在保存…' : '保存说明'}
+          </button>}
+          <button className="button outline" type="button" disabled={saving} onClick={() => {
+            setEdit(undefined)
+            setEditError(undefined)
+            document.getElementById(statusId)?.focus()
+          }}>{changed ? '放弃修改' : '退出编辑'}</button>
+        </div>
+      </form>}
       {canCancel && <div className="task-actions">
-        {proposed && <button className="button primary" type="button"
-          disabled={!modelConfigured} aria-disabled={pending !== null}
-          onClick={() => onAction('confirm', task)}>
-          {pending === `confirm:${task.taskId}` ? '正在确认…' : '确认运行'}
-        </button>}
+        {proposed && <>
+          <button className="button primary" type="button" disabled={!modelConfigured || editing}
+            aria-disabled={pending !== null} onClick={() => {
+              if (!editing) void onAction({ kind: 'confirm', task })
+            }}>
+            {pending === `confirm:${task.taskId}` ? '正在确认…' : '确认运行'}
+          </button>
+          {!editing && <button className="button outline" type="button" aria-disabled={pending !== null}
+            onClick={() => {
+              if (pending !== null) return
+              setEdit({ text: task.instruction, revision: task.revision })
+            }}>编辑说明</button>}
+        </>}
         <button className="button outline" type="button" aria-disabled={pending !== null}
-          onClick={() => onAction('cancel', task)}>
+          onClick={() => void onAction({ kind: 'cancel', task })}>
           {pending === `cancel:${task.taskId}` ? '正在提交…' : '取消任务'}
         </button>
       </div>}
@@ -166,7 +250,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
     }
   }
 
-  async function mutate(mutation: Mutation) {
+  async function mutate(mutation: Mutation): Promise<MutationResult | undefined> {
     if (submission.current || configured === undefined || (mutation.kind === 'confirm' && !configured)) return
     const key = mutation.kind === 'propose' ? 'propose' : `${mutation.kind}:${mutation.task.taskId}`
     const controller = new AbortController()
@@ -187,30 +271,47 @@ export function TaskPanel({ projectId }: { projectId: string }) {
         proposalAttempt.current = null
         setDraft('')
       } else {
-        // Reuse the revision as well as the ID until this attempt gets a definitive response.
-        const attempt = changeAttempts.current.get(key)
-          ?? { requestId: crypto.randomUUID(), expectedRevision: mutation.task.revision }
+        const previous = changeAttempts.current.get(key)
+        const instruction = mutation.kind === 'edit' ? mutation.instruction : undefined
+        const expectedRevision = mutation.kind === 'edit' ? mutation.expectedRevision : mutation.task.revision
+        // An attempt can reuse its receipt only when the input matches the original request.
+        const attempt = previous?.expectedRevision === expectedRevision && previous.instruction === instruction
+          ? previous
+          : { requestId: crypto.randomUUID(), expectedRevision, instruction }
         changeAttempts.current.set(key, attempt)
-        task = await changeTask(projectId, mutation.task.taskId, mutation.kind, attempt, signal)
+        task = mutation.kind === 'edit'
+          ? await editTask(projectId, mutation.task.taskId, { ...attempt, instruction: mutation.instruction }, signal)
+          : await changeTask(projectId, mutation.task.taskId, mutation.kind, attempt, signal)
         if (controller.signal.aborted) return
         changeAttempts.current.delete(key)
       }
       focusAfterAction.current = { taskId: task.taskId, control: focusControl }
       setTasks((current) => mergeTasks(current, [task]))
+      return { ok: true } as const
     } catch (error) {
       if (controller.signal.aborted) return
-      setActionError(errorMessage(error))
-      if (error instanceof ProjectApiError && error.code === 'MODEL_UNAVAILABLE') setConfigured(false)
-      if (mutation.kind !== 'propose' && error instanceof ProjectApiError && error.code === 'REVISION_CONFLICT') {
+      let message = errorMessage(error)
+      const code = error instanceof ProjectApiError ? error.code : undefined
+      const editing = mutation.kind === 'edit'
+      const refreshConflict = code === 'REVISION_CONFLICT'
+        || (editing && (code === 'TASK_STATE_CONFLICT' || code === 'REQUEST_ID_CONFLICT'))
+      if (code === 'MODEL_UNAVAILABLE') setConfigured(false)
+      if (!editing) setActionError(message)
+      if (mutation.kind !== 'propose' && refreshConflict) {
         changeAttempts.current.delete(key)
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
         try {
           const page = await refreshTasks(projectId, [mutation.task.taskId], signal)
-          if (!controller.signal.aborted) acceptPage(page)
+          if (controller.signal.aborted) return
+          acceptPage(page)
+          if (editing) message = `${message} 草稿已保留，请核对上方任务卡。`
         } catch (refreshError) {
-          if (!controller.signal.aborted) setQueueError(errorMessage(refreshError))
+          if (controller.signal.aborted) return
+          if (editing) message = `${message} 草稿已保留。暂时无法读取最新卡片，可再次保存以重试。`
+          setQueueError(errorMessage(refreshError))
         }
       }
+      return { ok: false, message } as const
     } finally {
       submission.current = null
       if (!controller.signal.aborted) setPending(null)
@@ -221,10 +322,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
     event.preventDefault()
     if (submission.current) return
     const instruction = draft.trim()
-    let problem = ''
-    if (!instruction) problem = '请输入任务说明。'
-    else if (instruction.includes('\0')) problem = '说明中不能包含空字符。'
-    else if (new TextEncoder().encode(instruction).length > taskInstructionLimit) problem = '任务说明不能超过 8 KiB。'
+    const problem = instructionError(instruction)
     setInputError(problem)
     if (problem) {
       instructionField.current?.focus()
@@ -269,7 +367,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
       {tasks.length > 0 && <ol className="task-list" aria-label="研究计划任务">
         {tasks.map((task) => <TaskCard key={task.taskId} task={task} projectId={projectId}
           statusId={`${panelId}-${task.taskId}`} modelConfigured={configured === true} pending={pending}
-          onAction={(kind, item) => void mutate({ kind, task: item })} />)}
+          onAction={mutate} />)}
       </ol>}
       {!loading && !queueError && tasks.length === 0 && <p className="task-note">提交提议后，可在此查看任务进度并下载计划。</p>}
       {cursor && <div className="task-actions">

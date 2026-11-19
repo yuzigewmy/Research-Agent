@@ -21,8 +21,9 @@ func TestResearchTaskQueueCancellationAndPublication(t *testing.T) {
 	started, stopped := make(chan struct{}), make(chan struct{})
 	releaseStub := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Consume the request body so net/http can detect the client's disconnect.
-		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+		// Consume the body so net/http detects the client's disconnect.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -37,6 +38,10 @@ func TestResearchTaskQueueCancellationAndPublication(t *testing.T) {
 			case <-releaseStub:
 			}
 		case 2:
+			if !strings.Contains(string(body), "Compare both sampling sites") {
+				http.Error(w, "expected revised task instruction", http.StatusBadRequest)
+				return
+			}
 			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", markdown)
 		default:
 			http.Error(w, "unexpected model request", http.StatusBadRequest)
@@ -74,9 +79,10 @@ func TestResearchTaskQueueCancellationAndPublication(t *testing.T) {
 		return res
 	}
 	type taskResponse struct {
-		TaskID   string
-		Status   string
-		Revision int
+		TaskID      string
+		Status      string
+		Revision    int
+		Instruction string
 	}
 	post := func(path, body string, want int) taskResponse {
 		t.Helper()
@@ -114,18 +120,35 @@ func TestResearchTaskQueueCancellationAndPublication(t *testing.T) {
 	if first.TaskID == "" || first.Status != "PROPOSED" || first.Revision != 1 || post(base, firstInput, http.StatusOK) != first {
 		t.Fatalf("incorrect proposal or replay: %+v", first)
 	}
-	second := post(base, `{"requestId":"p2","instruction":"Plan a field comparison"}`, http.StatusCreated)
+	const secondInput = `{"requestId":"p2","instruction":"Plan a field comparison"}`
+	second := post(base, secondInput, http.StatusCreated)
 	firstPath, secondPath := base+"/"+first.TaskID, base+"/"+second.TaskID
-	request("POST", firstPath+"/confirm", `{"requestId":"stale","expectedRevision":2}`, http.StatusConflict)
+	const edit = `{"requestId":"edit","expectedRevision":1,"instruction":"Compare both sampling sites"}`
+	patch := func() taskResponse {
+		t.Helper()
+		var got taskResponse
+		if err := json.Unmarshal(request("PATCH", secondPath, edit, http.StatusOK).Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	edited := patch()
+	if edited.TaskID != second.TaskID || edited.Revision != 2 || edited.Status != "PROPOSED" ||
+		edited.Instruction != "Compare both sampling sites" || patch() != edited || post(base, secondInput, http.StatusOK) != edited {
+		t.Fatalf("incorrect task edit or replay: %+v", edited)
+	}
+	request("PATCH", secondPath, strings.Replace(edit, "both", "three", 1), http.StatusConflict)
+	request("POST", secondPath+"/confirm", `{"requestId":"stale","expectedRevision":1}`, http.StatusConflict)
 	const confirmFirst = `{"requestId":"c1","expectedRevision":1}`
 	post(firstPath+"/confirm", confirmFirst, http.StatusAccepted)
 	awaitSignal(started, "the first model call")
-	const confirmSecond = `{"requestId":"c2","expectedRevision":1}`
+	const confirmSecond = `{"requestId":"c2","expectedRevision":2}`
 	post(secondPath+"/confirm", confirmSecond, http.StatusAccepted)
 	queued := list()
 	if queued[0].TaskID != second.TaskID || queued[0].Status != "QUEUED" || queued[1].TaskID != first.TaskID || queued[1].Status != "RUNNING" || calls.Load() != 1 {
 		t.Fatalf("expected one running task and one queued task: %+v, calls=%d", queued, calls.Load())
 	}
+	request("PATCH", secondPath, fmt.Sprintf(`{"requestId":"late-edit","expectedRevision":%d,"instruction":"Change the queued task"}`, queued[0].Revision), http.StatusConflict)
 	const cancelFirst = `{"requestId":"x1","expectedRevision":%d}`
 	cancelBody := fmt.Sprintf(cancelFirst, queued[1].Revision)
 	post(firstPath+"/cancel", cancelBody, http.StatusOK)

@@ -95,9 +95,9 @@ export async function refreshTasks(projectId: string, taskIds: string[], signal:
   return { ...first, items }
 }
 
-function postTask(path: string, input: ProposalInput | ActionInput, signal: AbortSignal) {
+function sendTask(path: string, input: ProposalInput | ActionInput, signal: AbortSignal, method = 'POST') {
   return request(path, isTask, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
     signal,
@@ -105,11 +105,15 @@ function postTask(path: string, input: ProposalInput | ActionInput, signal: Abor
 }
 
 export function proposeTask(projectId: string, input: ProposalInput, signal: AbortSignal) {
-  return postTask(tasksPath(projectId), input, signal)
+  return sendTask(tasksPath(projectId), input, signal)
 }
 
 export function changeTask(projectId: string, taskId: string, action: TaskAction, input: ActionInput, signal: AbortSignal) {
-  return postTask(`${taskPath(projectId, taskId)}/${action}`, input, signal)
+  return sendTask(`${taskPath(projectId, taskId)}/${action}`, input, signal)
+}
+
+export function editTask(projectId: string, taskId: string, input: ActionInput & { instruction: string }, signal: AbortSignal) {
+  return sendTask(taskPath(projectId, taskId), input, signal, 'PATCH')
 }
 
 export function taskArtifactPath(projectId: string, taskId: string) {
