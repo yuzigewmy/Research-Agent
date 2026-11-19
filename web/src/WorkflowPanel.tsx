@@ -1,10 +1,10 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import {
-  continueWorkflow, getWorkflow, isWorkflowActive, runStatusLabels, saveManuscript, startWorkflow, stepStatusLabels,
-  workflowArtifactPath,
+  continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, runStatusLabels, saveManuscript, startWorkflow,
+  stepStatusLabels, workflowArtifactPath,
 } from './workflow'
-import type { ContinueWorkflowInput, WorkflowRun, StartWorkflowInput, WorkflowSnapshot } from './workflow'
+import type { ContinueWorkflowInput, PauseWorkflowInput, WorkflowRun, StartWorkflowInput, WorkflowSnapshot } from './workflow'
 import './workflow.css'
 
 const pollInterval = 1_000
@@ -13,6 +13,11 @@ const requestTimeout = 10_000
 type Attempt =
   | { kind: 'start'; input: StartWorkflowInput }
   | { kind: 'continue'; input: ContinueWorkflowInput }
+  | { kind: 'pause'; input: PauseWorkflowInput }
+
+function hasNewerRevision(current: WorkflowRun | null | undefined, incoming: WorkflowRun | null) {
+  return !!current && !!incoming && current.runId === incoming.runId && current.revision > incoming.revision
+}
 
 function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
@@ -102,12 +107,15 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [actionError, setActionError] = useState('')
   const [feedback, setFeedback] = useState('')
   const [retry, setRetry] = useState<Attempt | null>(null)
-  const [pending, setPending] = useState(false)
+  const [pending, setPending] = useState<Attempt['kind'] | null>(null)
   const run = snapshot?.run ?? null
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED')
   const waiting = run?.status === 'WAITING_CHECKPOINT'
   const rangeCompleted = run?.status === 'RANGE_COMPLETED'
-  const canContinue = rangeCompleted || waiting || run?.status === 'FAILED' || run?.status === 'INTERRUPTED'
+  const pausing = run?.status === 'PAUSING'
+  const paused = run?.status === 'PAUSED'
+  const canContinue = rangeCompleted || waiting || paused || run?.status === 'FAILED' || run?.status === 'INTERRUPTED'
+  const canPause = run?.status === 'QUEUED' || run?.status === 'RUNNING'
   const steps = snapshot?.steps ?? []
   const nextStep = rangeCompleted ? run.steps.find((step) => step.status !== 'SUCCEEDED') : undefined
   const rangeStartIndex = canStart ? 0 : steps.findIndex((step) => step.key === nextStep?.key)
@@ -118,24 +126,29 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const retryStart = retry?.kind === 'start' && (retry.input.throughStep ?? '') === endStep ? retry : null
   const retryContinue = retry?.kind === 'continue' && retry.input.runId === run?.runId
     && retry.input.expectedRevision === run.revision && (retry.input.throughStep ?? '') === endStep ? retry : null
+  const retryPause = retry?.kind === 'pause' && retry.input.runId === run?.runId
+    && retry.input.expectedRevision === run.revision ? retry : null
   const scopeStart = run?.steps.find((step) => step.key === run.scope.startStep)
   const scopeEnd = run?.steps.find((step) => step.key === run.scope.endStep)
   const modelUnavailable = snapshot?.modelConfigured === false
-  const actionDisabled = refreshing || readError !== '' || modelUnavailable || pending || ((canStart || rangeCompleted) && !firstStep)
+  const requestBlocked = refreshing || readError !== '' || pending !== null
+  const actionDisabled = requestBlocked || modelUnavailable || ((canStart || rangeCompleted) && !firstStep)
   const target = Number(targetPaperCount)
   const validTarget = !isReview || (Number.isInteger(target) && target >= 10 && target <= 80)
+  const currentRun = useEffectEvent(() => run)
 
   useEffect(() => {
     const controller = new AbortController()
     let timer: number | undefined
-    let active = false
+    let active = isWorkflowActive(currentRun())
 
     async function read() {
       try {
         const next = await getWorkflow(projectId, requestSignal(controller))
         if (controller.signal.aborted) return
-        active = isWorkflowActive(next.run)
-        setSnapshot(next)
+        const latest = currentRun()
+        active = isWorkflowActive(hasNewerRevision(latest, next.run) ? latest : next.run)
+        setSnapshot((current) => current && hasNewerRevision(current.run, next.run) ? { ...next, run: current.run } : next)
         setReadError('')
       } catch (error) {
         if (controller.signal.aborted) return
@@ -164,7 +177,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   }
 
   async function submit(kind: Attempt['kind']) {
-    if (submission.current || actionDisabled || (kind === 'start' ? !canStart || !validTarget : !canContinue || !run)) return
+    if (submission.current || requestBlocked) return
+    if (kind === 'pause') {
+      if (!canPause) return
+    } else if (actionDisabled || (kind === 'start' ? !canStart || !validTarget : !canContinue)) return
     const outline = paperOutline
     if (kind === 'start' && isPaper && new TextEncoder().encode(outline).length > 16_384) {
       setActionError('大纲超过 16 KiB，请缩短后提交。')
@@ -173,32 +189,38 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     const controller = new AbortController()
     const control = document.activeElement
     submission.current = controller
-    setPending(true)
+    setPending(kind)
     setActionError('')
     setFeedback('')
-    let attempt: Attempt | null = kind === 'start' ? retryStart : retryContinue
+    let attempt: Attempt | null = kind === 'start' ? retryStart : kind === 'pause' ? retryPause : retryContinue
     try {
       if (!attempt) {
         const requestId = crypto.randomUUID()
-        if (kind === 'start') attempt = { kind, input: {
-          requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
-          paper: isPaper ? { language: paperLanguage, outline } : undefined,
-          throughStep: endStep || undefined,
-        } }
-        else if (run) attempt = { kind, input: {
-          requestId, runId: run.runId, expectedRevision: run.revision,
-          throughStep: rangeCompleted && endStep ? endStep : undefined,
-        } }
-        else return
+        if (kind === 'start') {
+          attempt = { kind, input: {
+            requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
+            paper: isPaper ? { language: paperLanguage, outline } : undefined,
+            throughStep: endStep || undefined,
+          } }
+        } else {
+          if (!run) return
+          const input = { requestId, runId: run.runId, expectedRevision: run.revision }
+          attempt = kind === 'pause' ? { kind, input }
+            : { kind, input: { ...input, throughStep: rangeCompleted && endStep ? endStep : undefined } }
+        }
       }
       const signal = requestSignal(controller)
-      const updated = attempt.kind === 'start' ? await startWorkflow(projectId, attempt.input, signal)
-        : await continueWorkflow(projectId, attempt.input, signal)
+      let updated: WorkflowRun
+      switch (attempt.kind) {
+        case 'start': updated = await startWorkflow(projectId, attempt.input, signal); break
+        case 'continue': updated = await continueWorkflow(projectId, attempt.input, signal); break
+        case 'pause': updated = await pauseWorkflow(projectId, attempt.input, signal); break
+      }
       if (controller.signal.aborted) return
       setRetry(null)
       setThroughStep('')
       if (attempt.kind === 'start') setCheckpoints(false)
-      setSnapshot((current) => current && { ...current, run: updated })
+      setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
       if (control instanceof HTMLButtonElement && document.activeElement === control) heading.current?.focus()
       // A replay may return an earlier revision. Read the latest state before accepting another action.
       refresh()
@@ -219,7 +241,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       }
     } finally {
       submission.current = null
-      if (!controller.signal.aborted) setPending(false)
+      if (!controller.signal.aborted) setPending(null)
     }
   }
 
@@ -248,11 +270,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         <ManuscriptHandoff key={run.runId} projectId={projectId} runId={run.runId} onSaved={onManuscriptSaved} />}
       {waiting && <p className="workflow-note">{isPaper ? '确认论文大纲后生成正文。'
         : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
+      {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}
+      {paused && <p className="workflow-note">继续时从第一个未完成的步骤开始。已完成的成果仍可下载。</p>}
       {readError && <p className="form-error" role="alert">{readError}</p>}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {feedback && <p className="workflow-note" role="status">{feedback}</p>}
       {modelUnavailable && <p className="workflow-note">请配置研究模型，然后刷新工作流状态。</p>}
-      {(canStart || canContinue || readError || modelUnavailable) && (
+      {(canStart || canContinue || canPause || readError || modelUnavailable) && (
         <div className="workflow-controls">
           {canStart && isReview && <div className="field">
             <label htmlFor={`${headingId}-papers`}>纳入文献数量上限</label>
@@ -306,21 +330,30 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
               <span>{checkpointLabel}</span>
             </label>
           )}
+          {canPause && <p className="workflow-note" id={`${headingId}-pause-help`}>
+            暂停会停止当前步骤，继续时将重新执行该步骤。
+          </p>}
           <div className="workflow-actions">
             {canStart && (
-              <button className="button primary" type="button" disabled={!validTarget || (actionDisabled && !pending)}
-                aria-disabled={pending} onClick={() => void submit('start')}>
-                {pending ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
+              <button className="button primary" type="button" disabled={!validTarget || (actionDisabled && pending !== 'start')}
+                aria-disabled={pending === 'start'} onClick={() => void submit('start')}>
+                {pending === 'start' ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>
             )}
             {canContinue && (
-              <button className="button primary" type="button" disabled={actionDisabled && !pending}
-                aria-disabled={pending} onClick={() => void submit('continue')}>
-                {pending ? '正在提交…' : retryContinue ? '重试继续' : waiting ? '确认并继续' : '继续未完成的步骤'}
+              <button className="button primary" type="button" disabled={actionDisabled && pending !== 'continue'}
+                aria-disabled={pending === 'continue'} onClick={() => void submit('continue')}>
+                {pending === 'continue' ? '正在提交…' : retryContinue ? '重试继续' : waiting ? '确认并继续' : '继续未完成的步骤'}
+              </button>
+            )}
+            {canPause && (
+              <button className="button outline" type="button" disabled={requestBlocked && pending !== 'pause'}
+                aria-disabled={pending === 'pause'} aria-describedby={`${headingId}-pause-help`} onClick={() => void submit('pause')}>
+                {pending === 'pause' ? '正在提交暂停…' : retryPause ? '重试暂停' : '暂停工作流'}
               </button>
             )}
             {(readError || modelUnavailable) && (
-              <button className="button outline" type="button" disabled={refreshing || pending} onClick={refresh}>
+              <button className="button outline" type="button" disabled={refreshing || pending !== null} onClick={refresh}>
                 {refreshing ? '正在刷新…' : '刷新工作流状态'}
               </button>
             )}

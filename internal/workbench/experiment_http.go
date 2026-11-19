@@ -18,6 +18,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path, api.latest)
 	mux.HandleFunc("POST "+path, api.change(workflowStart))
 	mux.HandleFunc("POST "+path+"/continue", api.change(workflowContinue))
+	mux.HandleFunc("POST "+path+"/pause", api.change(workflowPause))
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
 	mux.HandleFunc("POST "+path+"/{runId}/manuscript", api.saveManuscript)
 }
@@ -59,8 +60,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 		if !readJSON(w, r, &input, 6*maxPaperOutlineBytes+(4<<10)) {
 			return
 		}
-		if !validRequestID(input.RequestID) || (action == workflowContinue && (input.RunID == "" || input.ExpectedRevision < 1)) {
-			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交请求编号。继续时还需提供运行编号和当前修订。")
+		if !validRequestID(input.RequestID) || (action != workflowStart && (!validRequestID(input.RunID) || input.ExpectedRevision < 1)) {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号。暂停或继续时还需提供运行编号和当前修订。")
 			return
 		}
 		projectID := r.PathValue("id")
@@ -79,14 +80,19 @@ func (api workflows) change(action string) http.HandlerFunc {
 		case err != nil:
 			writeTaskError(w, "change workflow run", err)
 		default:
-			if run.Status == taskQueued && api.model != nil {
+			if action == workflowPause && run.Status == workflowPausing {
+				api.store.stopTaskRun(projectID, run.stepTaskID)
+			}
+			if action != workflowPause && run.Status == taskQueued && api.model != nil {
 				api.store.kickTaskQueue(projectID, api.model)
 			}
 			status := http.StatusOK
 			if applied {
-				status = http.StatusAccepted
-				if action == workflowStart {
+				switch action {
+				case workflowStart:
 					status = http.StatusCreated
+				case workflowContinue:
+					status = http.StatusAccepted
 				}
 			}
 			writeJSON(w, status, run)

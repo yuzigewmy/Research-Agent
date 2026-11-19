@@ -4,6 +4,8 @@ import { isFileRecord } from './workspace'
 export const runStatusLabels = {
   QUEUED: '排队中',
   RUNNING: '运行中',
+  PAUSING: '正在暂停',
+  PAUSED: '已暂停',
   WAITING_CHECKPOINT: '等待确认',
   RANGE_COMPLETED: '本次范围已完成',
   COMPLETED: '全部步骤已完成',
@@ -15,6 +17,8 @@ export const stepStatusLabels = {
   PENDING: '未开始',
   QUEUED: '排队中',
   RUNNING: '运行中',
+  CANCELLING: '正在停止',
+  CANCELLED: '已停止',
   SUCCEEDED: '已完成',
   FAILED: '失败',
   INTERRUPTED: '已中断',
@@ -58,15 +62,18 @@ export interface StartWorkflowInput {
   throughStep?: string
 }
 
-export interface ContinueWorkflowInput {
+export interface PauseWorkflowInput {
   requestId: string
   runId: string
   expectedRevision: number
+}
+
+export interface ContinueWorkflowInput extends PauseWorkflowInput {
   throughStep?: string
 }
 
 export function isWorkflowActive(run: WorkflowRun | null) {
-  return run?.status === 'QUEUED' || run?.status === 'RUNNING'
+  return run?.status === 'QUEUED' || run?.status === 'RUNNING' || run?.status === 'PAUSING'
 }
 
 function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
@@ -115,7 +122,7 @@ export function getWorkflow(projectId: string, signal: AbortSignal) {
   return request(workflowPath(projectId), isSnapshot, { cache: 'no-store', signal })
 }
 
-function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput, signal: AbortSignal) {
+function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | PauseWorkflowInput, signal: AbortSignal) {
   return request(path, isRun, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -130,6 +137,10 @@ export function startWorkflow(projectId: string, input: StartWorkflowInput, sign
 
 export function continueWorkflow(projectId: string, input: ContinueWorkflowInput, signal: AbortSignal) {
   return postRun(`${workflowPath(projectId)}/continue`, input, signal)
+}
+
+export function pauseWorkflow(projectId: string, input: PauseWorkflowInput, signal: AbortSignal) {
+  return postRun(`${workflowPath(projectId)}/pause`, input, signal)
 }
 
 export function workflowArtifactPath(projectId: string, runId: string, key: string) {
