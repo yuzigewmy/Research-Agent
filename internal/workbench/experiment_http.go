@@ -24,14 +24,24 @@ func (api workflows) register(mux *http.ServeMux) {
 
 func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	if _, err := api.store.getProject(r.Context(), projectID); err != nil {
+	project, err := api.store.getProject(r.Context(), projectID)
+	if err != nil {
 		writeTaskError(w, "look up workflow project", err)
 		return
 	}
+	type stepInfo struct {
+		Key   string `json:"key"`
+		Title string `json:"title"`
+	}
+	stages := workflowStages[projectWorkflows[project.TemplateID]]
 	result := struct {
 		Run             *WorkflowRun `json:"run"`
+		Steps           []stepInfo   `json:"steps"`
 		ModelConfigured bool         `json:"modelConfigured"`
-	}{ModelConfigured: api.model != nil}
+	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil}
+	for index, stage := range stages {
+		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title}
+	}
 	run, err := api.store.latestWorkflow(r.Context(), projectID)
 	switch {
 	case err == nil:
@@ -58,6 +68,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 		switch {
 		case errors.Is(err, errWorkflowState):
 			writeError(w, http.StatusConflict, "WORKFLOW_STATE_CONFLICT", "当前工作流状态不支持此操作。")
+		case errors.Is(err, errWorkflowRange):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择从本次起点可达的结束步骤。检查点或重试请沿用原范围。")
 		case errors.Is(err, errReviewSources):
 			writeError(w, http.StatusUnprocessableEntity, "SOURCE_REQUIRED", "请先在项目文献库核验并保存文献。")
 		case errors.Is(err, errReviewTarget):

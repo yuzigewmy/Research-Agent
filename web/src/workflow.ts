@@ -5,7 +5,8 @@ export const runStatusLabels = {
   QUEUED: '排队中',
   RUNNING: '运行中',
   WAITING_CHECKPOINT: '等待确认',
-  COMPLETED: '已完成',
+  RANGE_COMPLETED: '本次范围已完成',
+  COMPLETED: '全部步骤已完成',
   FAILED: '失败',
   INTERRUPTED: '已中断',
 } as const
@@ -19,9 +20,12 @@ export const stepStatusLabels = {
   INTERRUPTED: '已中断',
 } as const
 
-interface WorkflowStep {
+interface WorkflowStepDefinition {
   key: string
   title: string
+}
+
+interface WorkflowStep extends WorkflowStepDefinition {
   status: keyof typeof stepStatusLabels
   message?: string
 }
@@ -36,12 +40,14 @@ export interface WorkflowRun {
   targetPaperCount?: number
   sourceCount?: number
   language?: 'zh' | 'en'
+  scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
 
 export interface WorkflowSnapshot {
   run: WorkflowRun | null
   modelConfigured: boolean
+  steps: WorkflowStepDefinition[]
 }
 
 export interface StartWorkflowInput {
@@ -49,23 +55,37 @@ export interface StartWorkflowInput {
   checkpoints: boolean
   targetPaperCount?: number
   paper?: { language: 'zh' | 'en'; outline?: string }
+  throughStep?: string
 }
 
 export interface ContinueWorkflowInput {
   requestId: string
   runId: string
   expectedRevision: number
+  throughStep?: string
 }
 
 export function isWorkflowActive(run: WorkflowRun | null) {
   return run?.status === 'QUEUED' || run?.status === 'RUNNING'
 }
 
+function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
+  const step = value as Partial<WorkflowStepDefinition> | null
+  return !!step && typeof step.key === 'string' && /^[a-z][a-z0-9-]*$/.test(step.key) && typeof step.title === 'string'
+}
+
 function isStep(value: unknown): value is WorkflowStep {
   const step = value as Partial<WorkflowStep> | null
-  return !!step && typeof step.key === 'string' && /^[a-z][a-z0-9-]*$/.test(step.key)
-    && typeof step.title === 'string' && typeof step.status === 'string' && Object.hasOwn(stepStatusLabels, step.status)
-    && (step.message === undefined || typeof step.message === 'string')
+  return !!step && typeof step.status === 'string' && Object.hasOwn(stepStatusLabels, step.status)
+    && (step.message === undefined || typeof step.message === 'string') && isStepDefinition(step)
+}
+
+function isScope(value: unknown, steps: WorkflowStep[]) {
+  const scope = value as Partial<WorkflowRun['scope']> | null
+  if (!scope) return false
+  const start = steps.findIndex(({ key }) => key === scope.startStep)
+  const end = steps.findIndex(({ key }) => key === scope.endStep)
+  return start >= 0 && end >= start
 }
 
 function isRun(value: unknown): value is WorkflowRun {
@@ -77,13 +97,14 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.sourceCount === undefined || Number.isSafeInteger(run.sourceCount))
     && (run.targetPaperCount === undefined || Number.isSafeInteger(run.targetPaperCount))
     && (run.language === undefined || run.language === 'zh' || run.language === 'en')
-    && Array.isArray(run.steps) && run.steps.every(isStep)
+    && Array.isArray(run.steps) && run.steps.every(isStep) && isScope(run.scope, run.steps)
 }
 
 function isSnapshot(value: unknown): value is WorkflowSnapshot {
   const snapshot = value as Partial<WorkflowSnapshot> | null
   return !!snapshot && typeof snapshot.modelConfigured === 'boolean'
     && (snapshot.run === null || isRun(snapshot.run))
+    && Array.isArray(snapshot.steps) && snapshot.steps.every(isStepDefinition)
 }
 
 function workflowPath(projectId: string) {

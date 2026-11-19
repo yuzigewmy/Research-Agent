@@ -11,14 +11,17 @@ import (
 )
 
 const (
-	workflowStart    = "start"
-	workflowContinue = "continue"
-	workflowDone     = "COMPLETED"
-	workflowWaiting  = "WAITING_CHECKPOINT"
+	workflowStart          = "start"
+	workflowContinue       = "continue"
+	workflowDone           = "COMPLETED"
+	workflowWaiting        = "WAITING_CHECKPOINT"
+	workflowRangeCompleted = "RANGE_COMPLETED"
+	workflowThroughLast    = -1
 )
 
 var (
 	errWorkflowState = errors.New("workflow action is invalid in the current state")
+	errWorkflowRange = errors.New("invalid workflow range")
 	errReviewSources = errors.New("literature review needs at least one verified work")
 	errReviewTarget  = errors.New("invalid literature source target")
 )
@@ -60,6 +63,18 @@ const workflowSchema = `
 	PRAGMA user_version = 11;
 `
 
+const workflowRangeSchema = `
+	ALTER TABLE workflow_runs ADD COLUMN range_start INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE workflow_runs ADD COLUMN range_end INTEGER NOT NULL DEFAULT -1;
+	ALTER TABLE workflow_requests ADD COLUMN through_step TEXT NOT NULL DEFAULT '';
+	PRAGMA user_version = 19;
+`
+
+type WorkflowScope struct {
+	StartStep string `json:"startStep"`
+	EndStep   string `json:"endStep"`
+}
+
 type WorkflowRun struct {
 	RunID            string         `json:"runId"`
 	WorkflowKey      string         `json:"workflowKey"`
@@ -70,8 +85,11 @@ type WorkflowRun struct {
 	TargetPaperCount int            `json:"targetPaperCount,omitempty"`
 	SourceCount      int            `json:"sourceCount,omitempty"`
 	Language         string         `json:"language,omitempty"`
+	Scope            WorkflowScope  `json:"scope"`
 	Steps            []WorkflowStep `json:"steps"`
 	step             int
+	rangeStart       int
+	rangeEnd         int
 }
 
 type WorkflowStep struct {
@@ -86,6 +104,7 @@ type workflowRequest struct {
 	RunID            string        `json:"runId"`
 	ExpectedRevision int           `json:"expectedRevision"`
 	Checkpoints      bool          `json:"checkpoints"`
+	ThroughStep      string        `json:"throughStep"`
 	TargetPaperCount int           `json:"targetPaperCount"`
 	Paper            *paperOptions `json:"paper"`
 }
@@ -102,13 +121,23 @@ func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowR
 func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
 	err := tx.QueryRowContext(ctx, `SELECT run_id, workflow_key, revision, status, checkpoints, created_at, step_no,
-		target_paper_count, json_array_length(evidence_json), COALESCE(json_extract(options_json, '$.language'), '') FROM workflow_runs
+		target_paper_count, json_array_length(evidence_json), COALESCE(json_extract(options_json, '$.language'), ''),
+		range_start, range_end FROM workflow_runs
 		WHERE project_id = ? AND (? = '' OR run_id = ?) ORDER BY ordinal DESC LIMIT 1`, projectID, runID, runID).
-		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step, &run.TargetPaperCount, &run.SourceCount, &run.Language)
+		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step,
+			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
 	stages := workflowStages[run.WorkflowKey]
+	last := run.rangeEnd
+	if last == workflowThroughLast {
+		last = len(stages) - 1
+	}
+	if run.rangeStart < 0 || last < run.rangeStart || last >= len(stages) {
+		return WorkflowRun{}, errors.New("stored workflow range is invalid")
+	}
+	run.Scope = WorkflowScope{StartStep: stages[run.rangeStart].key, EndStep: stages[last].key}
 	run.Steps = make([]WorkflowStep, len(stages))
 	for i, stage := range stages {
 		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING"}
@@ -154,12 +183,13 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		return WorkflowRun{}, false, err
 	}
 
-	var runID, recordedAction string
+	var runID, recordedAction, recordedEnd string
 	var revision int
-	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision FROM workflow_requests
-		WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).Scan(&runID, &recordedAction, &revision)
+	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step FROM workflow_requests
+		WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).Scan(&runID, &recordedAction, &revision, &recordedEnd)
 	if err == nil {
-		if recordedAction != action || revision != req.ExpectedRevision || (action == workflowContinue && runID != req.RunID) {
+		if recordedAction != action || revision != req.ExpectedRevision || recordedEnd != req.ThroughStep ||
+			(action == workflowContinue && runID != req.RunID) {
 			return WorkflowRun{}, false, errRequestConflict
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
@@ -182,10 +212,10 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if !errors.Is(err, sql.ErrNoRows) {
 		return WorkflowRun{}, false, err
 	}
-	if !modelReady {
-		return WorkflowRun{}, false, errModelUnavailable
+	end, err := workflowEndIndex(workflowStages[key], req.ThroughStep)
+	if err != nil {
+		return WorkflowRun{}, false, err
 	}
-
 	current, err := readWorkflow(ctx, tx, projectID, "")
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return WorkflowRun{}, false, err
@@ -194,6 +224,30 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		if current.RunID != "" && current.Status != workflowDone {
 			return WorkflowRun{}, false, errWorkflowState
 		}
+		current = WorkflowRun{RunID: rand.Text(), WorkflowKey: key, rangeEnd: end}
+	} else {
+		if current.RunID != req.RunID || current.Revision != req.ExpectedRevision {
+			return WorkflowRun{}, false, errTaskRevision
+		}
+		switch current.Status {
+		case workflowRangeCompleted:
+			if end != workflowThroughLast && end < current.step {
+				return WorkflowRun{}, false, errWorkflowRange
+			}
+			current.rangeStart, current.rangeEnd = current.step, end
+		case workflowWaiting, taskFailed, taskInterrupted:
+			if req.ThroughStep != "" {
+				return WorkflowRun{}, false, errWorkflowRange
+			}
+		default:
+			return WorkflowRun{}, false, errWorkflowState
+		}
+	}
+	if !modelReady {
+		return WorkflowRun{}, false, errModelUnavailable
+	}
+
+	if action == workflowStart {
 		evidence := "[]"
 		if key == reviewWorkflow || key == paperWorkflow {
 			limit := target
@@ -213,18 +267,13 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			}
 			evidence = string(snapshot)
 		}
-		current = WorkflowRun{RunID: rand.Text(), WorkflowKey: key}
 		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs
-			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?)`, current.RunID, projectID, req.Checkpoints, time.Now().UTC().Format(createdAtLayout), key, evidence, target, options)
+			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json, range_end)
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)`, current.RunID, projectID, req.Checkpoints,
+			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd)
 	} else {
-		if current.RunID != req.RunID || current.Revision != req.ExpectedRevision {
-			return WorkflowRun{}, false, errTaskRevision
-		}
-		if current.Status != workflowWaiting && current.Status != taskFailed && current.Status != taskInterrupted {
-			return WorkflowRun{}, false, errWorkflowState
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'QUEUED', revision = revision + 1 WHERE run_id = ?`, current.RunID)
+		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'QUEUED', revision = revision + 1,
+			range_start = ?, range_end = ? WHERE run_id = ?`, current.rangeStart, current.rangeEnd, current.RunID)
 	}
 	if err != nil {
 		return WorkflowRun{}, false, err
@@ -232,8 +281,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if err := enqueueWorkflowStep(ctx, tx, projectID, current.RunID, current.step, workflowStages[current.WorkflowKey][current.step]); err != nil {
 		return WorkflowRun{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_requests(project_id, request_id, run_id, action, expected_revision)
-		VALUES (?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_requests
+		(project_id, request_id, run_id, action, expected_revision, through_step)
+		VALUES (?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision, req.ThroughStep); err != nil {
 		return WorkflowRun{}, false, err
 	}
 	run, err := readWorkflow(ctx, tx, projectID, current.RunID)
@@ -241,6 +291,18 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		return WorkflowRun{}, false, err
 	}
 	return run, true, tx.Commit()
+}
+
+func workflowEndIndex(stages []workflowStage, throughStep string) (int, error) {
+	if throughStep == "" {
+		return workflowThroughLast, nil
+	}
+	for i, stage := range stages {
+		if stage.key == throughStep {
+			return i, nil
+		}
+	}
+	return 0, errWorkflowRange
 }
 
 func enqueueWorkflowStep(ctx context.Context, tx *sql.Tx, projectID, runID string, step int, stage workflowStage) error {
@@ -256,20 +318,24 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 	if status == taskSucceeded {
 		var key string
 		var checkpoints bool
-		if err := tx.QueryRowContext(ctx, `SELECT workflow_key, checkpoints FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
-			Scan(&key, &checkpoints); err != nil {
+		var end int
+		if err := tx.QueryRowContext(ctx, `SELECT workflow_key, checkpoints, range_end FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
+			Scan(&key, &checkpoints, &end); err != nil {
 			return err
 		}
 		stages = workflowStages[key]
-		switch {
-		case step+1 == len(stages):
+		if step+1 == len(stages) {
 			status = workflowDone
-		case checkpoints && stages[step].checkpoint:
+		} else {
+			switch {
+			case step == end:
+				status = workflowRangeCompleted
+			case checkpoints && stages[step].checkpoint:
+				status = workflowWaiting
+			default:
+				status = taskQueued
+			}
 			step++
-			status = workflowWaiting
-		default:
-			step++
-			status = taskQueued
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, step_no = ?, revision = revision + 1 WHERE run_id = ?`,

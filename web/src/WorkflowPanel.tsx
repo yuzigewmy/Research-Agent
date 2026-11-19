@@ -95,6 +95,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
   const [paperOutline, setPaperOutline] = useState('')
+  const [throughStep, setThroughStep] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
   const [readError, setReadError] = useState('')
@@ -105,11 +106,22 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const run = snapshot?.run ?? null
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED')
   const waiting = run?.status === 'WAITING_CHECKPOINT'
-  const canContinue = waiting || run?.status === 'FAILED' || run?.status === 'INTERRUPTED'
-  const retryStart = retry?.kind === 'start' ? retry : null
-  const retryContinue = retry?.kind === 'continue' && retry.input.runId === run?.runId ? retry : null
+  const rangeCompleted = run?.status === 'RANGE_COMPLETED'
+  const canContinue = rangeCompleted || waiting || run?.status === 'FAILED' || run?.status === 'INTERRUPTED'
+  const steps = snapshot?.steps ?? []
+  const nextStep = rangeCompleted ? run.steps.find((step) => step.status !== 'SUCCEEDED') : undefined
+  const rangeStartIndex = canStart ? 0 : steps.findIndex((step) => step.key === nextStep?.key)
+  const rangeSteps = rangeStartIndex >= 0 ? steps.slice(rangeStartIndex) : []
+  const firstStep = rangeSteps[0]
+  const lastStep = rangeSteps.at(-1)
+  const endStep = rangeSteps.some((step) => step.key === throughStep) ? throughStep : ''
+  const retryStart = retry?.kind === 'start' && (retry.input.throughStep ?? '') === endStep ? retry : null
+  const retryContinue = retry?.kind === 'continue' && retry.input.runId === run?.runId
+    && retry.input.expectedRevision === run.revision && (retry.input.throughStep ?? '') === endStep ? retry : null
+  const scopeStart = run?.steps.find((step) => step.key === run.scope.startStep)
+  const scopeEnd = run?.steps.find((step) => step.key === run.scope.endStep)
   const modelUnavailable = snapshot?.modelConfigured === false
-  const actionDisabled = refreshing || readError !== '' || modelUnavailable || pending
+  const actionDisabled = refreshing || readError !== '' || modelUnavailable || pending || ((canStart || rangeCompleted) && !firstStep)
   const target = Number(targetPaperCount)
   const validTarget = !isReview || (Number.isInteger(target) && target >= 10 && target <= 80)
 
@@ -171,8 +183,12 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         if (kind === 'start') attempt = { kind, input: {
           requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
           paper: isPaper ? { language: paperLanguage, outline } : undefined,
+          throughStep: endStep || undefined,
         } }
-        else if (run) attempt = { kind, input: { requestId, runId: run.runId, expectedRevision: run.revision } }
+        else if (run) attempt = { kind, input: {
+          requestId, runId: run.runId, expectedRevision: run.revision,
+          throughStep: rangeCompleted && endStep ? endStep : undefined,
+        } }
         else return
       }
       const signal = requestSignal(controller)
@@ -180,6 +196,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         : await continueWorkflow(projectId, attempt.input, signal)
       if (controller.signal.aborted) return
       setRetry(null)
+      setThroughStep('')
       if (attempt.kind === 'start') setCheckpoints(false)
       setSnapshot((current) => current && { ...current, run: updated })
       if (control instanceof HTMLButtonElement && document.activeElement === control) heading.current?.focus()
@@ -220,6 +237,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           <div className="loading-lines" aria-hidden="true"><span /><span /></div>
         </div>
       )}
+      {scopeStart && scopeEnd && <p className="workflow-note">
+        {scopeStart.key === scopeEnd.key ? `本次范围为「${scopeStart.title}」。` : `本次范围从「${scopeStart.title}」到「${scopeEnd.title}」。`}
+        {canContinue && !rangeCompleted && '继续时沿用此范围。'}
+      </p>}
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} />}
@@ -257,6 +278,27 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
               <p className="workflow-note" id={`${headingId}-paper-input`}>大纲与最近核验的最多 20 条文献将随本轮写作请求发给模型。</p>
             </div>
           </>}
+          {firstStep && lastStep && <div className="field">
+            <label htmlFor={`${headingId}-through-step`}>本次终点（可选）</label>
+            <select id={`${headingId}-through-step`} value={endStep} disabled={actionDisabled}
+              aria-describedby={`${headingId}-range-help`} onChange={(event) => {
+                setThroughStep(event.currentTarget.value)
+                setRetry(null)
+                setActionError('')
+              }}>
+              <option value="">
+                {firstStep.key === lastStep.key ? `仅运行「${lastStep.title}」` : `运行至最后一步「${lastStep.title}」`}
+              </option>
+              {rangeSteps.slice(0, -1).map((step) => (
+                <option key={step.key} value={step.key}>
+                  {step.key === firstStep.key ? `仅运行「${step.title}」` : `运行至「${step.title}」`}
+                </option>
+              ))}
+            </select>
+            <p className="workflow-note" id={`${headingId}-range-help`}>
+              从「{firstStep.title}」开始，按顺序运行。{rangeCompleted && '后续步骤沿用本轮前面已完成的成果。'}
+            </p>
+          </div>}
           {canStart && (
             <label className="workflow-checkpoint">
               <input type="checkbox" checked={checkpoints} disabled={actionDisabled || retryStart !== null}
