@@ -82,7 +82,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		worker.taskID, worker.stop = task.TaskID, stop
 		workers.mu.Unlock()
 
-		markdown, err := s.generateTaskMarkdown(ctx, model, projectID, task)
+		result, err := s.generateTaskResult(ctx, model, projectID, task)
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
 		if task.workflowRunID != "" && status == taskFailed {
 			message = "此步骤未生成成果。检查模型连接后，可从此步骤继续。"
@@ -105,7 +105,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		}
 		stop()
 		saveCtx, stopSave := context.WithTimeout(context.Background(), taskDBLimit)
-		err = s.finishTask(saveCtx, projectID, task, status, message, markdown)
+		err = s.finishTask(saveCtx, projectID, task, status, message, result)
 		stopSave()
 		if err != nil {
 			slog.Error("finish research task", "task_id", task.TaskID, "error", err)
@@ -133,12 +133,22 @@ func (workers *taskWorkers) close() {
 	workers.wg.Wait()
 }
 
+type taskResult struct {
+	markdown string
+	findings []reviewFinding
+}
+
+func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
+	if task.reviewVersionID != "" {
+		return s.generateManuscriptReview(ctx, model, projectID, task)
+	}
+	markdown, err := s.generateTaskMarkdown(ctx, model, projectID, task)
+	return taskResult{markdown: markdown}, err
+}
+
 func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Client, projectID string, task Task) (string, error) {
 	if task.selectionEdit {
 		return s.generateSelectionEdit(ctx, model, projectID, task)
-	}
-	if task.reviewVersionID != "" {
-		return s.generateManuscriptReview(ctx, model, projectID, task)
 	}
 	project, err := s.getProject(ctx, projectID)
 	if err != nil {

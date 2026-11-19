@@ -60,7 +60,7 @@ func TestSelectionEditAppliesOnceToItsSavedVersion(t *testing.T) {
 	if err != nil || !task.selectionEdit || task.TaskID != queued.EditID {
 		t.Fatalf("claim returned %+v, %v", task, err)
 	}
-	output, err := store.generateTaskMarkdown(ctx, model, project.ProjectID, task)
+	output, err := store.generateTaskResult(ctx, model, project.ProjectID, task)
 	if err != nil {
 		t.Fatal(err)
 	}

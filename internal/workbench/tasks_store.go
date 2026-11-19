@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -241,7 +242,15 @@ func (s *Store) claimQueuedTask(ctx context.Context, projectID string) (Task, er
 
 // The committed cancellation wins against success or failure. A completed
 // plan is visible in the same write that marks the task SUCCEEDED.
-func (s *Store) finishTask(ctx context.Context, projectID string, task Task, status, message, markdown string) error {
+func (s *Store) finishTask(ctx context.Context, projectID string, task Task, status, message string, result taskResult) error {
+	findings := "[]"
+	if len(result.findings) != 0 {
+		encoded, err := json.Marshal(result.findings)
+		if err != nil {
+			return err
+		}
+		findings = string(encoded)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -250,9 +259,10 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 	err = tx.QueryRowContext(ctx, `UPDATE tasks SET revision = revision + 1,
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
 		message = CASE WHEN status = 'RUNNING' THEN ? ELSE '' END,
-		markdown = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END
+		markdown = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END,
+		review_findings = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '[]' END
 		WHERE project_id = ? AND task_id = ? AND status IN ('RUNNING', 'CANCELLING')
-		RETURNING status`, status, message, status, markdown, projectID, task.TaskID).Scan(&status)
+		RETURNING status`, status, message, status, result.markdown, status, findings, projectID, task.TaskID).Scan(&status)
 	if err != nil {
 		return err
 	}

@@ -25,6 +25,7 @@ func (api manuscriptReviews) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+base+"/{reviewId}", api.read(false))
 	mux.HandleFunc("GET "+base+"/{reviewId}/download", api.read(true))
 	mux.HandleFunc("POST "+base+"/{reviewId}/retry", api.retry)
+	mux.HandleFunc("POST "+base+"/{reviewId}/findings/{number}/edits", api.createFindingEdit)
 }
 
 func (api manuscriptReviews) source(w http.ResponseWriter, r *http.Request) (WorkspaceFile, bool) {
@@ -122,6 +123,12 @@ func (api manuscriptReviews) read(download bool) http.HandlerFunc {
 			}
 			writeMarkdown(w, r, "manuscript-review.md", review.Report)
 			return
+		}
+		if len(review.Findings) > 0 {
+			if err := api.store.attachFindingEdits(r.Context(), r.PathValue("id"), &review); err != nil {
+				writeStoreError(w, "read finding edits", err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, review)
 	}

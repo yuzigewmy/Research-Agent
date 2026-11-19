@@ -43,39 +43,41 @@ type selectionEditInput struct {
 	Instruction string `json:"instruction"`
 }
 
-type editSuggestion struct {
+type EditSuggestion struct {
 	Replacement string `json:"replacement"`
 	Reason      string `json:"reason"`
 }
 
 type selectionEdit struct {
 	EditID           string `json:"editId"`
+	VersionID        string `json:"versionId"`
 	Status           string `json:"status"`
 	Original         string `json:"original"`
 	Message          string `json:"message,omitempty"`
 	AppliedVersionID string `json:"appliedVersionId,omitempty"`
-	*editSuggestion
-	versionID   string
+	*EditSuggestion
+	finding     reviewFindingRef
 	instruction string
 	startByte   int
 	endByte     int
 }
 
 const selectEdit = `SELECT t.task_id, t.status, e.original, t.message, COALESCE(e.applied_version_id, ''),
-	e.source_version_id, t.instruction, e.start_byte, e.end_byte, t.markdown
+	e.source_version_id, t.instruction, e.start_byte, e.end_byte, t.markdown,
+	COALESCE(e.review_id, ''), COALESCE(e.finding_number, 0)
 	FROM selection_edits e JOIN tasks t ON t.project_id = e.project_id AND t.task_id = e.task_id
 	WHERE e.project_id = ?`
 
-func scanSelectionEdit(row *sql.Row) (selectionEdit, error) {
+func scanSelectionEdit(row interface{ Scan(...any) error }) (selectionEdit, error) {
 	var edit selectionEdit
 	var output string
 	if err := row.Scan(&edit.EditID, &edit.Status, &edit.Original, &edit.Message, &edit.AppliedVersionID,
-		&edit.versionID, &edit.instruction, &edit.startByte, &edit.endByte, &output); err != nil {
+		&edit.VersionID, &edit.instruction, &edit.startByte, &edit.endByte, &output, &edit.finding.reviewID, &edit.finding.number); err != nil {
 		return selectionEdit{}, err
 	}
 	if edit.Status == taskSucceeded {
-		edit.editSuggestion = new(editSuggestion)
-		if err := json.Unmarshal([]byte(output), edit.editSuggestion); err != nil {
+		edit.EditSuggestion = new(EditSuggestion)
+		if err := json.Unmarshal([]byte(output), edit.EditSuggestion); err != nil {
 			return selectionEdit{}, err
 		}
 	}
@@ -87,6 +89,10 @@ func readSelectionEdit(ctx context.Context, db workspaceQuery, projectID, versio
 }
 
 func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, modelReady bool) (selectionEdit, bool, error) {
+	return s.queueSelectionEditWithFinding(ctx, projectID, doc, req, reviewFindingRef{}, modelReady)
+}
+
+func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, finding reviewFindingRef, modelReady bool) (selectionEdit, bool, error) {
 	start, end := req.StartByte, req.EndByte
 	if start < 0 || end <= start || end > len(doc.Content) || end-start > maxSelectionBytes ||
 		!utf8.RuneStart(doc.Content[start]) || (end < len(doc.Content) && !utf8.RuneStart(doc.Content[end])) {
@@ -100,7 +106,7 @@ func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc Wo
 
 	edit, err := scanSelectionEdit(tx.QueryRowContext(ctx, selectEdit+` AND e.request_id = ?`, projectID, req.RequestID))
 	if err == nil {
-		if edit.versionID != doc.VersionID || edit.startByte != start || edit.endByte != end || edit.instruction != req.Instruction {
+		if edit.VersionID != doc.VersionID || edit.startByte != start || edit.endByte != end || edit.instruction != req.Instruction || edit.finding != finding {
 			return selectionEdit{}, false, errRequestConflict
 		}
 		return edit, false, nil
@@ -111,6 +117,15 @@ func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc Wo
 	if !modelReady {
 		return selectionEdit{}, false, errModelUnavailable
 	}
+	if finding.reviewID != "" {
+		current, err := currentWorkspaceFile(ctx, tx, projectID, doc.Path)
+		if err != nil {
+			return selectionEdit{}, false, err
+		}
+		if current.VersionID != doc.VersionID {
+			return selectionEdit{}, false, errWorkspaceConflict
+		}
+	}
 	id := rand.Text()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, queued_seq, selection_edit)
 		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, 1)`, projectID, id, req.Instruction,
@@ -119,11 +134,12 @@ func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc Wo
 	}
 	original := doc.Content[start:end]
 	if _, err := tx.ExecContext(ctx, `INSERT INTO selection_edits
-		(project_id, task_id, request_id, source_version_id, start_byte, end_byte, original) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		projectID, id, req.RequestID, doc.VersionID, start, end, original); err != nil {
+		(project_id, task_id, request_id, source_version_id, start_byte, end_byte, original, review_id, finding_number)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0))`,
+		projectID, id, req.RequestID, doc.VersionID, start, end, original, finding.reviewID, finding.number); err != nil {
 		return selectionEdit{}, false, err
 	}
-	return selectionEdit{EditID: id, Status: taskQueued, Original: original}, true, tx.Commit()
+	return selectionEdit{EditID: id, VersionID: doc.VersionID, Status: taskQueued, Original: original}, true, tx.Commit()
 }
 
 func (s *Store) applySelectionEdit(ctx context.Context, projectID, versionID, editID string) (WorkspaceDocument, error) {

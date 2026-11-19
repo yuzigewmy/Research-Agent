@@ -1,6 +1,8 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { errorMessage, ProjectApiError, request } from './projects'
+import { isReviewFinding, ReviewFindings } from './ReviewFindingEdit'
+import type { RevisionActions, ReviewFinding } from './ReviewFindingEdit'
 
 const statusLabels = {
   QUEUED: '排队中', RUNNING: '评审中', SUCCEEDED: '已完成', FAILED: '评审失败', INTERRUPTED: '已中断',
@@ -18,6 +20,7 @@ type Review = {
   createdAt: string
   message?: string
   report?: string
+  findings?: ReviewFinding[]
 }
 
 type ReviewPage = { items: Review[]; nextCursor?: string; modelConfigured: boolean }
@@ -30,6 +33,8 @@ type Props = {
   versionId: string
   sourceSha256: string
   dirty?: boolean
+  revisionActions?: RevisionActions
+  initialFinding?: { reviewId: string; number: number }
 }
 
 function isPathId(value: unknown): value is string {
@@ -45,6 +50,7 @@ function isReview(value: unknown, sourceSha256: string, reviewId?: string): valu
     && typeof review.createdAt === 'string' && Number.isFinite(Date.parse(review.createdAt))
     && (review.message === undefined || typeof review.message === 'string')
     && (review.report === undefined || typeof review.report === 'string')
+    && (review.findings === undefined || (Array.isArray(review.findings) && review.findings.every(isReviewFinding)))
 }
 
 function isReviewPage(value: unknown, sourceSha256: string): value is ReviewPage {
@@ -78,20 +84,27 @@ function mergeReviews(current: Review[], incoming: Review[]) {
   for (const review of incoming) {
     const previous = byId.get(review.reviewId)
     // A list may be older than a mutation response or omit the report from a detail response.
-    if (!previous || review.revision > previous.revision || (review.revision === previous.revision && review.report !== undefined)) {
+    if (!previous || review.revision > previous.revision) {
       byId.set(review.reviewId, review)
+    } else if (review.revision === previous.revision) {
+      byId.set(review.reviewId, { ...previous, ...review })
     }
   }
   return [...byId.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 }
 
-export function ManuscriptReview({ projectId, versionId, sourceSha256, dirty = false }: Props) {
+export function ManuscriptReview({ projectId, versionId, sourceSha256, dirty = false, revisionActions, initialFinding }: Props) {
   if (!isPathId(projectId) || !isPathId(versionId)) return <p className="form-error" role="alert">稿件版本链接无效。</p>
   const route = `/api/v1/projects/${encodeURIComponent(projectId)}/files/versions/${encodeURIComponent(versionId)}/reviews`
-  return <VersionReviews key={JSON.stringify([route, sourceSha256])} route={route} sourceSha256={sourceSha256} dirty={dirty} />
+  const key = JSON.stringify([route, sourceSha256, initialFinding?.reviewId, initialFinding?.number])
+  return <VersionReviews key={key} route={route} projectId={projectId} sourceSha256={sourceSha256}
+    dirty={dirty} revisionActions={revisionActions} initialFinding={initialFinding} />
 }
 
-function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceSha256: string; dirty: boolean }) {
+function VersionReviews({ route, projectId, sourceSha256, dirty, revisionActions, initialFinding }: Omit<Props, 'versionId' | 'dirty'> & {
+  route: string
+  dirty: boolean
+}) {
   const id = useId()
   const [reviews, setReviews] = useState<Review[]>([])
   const [cursor, setCursor] = useState<string>()
@@ -99,14 +112,24 @@ function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceS
   const [pageQuery, setPageQuery] = useState<{ cursor?: string }>({})
   const [loadingPage, setLoadingPage] = useState(true)
   const [pageError, setPageError] = useState('')
-  const [selection, setSelection] = useState<Selection>()
-  const [loadingDetail, setLoadingDetail] = useState(false)
+  const initialReviewId = isPathId(initialFinding?.reviewId) ? initialFinding.reviewId : undefined
+  const [selection, setSelection] = useState<Selection | undefined>(() => initialReviewId ? { id: initialReviewId, active: false } : undefined)
+  const [loadingDetail, setLoadingDetail] = useState(!!initialReviewId)
   const [detailError, setDetailError] = useState('')
   const [pollError, setPollError] = useState('')
   const [target, setTarget] = useState('')
   const [pending, setPending] = useState<ReviewAction>()
   const [actionError, setActionError] = useState<{ action: ReviewAction; message: string }>()
   const [retryConflict, setRetryConflict] = useState<string>()
+  const [applyingFinding, setApplyingFinding] = useState(false)
+  const findingActions = revisionActions && {
+    ...revisionActions,
+    disabled: revisionActions.disabled || dirty || loadingDetail || !!pending || applyingFinding,
+    onApplying(applying: boolean) {
+      setApplyingFinding(applying)
+      revisionActions.onApplying(applying)
+    },
+  }
   const mutation = useRef<AbortController | null>(null)
   const retryAttempt = useRef<RetryAttempt | undefined>(undefined)
   const selected = reviews.find((review) => review.reviewId === selection?.id)
@@ -199,15 +222,16 @@ function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceS
     setPageQuery({ cursor: nextCursor })
   }
 
-  function showReview(review: Review) {
+  function showReview(reviewId: string, active = false) {
+    if (applyingFinding) return
     setActionError((current) => current?.action === 'retry' ? undefined : current)
     setDetailError('')
     setLoadingDetail(true)
-    setSelection({ id: review.reviewId, active: isActive(review) })
+    setSelection({ id: reviewId, active })
   }
 
   async function submitReview(input: { target: string } | { review: Review }) {
-    if (mutation.current || !configured || ('target' in input && dirty)) return
+    if (mutation.current || !configured || applyingFinding || ('target' in input && dirty)) return
     const retry = 'review' in input ? input.review : undefined
     if (retry && (!canRetry(retry) || loadingDetail || detailError || retryConflict === retry.reviewId)) return
     const action = retry ? 'retry' : 'create'
@@ -236,7 +260,7 @@ function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceS
       if (retry) retryAttempt.current = undefined
       else setTarget('')
       setReviews((current) => mergeReviews(current, [review]))
-      showReview(review)
+      showReview(review.reviewId, isActive(review))
     } catch (error) {
       if (controller.signal.aborted) return
       if (retry && error instanceof ProjectApiError && error.status === 409) {
@@ -273,7 +297,7 @@ function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceS
             setTarget(event.target.value)
             if (actionError?.action === 'create') setActionError(undefined)
           }} />
-        <button className="button outline" type="submit" disabled={dirty || !configured || !!pending || !target.trim()}>
+        <button className="button outline" type="submit" disabled={dirty || !configured || !!pending || applyingFinding || !target.trim()}>
           {pending === 'create' ? '正在提交…' : '提交模拟评审'}
         </button>
       </div>
@@ -284,8 +308,9 @@ function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceS
     </form>
     {reviews.length > 0 && <ul className="workspace-list" role="list" aria-label="此版本的评审记录">
       {reviews.map((review) => <li key={review.reviewId}>
-        <button className="workspace-row" type="button" aria-pressed={selected?.reviewId === review.reviewId}
-          aria-controls={`${id}-detail`} disabled={!!pending} onClick={() => showReview(review)}>
+        <button className="workspace-row" type="button" aria-pressed={selection?.id === review.reviewId}
+          aria-controls={`${id}-detail`} disabled={!!pending || applyingFinding}
+          onClick={() => showReview(review.reviewId, isActive(review))}>
           <bdi>{review.target}</bdi>
           <span className="workspace-note">{statusLabels[review.status]} · <time dateTime={review.createdAt}>{reviewDate.format(new Date(review.createdAt))}</time></span>
         </button>
@@ -300,26 +325,34 @@ function VersionReviews({ route, sourceSha256, dirty }: { route: string; sourceS
         {pageError ? '重新加载评审记录' : '加载更多评审'}
       </button>
     </div>}
-    <div id={`${id}-detail`} hidden={!selected}>
-      {selected && <div className="workspace-preview">
-        <p className="workspace-note" role="status"><bdi>{selected.target}</bdi> · {statusLabels[selected.status]}</p>
-        {selected.message && <p className="workspace-note" dir="auto">{selected.message}</p>}
+    <div id={`${id}-detail`} hidden={!selection}>
+      {selection && <div className="workspace-preview">
+        {selected && <p className="workspace-note" role="status"><bdi>{selected.target}</bdi> · {statusLabels[selected.status]}</p>}
+        {selected?.message && <p className="workspace-note" dir="auto">{selected.message}</p>}
         {loadingDetail && <p className="workspace-note" role="status">正在查询评审…</p>}
         {detailError && <p className="form-error" role="alert">{detailError}</p>}
         {actionError?.action === 'retry' && <p className="form-error" role="alert">{actionError.message}</p>}
-        {selected.report && <pre className="workspace-text" dir="auto" tabIndex={0} aria-label="评审报告 Markdown 原文">{selected.report}</pre>}
-        {(detailError || retryConflict === selected.reviewId || canRetry(selected) || selected.status === 'SUCCEEDED') && (
+        {selected?.report && <pre className="workspace-text" dir="auto" tabIndex={0} aria-label="评审报告 Markdown 原文">{selected.report}</pre>}
+        {(detailError || retryConflict === selection.id || (selected && (canRetry(selected) || selected.status === 'SUCCEEDED'))) && (
           <div className="workspace-actions">
-            {(detailError || retryConflict === selected.reviewId) && <button className="button outline" type="button"
-              disabled={!!pending || loadingDetail} onClick={() => showReview(selected)}>重新查询评审</button>}
-            {canRetry(selected) && <button className="button outline" type="button" onClick={() => void submitReview({ review: selected })}
-              disabled={!configured || !!pending || loadingDetail || !!detailError || retryConflict === selected.reviewId}>
+            {(detailError || retryConflict === selection.id) && <button className="button outline" type="button"
+              disabled={!!pending || applyingFinding || loadingDetail}
+              onClick={() => showReview(selection.id, selected ? isActive(selected) : false)}>重新查询评审</button>}
+            {selected && canRetry(selected) && <button className="button outline" type="button" onClick={() => void submitReview({ review: selected })}
+              disabled={!configured || !!pending || applyingFinding || loadingDetail || !!detailError || retryConflict === selected.reviewId}>
               {pending === 'retry' ? '正在重试…' : '重试评审'}
             </button>}
-            {selected.status === 'SUCCEEDED' && <a className="button outline" download
+            {selected?.status === 'SUCCEEDED' && <a className="button outline" download
               href={`${reviewPath(route, selected.reviewId)}/download`}>下载评审报告</a>}
           </div>
         )}
+        {selected && !!selected.findings?.length && <ReviewFindings key={selected.reviewId}
+          projectId={projectId} reviewId={selected.reviewId} route={reviewPath(route, selected.reviewId)}
+          findings={selected.findings} revisionActions={findingActions} applying={applyingFinding} modelConfigured={configured}
+          initialNumber={initialFinding?.reviewId === selected.reviewId ? initialFinding.number : undefined} />}
+        {selected?.report && selected.findings === undefined && <p className="workspace-note">
+          此报告未保存结构化意见。可在编辑器手工选中要修改的文字。
+        </p>}
       </div>}
     </div>
   </section>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { ComponentProps, FormEvent } from 'react'
 import { ManuscriptReview } from './ManuscriptReview'
 import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
@@ -69,15 +69,20 @@ function PageControls({ page, label }: { page: ReturnType<typeof useFilePage>; l
   return null
 }
 
+type RevisionActions = NonNullable<ComponentProps<typeof ManuscriptReview>['revisionActions']>
+type InitialFinding = ComponentProps<typeof ManuscriptReview>['initialFinding']
+
 type VersionPreviewProps = {
   projectId: string
   versionId: string
   restoreBlocked: string | undefined
   isCurrent: boolean
   onRestore: (versionId: string) => void
+  revisionActions: RevisionActions
+  initialFinding: InitialFinding
 }
 
-function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRestore }: VersionPreviewProps) {
+function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRestore, revisionActions, initialFinding }: VersionPreviewProps) {
   const [document, setDocument] = useState<Document>()
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -108,7 +113,8 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
       : <p className="workspace-note">此版本为空文件。</p>}
     {!isCurrent && document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
       <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
-      <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
+      <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256}
+        revisionActions={revisionActions} initialFinding={initialFinding} />
     </>}
     {!isCurrent && <>
       {restoreBlocked && <p className="workspace-note">{restoreBlocked}</p>}
@@ -118,23 +124,27 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
   </div>
 }
 
-function VersionHistory({ projectId, document, restoreBlocked, onRestore }: {
+function VersionHistory({ projectId, document, restoreBlocked, onRestore, selected, onSelect, applying, revisionActions, initialFinding }: {
   projectId: string
   document: Document
   restoreBlocked: string | undefined
   onRestore: (versionId: string) => void
+  selected?: string
+  onSelect: (versionId: string) => void
+  applying: boolean
+  revisionActions: RevisionActions
+  initialFinding: InitialFinding
 }) {
   const { path, versionId: currentId } = document
   const load = useCallback((signal: AbortSignal, cursor?: string) => listVersions(projectId, path, signal, cursor), [projectId, path])
   const page = useFilePage(load, 'versionId')
-  const [selected, setSelected] = useState<string>()
 
   return <div className="workspace-history">
     {page.items.length > 0 && <ul className="workspace-list" role="list" aria-label="版本历史">
       {page.items.map(({ versionId, createdAt }) => (
         <li key={versionId}>
           <button className="workspace-row" type="button" aria-pressed={selected === versionId}
-            onClick={() => setSelected(versionId)}>
+            disabled={applying} onClick={() => onSelect(versionId)}>
             <time dateTime={createdAt}>{versionDate.format(new Date(createdAt))}</time>
             <span className="workspace-note">{versionId === currentId ? '当前版本' : versionId.slice(-8)}</span>
           </button>
@@ -144,7 +154,8 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore }: {
     <PageControls page={page} label="版本" />
     {!page.loading && !page.error && !page.items.length && <p className="workspace-note">暂无版本。</p>}
     {selected && <VersionPreview key={selected} projectId={projectId} versionId={selected}
-      restoreBlocked={restoreBlocked} isCurrent={selected === currentId} onRestore={onRestore} />}
+      restoreBlocked={restoreBlocked} isCurrent={selected === currentId} onRestore={onRestore}
+      revisionActions={revisionActions} initialFinding={initialFinding} />}
   </div>
 }
 
@@ -174,6 +185,8 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   const [selection, setSelection] = useState<SelectionEditRange>()
   const [applying, setApplying] = useState(false)
   const [history, setHistory] = useState(false)
+  const [historyVersion, setHistoryVersion] = useState<string>()
+  const [historyFinding, setHistoryFinding] = useState<InitialFinding>()
   const [destination, setDestination] = useState<Destination>()
   const [busy, setBusy] = useState<Operation>()
   const [error, setError] = useState('')
@@ -198,6 +211,20 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
     setDraft(next.content)
     setSelection(undefined)
     setConflict(false)
+  }
+
+  function reviewActionsFor(reviewVersionId: string, baseVersionId: string): RevisionActions {
+    return {
+      versionId: baseVersionId,
+      disabled: locked || dirty || conflict,
+      onApplying: setApplying,
+      onApplied: (next, reviewId, number) => {
+        loadDocument(next)
+        setHistoryVersion(reviewVersionId)
+        setHistoryFinding({ reviewId, number })
+        setHistory(true)
+      },
+    }
   }
 
   function selectText(control: HTMLTextAreaElement) {
@@ -232,7 +259,11 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
       const next = await send(requestSignal(controller))
       if (controller.signal.aborted) return
       loadDocument(next)
-      if (kind === 'open' || kind === 'create') setHistory(false)
+      if (kind === 'open' || kind === 'create') {
+        setHistory(false)
+        setHistoryVersion(undefined)
+        setHistoryFinding(undefined)
+      }
       if (kind === 'create') {
         setCreatedPaths((paths) => [next.path, ...paths])
         setCreating(false)
@@ -346,17 +377,23 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
           {dirty ? '放弃草稿并重新加载' : '重新加载'}
         </button>
         <button className="button outline" type="button" aria-expanded={history} aria-controls={`${id}-history`}
-          onClick={() => setHistory((value) => !value)}>版本历史</button>
+          disabled={applying} onClick={() => setHistory((value) => !value)}>版本历史</button>
       </div>
       {document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
         <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
           disabled={locked || dirty || conflict} onApplying={setApplying} onApplied={loadDocument} />
         <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
-        <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
+        <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty}
+          revisionActions={reviewActionsFor(document.versionId, document.versionId)} />
       </>}
       <div id={`${id}-history`} hidden={!history}>
         {history && <VersionHistory key={document.versionId} projectId={projectId} document={document}
-          restoreBlocked={restoreBlocked} onRestore={restore} />}
+          restoreBlocked={restoreBlocked} onRestore={restore} selected={historyVersion} applying={applying}
+          initialFinding={historyFinding} onSelect={(versionId) => {
+            setHistoryVersion(versionId)
+            setHistoryFinding(undefined)
+          }}
+          revisionActions={reviewActionsFor(historyVersion ?? document.versionId, document.versionId)} />}
       </div>
     </div>}
   </section>

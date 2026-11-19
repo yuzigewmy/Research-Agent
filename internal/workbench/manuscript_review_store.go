@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -21,25 +22,34 @@ const retryManuscriptReview = "retry-review"
 var errManuscriptReviewState = errors.New("review cannot be retried in its current state")
 
 type manuscriptReview struct {
-	ReviewID     string `json:"reviewId"`
-	Target       string `json:"target"`
-	Status       string `json:"status"`
-	Revision     int    `json:"revision"`
-	SourceSHA256 string `json:"sourceSha256"`
-	CreatedAt    string `json:"createdAt"`
-	Message      string `json:"message,omitempty"`
-	Report       string `json:"report,omitempty"`
+	ReviewID     string          `json:"reviewId"`
+	Target       string          `json:"target"`
+	Status       string          `json:"status"`
+	Revision     int             `json:"revision"`
+	SourceSHA256 string          `json:"sourceSha256"`
+	CreatedAt    string          `json:"createdAt"`
+	Message      string          `json:"message,omitempty"`
+	Report       string          `json:"report,omitempty"`
+	Findings     []reviewFinding `json:"findings,omitempty"`
 	ordinal      int64
 }
 
 func scanManuscriptReview(row interface{ Scan(...any) error }, file WorkspaceFile) (manuscriptReview, error) {
 	review := manuscriptReview{SourceSHA256: file.SHA256}
-	err := row.Scan(&review.ordinal, &review.ReviewID, &review.Target, &review.Status, &review.Revision, &review.CreatedAt, &review.Message, &review.Report)
-	return review, err
+	var findings []byte
+	if err := row.Scan(&review.ordinal, &review.ReviewID, &review.Target, &review.Status, &review.Revision, &review.CreatedAt, &review.Message, &review.Report, &findings); err != nil {
+		return manuscriptReview{}, err
+	}
+	if len(findings) != 0 {
+		if err := json.Unmarshal(findings, &review.Findings); err != nil {
+			return manuscriptReview{}, err
+		}
+	}
+	return review, nil
 }
 
 func (s *Store) listManuscriptReviews(ctx context.Context, projectID string, file WorkspaceFile, before int64, limit int) ([]manuscriptReview, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+manuscriptReviewColumns+`, '' FROM tasks
+	rows, err := s.db.QueryContext(ctx, `SELECT `+manuscriptReviewColumns+`, '', NULL FROM tasks
 		WHERE project_id = ? AND review_version_id = ? AND (? = 0 OR ordinal < ?)
 		ORDER BY ordinal DESC LIMIT ?`, projectID, file.VersionID, before, before, limit)
 	if err != nil {
@@ -57,12 +67,8 @@ func (s *Store) listManuscriptReviews(ctx context.Context, projectID string, fil
 	return items, rows.Err()
 }
 
-type reviewQuery interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func getManuscriptReview(ctx context.Context, db reviewQuery, projectID string, file WorkspaceFile, id string) (manuscriptReview, error) {
-	return scanManuscriptReview(db.QueryRowContext(ctx, `SELECT `+manuscriptReviewColumns+`, markdown FROM tasks
+func getManuscriptReview(ctx context.Context, db workspaceQuery, projectID string, file WorkspaceFile, id string) (manuscriptReview, error) {
+	return scanManuscriptReview(db.QueryRowContext(ctx, `SELECT `+manuscriptReviewColumns+`, markdown, review_findings FROM tasks
 		WHERE project_id = ? AND review_version_id = ? AND task_id = ?`, projectID, file.VersionID, id), file)
 }
 
@@ -72,7 +78,7 @@ func (s *Store) startManuscriptReview(ctx context.Context, projectID string, fil
 		return manuscriptReview{}, false, err
 	}
 	defer tx.Rollback()
-	review, err := scanManuscriptReview(tx.QueryRowContext(ctx, `SELECT `+manuscriptReviewColumns+`, markdown FROM tasks
+	review, err := scanManuscriptReview(tx.QueryRowContext(ctx, `SELECT `+manuscriptReviewColumns+`, markdown, review_findings FROM tasks
 		WHERE project_id = ? AND review_version_id = ? AND instruction = ?`, projectID, file.VersionID, target), file)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return review, false, err
@@ -82,7 +88,7 @@ func (s *Store) startManuscriptReview(ctx context.Context, projectID string, fil
 	}
 	review, err = scanManuscriptReview(tx.QueryRowContext(ctx, `INSERT INTO tasks
 		(project_id, task_id, instruction, status, created_at, queued_seq, review_version_id)
-		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, ?) RETURNING `+manuscriptReviewColumns+`, markdown`,
+		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, ?) RETURNING `+manuscriptReviewColumns+`, markdown, review_findings`,
 		projectID, rand.Text(), target, time.Now().UTC().Format(createdAtLayout), projectID, file.VersionID), file)
 	if err != nil {
 		return manuscriptReview{}, false, err
@@ -128,7 +134,7 @@ func (s *Store) retryManuscriptReview(ctx context.Context, projectID string, fil
 	}
 	review, err = scanManuscriptReview(tx.QueryRowContext(ctx, `UPDATE tasks SET status = 'QUEUED', message = '',
 		revision = revision + 1, queued_seq = `+nextTaskQueuePosition+`
-		WHERE ordinal = ? RETURNING `+manuscriptReviewColumns+`, markdown`, projectID, review.ordinal), file)
+		WHERE ordinal = ? RETURNING `+manuscriptReviewColumns+`, markdown, review_findings`, projectID, review.ordinal), file)
 	if err != nil {
 		return manuscriptReview{}, false, err
 	}

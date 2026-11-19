@@ -68,6 +68,6 @@ func (s *Store) generateSelectionEdit(ctx context.Context, model *inference.Clie
 		len(doc.Content)-(end-start)+len(replacement) > maxWorkspaceText || reason == "" || replacement == input.Selected {
 		return "", errSelectionOutput
 	}
-	encoded, err := json.Marshal(editSuggestion{Replacement: replacement, Reason: reason})
+	encoded, err := json.Marshal(EditSuggestion{Replacement: replacement, Reason: reason})
 	return string(encoded), err
 }
