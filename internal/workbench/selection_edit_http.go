@@ -74,10 +74,14 @@ func (api selectionEdits) read(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api selectionEdits) apply(w http.ResponseWriter, r *http.Request) {
-	doc, err := api.store.applySelectionEdit(r.Context(), r.PathValue("id"), r.PathValue("versionId"), r.PathValue("editId"))
+	projectID := r.PathValue("id")
+	doc, err := api.store.applySelectionEdit(r.Context(), projectID, r.PathValue("versionId"), r.PathValue("editId"))
 	if err != nil {
 		writeSelectionEditError(w, err)
 		return
+	}
+	if api.model != nil {
+		api.store.kickTaskQueue(projectID, api.model)
 	}
 	writeJSON(w, http.StatusOK, doc)
 }

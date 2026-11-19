@@ -10,9 +10,9 @@ import (
 )
 
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
-	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit`
+	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck`
 
-const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0`
+const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0`
 
 const nextTaskQueuePosition = `(SELECT COALESCE(MAX(queued_seq), 0) + 1 FROM tasks
 	WHERE project_id = ? AND status = 'QUEUED')`
@@ -46,6 +46,7 @@ type Task struct {
 	workflowStep    int
 	reviewVersionID string
 	selectionEdit   bool
+	findingRecheck  bool
 	TaskID          string `json:"taskId"`
 	Instruction     string `json:"instruction"`
 	Revision        int    `json:"revision"`
@@ -94,6 +95,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,
 		message = CASE
 			WHEN status = 'CANCELLING' THEN ''
+			WHEN finding_recheck = 1 THEN '服务重启中断了复查，可重试。'
 			WHEN selection_edit = 1 THEN '服务重启中断了建议生成，可重新提交。'
 			WHEN review_version_id IS NOT NULL THEN '服务重启中断了评审，可以按原稿版本重试。'
 			WHEN workflow_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
@@ -106,7 +108,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
-		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit)
+		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck)
 	return t, err
 }
 

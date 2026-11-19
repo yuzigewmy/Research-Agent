@@ -75,7 +75,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			return
 		}
 		deadline := planTimeout
-		if task.workflowRunID != "" || task.reviewVersionID != "" || task.selectionEdit {
+		if task.workflowRunID != "" || task.reviewVersionID != "" || task.selectionEdit || task.findingRecheck {
 			deadline = 2 * time.Minute
 		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
@@ -101,6 +101,12 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			message = "生成修改建议失败，可重新提交。"
 			if errors.Is(err, errSelectionOutput) {
 				message = "模型没有返回可用的替换建议，可调整要求后重新提交。"
+			}
+		}
+		if task.findingRecheck && (status == taskFailed || status == taskInterrupted) {
+			message = "复查未完成，可按已保存的应用版本重试。"
+			if errors.Is(err, errFindingRecheckOutput) {
+				message = "模型未返回有效的复查结论，可重试。"
 			}
 		}
 		stop()
@@ -147,6 +153,9 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 }
 
 func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Client, projectID string, task Task) (string, error) {
+	if task.findingRecheck {
+		return s.generateFindingRecheck(ctx, model, projectID, task)
+	}
 	if task.selectionEdit {
 		return s.generateSelectionEdit(ctx, model, projectID, task)
 	}

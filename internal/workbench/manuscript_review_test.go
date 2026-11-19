@@ -25,6 +25,16 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 		}
 		text := input.Messages[len(input.Messages)-1].Content
 		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(text, `"originalFinding":`) {
+			if !strings.Contains(text, `"number":1`) || !strings.Contains(text, "采样日期待补。") || strings.Contains(text, "后来改稿") {
+				http.Error(w, "incorrect recheck source", http.StatusBadRequest)
+				return
+			}
+			calls.Add(1)
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+				`{"verdict":"RESOLVED","reason":"已给出日期。","line":4,"quote":"2020 年 1 月 1 日"}`)
+			return
+		}
 		if strings.Contains(text, `"selected":"在河流上游观测。"`) {
 			calls.Add(1)
 			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
@@ -63,19 +73,23 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := NewHandler(store, nil, HandlerConfig{Model: model})
-	base := "http://127.0.0.1" + projectsPath + "/" + project.ProjectID + "/files/versions/" + first.VersionID + "/reviews"
-	request := func(method, suffix, body string, want int) string {
+	versions := "http://127.0.0.1" + projectsPath + "/" + project.ProjectID + "/files/versions/"
+	send := func(method, url, body string, want int) string {
 		t.Helper()
-		req := httptest.NewRequest(method, base+suffix, strings.NewReader(body))
+		req := httptest.NewRequest(method, url, strings.NewReader(body))
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
 		if res.Code != want {
-			t.Fatalf("%s %s: HTTP %d, want %d: %s", method, suffix, res.Code, want, res.Body)
+			t.Fatalf("%s %s: HTTP %d, want %d: %s", method, url, res.Code, want, res.Body)
 		}
 		return res.Body.String()
+	}
+	request := func(method, suffix, body string, want int) string {
+		t.Helper()
+		return send(method, versions+first.VersionID+"/reviews"+suffix, body, want)
 	}
 	decode := func(body string) manuscriptReview {
 		t.Helper()
@@ -169,8 +183,63 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 	if current, err := store.workspaceFile(ctx, project.ProjectID, first.Path); err != nil || current.VersionID != newer.VersionID {
 		t.Fatalf("preview unexpectedly changed the manuscript: %+v, %v", current, err)
 	}
-	applied, err := store.applySelectionEdit(ctx, project.ProjectID, newer.VersionID, queued.EditID)
-	if err != nil || applied.Content != "# 修订稿\n\n补充信息。\n在河流上游观测，采样日期待补。" || calls.Load() != 3 {
-		t.Fatalf("wrong applied document or repeated call: %+v, %d calls, %v", applied, calls.Load(), err)
+	editURL := versions + newer.VersionID + "/edits/" + queued.EditID
+	recheckURL := editURL + "/recheck"
+	if body := send(http.MethodGet, recheckURL, "", http.StatusOK); strings.TrimSpace(body) != "null" {
+		t.Fatalf("recheck exists before apply: %s", body)
+	}
+	const checkRequest = `{"requestId":"recheck-this-finding"}`
+	send(http.MethodPost, recheckURL, checkRequest, http.StatusConflict)
+	handler = NewHandler(store, nil, HandlerConfig{})
+	var applied WorkspaceDocument
+	applyReceipt := send(http.MethodPost, editURL+"/apply", "", http.StatusOK)
+	if err := json.Unmarshal([]byte(applyReceipt), &applied); err != nil || applied.Content != "# 修订稿\n\n补充信息。\n在河流上游观测，采样日期待补。" || calls.Load() != 3 {
+		t.Fatalf("wrong applied document or repeated call: %s, %d calls, %v", applyReceipt, calls.Load(), err)
+	}
+	if replay := send(http.MethodPost, editURL+"/apply", "", http.StatusOK); replay != applyReceipt {
+		t.Fatal("apply replay did not return the same saved version")
+	}
+	if _, err := store.saveWorkspaceDocument(ctx, project.ProjectID, first.Path, applied.SHA256, "# 后来改稿"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = NewHandler(store, nil, HandlerConfig{Model: model})
+	readRecheck := func(body string) FindingRecheck {
+		t.Helper()
+		var recheck FindingRecheck
+		if err := json.Unmarshal([]byte(body), &recheck); err != nil {
+			t.Fatal(err)
+		}
+		return recheck
+	}
+	pending := readRecheck(send(http.MethodGet, recheckURL, "", http.StatusOK))
+	if pending.Status != taskQueued || pending.AppliedVersionID != applied.VersionID {
+		t.Fatalf("automatic recheck was not saved with the applied version: %+v", pending)
+	}
+	if err := store.ResumeQueuedTasks(ctx, model); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(4 * time.Second)
+	for {
+		current := readRecheck(send(http.MethodGet, recheckURL, "", http.StatusOK))
+		if current.Status == taskSucceeded {
+			if current.SourceSHA256 != applied.SHA256 || current.FindingNumber != 1 || current.Verdict != "UNVERIFIABLE" || current.Quote != "" {
+				t.Fatalf("recheck did not validate the applied version: %+v", current)
+			}
+			if replay := readRecheck(send(http.MethodPost, recheckURL, checkRequest, http.StatusOK)); replay.RecheckID != pending.RecheckID || calls.Load() != 4 {
+				t.Fatalf("duplicate recheck: %+v, %d calls", replay, calls.Load())
+			}
+			break
+		}
+		if (current.Status != taskQueued && current.Status != taskRunning) || time.Now().After(deadline) {
+			t.Fatalf("recheck did not complete: %+v", current)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { FindingRecheck } from './FindingRecheck'
 import { errorMessage, ProjectApiError, request } from './projects'
 import { isFileRecord } from './workspace'
 import type { Document } from './workspace'
@@ -259,6 +260,9 @@ export function ReviewFindingEdit({ projectId, reviewId, route, finding, expande
         {edit.reason && <p>修改理由 <bdi>{edit.reason}</bdi></p>}
       </>}
       {stale && revisionActions && !edit.appliedVersionId && <p className="workspace-note">此修订基于另一稿件版本。可基于当前稿件重新生成。</p>}
+      {edit.appliedVersionId && <FindingRecheck key={edit.editId} editPath={editPath(projectId, edit.versionId, edit.editId)}
+        versionId={edit.appliedVersionId} findingNumber={finding.number} modelConfigured={modelConfigured}
+        currentVersionId={baseVersion} />}
     </>}
     {readError && <p className="form-error" role="alert">{readError}</p>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
@@ -275,7 +279,7 @@ export function ReviewFindingEdit({ projectId, reviewId, route, finding, expande
     </div>}
     {revisionActions && edit?.status === 'SUCCEEDED' && !edit.appliedVersionId && !stale && edit.replacement !== undefined && (
       needsConfirmation ? <div className="workspace-preview" role="group" aria-label="确认应用修订">
-        <p>确认用建议文本替换原文，并保存为新版本？</p>
+        <p>确认后保存新版本，并将本条意见和修改附近的文字发送给模型复查。</p>
         <div className="workspace-actions">
           <button className="button primary" type="button" disabled={!canApply} onClick={() => void apply()}>
             {pending === 'apply' ? '正在应用…' : '确认应用'}

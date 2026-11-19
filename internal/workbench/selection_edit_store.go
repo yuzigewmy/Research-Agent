@@ -187,5 +187,10 @@ func (s *Store) applySelectionEdit(ctx context.Context, projectID, versionID, ed
 		file.VersionID, projectID, editID); err != nil {
 		return WorkspaceDocument{}, err
 	}
+	if edit.finding.reviewID != "" {
+		if _, err := insertFindingRecheck(ctx, tx, projectID, edit, file); err != nil {
+			return WorkspaceDocument{}, err
+		}
+	}
 	return WorkspaceDocument{WorkspaceFile: file, Content: content}, tx.Commit()
 }
