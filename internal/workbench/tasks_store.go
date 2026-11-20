@@ -11,9 +11,9 @@ import (
 
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
 	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck,
-	inputs_json, COALESCE(source_turn_id, '')`
+	inputs_json, COALESCE(source_turn_id, ''), automatic_review`
 
-const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0`
+const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0 AND automatic_review = 0`
 
 const nextTaskQueuePosition = `(SELECT COALESCE(MAX(queued_seq), 0) + 1 FROM tasks
 	WHERE project_id = ? AND status = 'QUEUED')`
@@ -47,6 +47,7 @@ type Task struct {
 	workflowRunID   string
 	workflowStep    int
 	reviewVersionID string
+	automaticReview bool
 	selectionEdit   bool
 	findingRecheck  bool
 	inputsJSON      string
@@ -111,6 +112,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 		message = CASE
 			WHEN status = 'CANCELLING' THEN ''
 			WHEN finding_recheck = 1 THEN '服务重启中断了复查，可重试。'
+			WHEN automatic_review = 1 THEN '服务重启中断了审稿，已保存的轮次可以继续。'
 			WHEN selection_edit = 1 THEN '服务重启中断了建议生成，可重新提交。'
 			WHEN review_version_id IS NOT NULL THEN '服务重启中断了评审，可以按原稿版本重试。'
 			WHEN workflow_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
@@ -123,7 +125,8 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	if err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
-		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck, &t.inputsJSON, &t.SourceTurnID); err != nil {
+		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck,
+		&t.inputsJSON, &t.SourceTurnID, &t.automaticReview); err != nil {
 		return Task{}, err
 	}
 	if err := json.Unmarshal([]byte(t.inputsJSON), &t.Inputs); err != nil {
@@ -359,6 +362,12 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 	}
 	if task.workflowRunID != "" {
 		if err := finishWorkflowStep(ctx, tx, projectID, task, status); err != nil {
+			return err
+		}
+	}
+	if task.automaticReview && status == taskSucceeded {
+		if _, err := tx.ExecContext(ctx, `UPDATE automatic_reviews SET stop_reason = ?
+			WHERE project_id = ? AND task_id = ?`, result.reviewStopReason, projectID, task.TaskID); err != nil {
 			return err
 		}
 	}

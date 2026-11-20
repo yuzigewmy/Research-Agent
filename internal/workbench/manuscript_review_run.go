@@ -49,29 +49,17 @@ func (s *Store) generateManuscriptReview(ctx context.Context, model *inference.C
 		return taskResult{}, err
 	}
 	lines := strings.Split(doc.Content, "\n")
-	var input strings.Builder
-	fmt.Fprintf(&input, "投稿目标：%q\n\n以下是本轮固定版本的稿件正文，每行开头为稿件行号。\n", task.Instruction)
-	for index, line := range lines {
-		fmt.Fprintf(&input, "%d\t%s\n", index+1, line)
-	}
-	output, err := streamTaskMarkdown(ctx, model, manuscriptReviewPrompt, input.String())
+	input := fmt.Sprintf("投稿目标：%q\n\n以下是本轮固定版本的稿件正文，每行开头为稿件行号。\n%s", task.Instruction, numberedManuscript(lines))
+	output, err := streamTaskMarkdown(ctx, model, manuscriptReviewPrompt, input)
 	if err != nil {
 		return taskResult{}, err
 	}
 	var review modelReview
 	if err := json.Unmarshal([]byte(output), &review); err != nil || review.Score == nil || *review.Score < 0 || *review.Score > 100 ||
-		reviewRecommendations[review.Recommendation] == "" || strings.TrimSpace(review.Summary) == "" || review.Findings == nil || len(review.Findings) > 12 {
+		reviewRecommendations[review.Recommendation] == "" || strings.TrimSpace(review.Summary) == "" || !validateReviewFindings(review.Findings, lines) {
 		return taskResult{}, errManuscriptReviewOutput
 	}
-	for i := range review.Findings {
-		finding := &review.Findings[i]
-		finding.Number, finding.Edit = i+1, nil
-		if finding.Line < 1 || finding.Line > len(lines) || reviewSeverities[finding.Severity] == "" ||
-			strings.TrimSpace(finding.Quote) == "" || utf8.RuneCountInString(finding.Quote) > 200 ||
-			!strings.Contains(strings.TrimSuffix(lines[finding.Line-1], "\r"), finding.Quote) ||
-			strings.TrimSpace(finding.Finding) == "" || strings.TrimSpace(finding.Suggestion) == "" {
-			return taskResult{}, errManuscriptReviewOutput
-		}
+	for _, finding := range review.Findings {
 		if finding.Severity == "major" && review.Recommendation == "ACCEPT" {
 			review.Recommendation = "REVISE"
 		}
@@ -87,4 +75,29 @@ func (s *Store) generateManuscriptReview(ctx context.Context, model *inference.C
 			finding.Number, finding.Line, reviewSeverities[finding.Severity], finding.Quote, finding.Finding, finding.Suggestion)
 	}
 	return taskResult{markdown: report.String(), findings: review.Findings}, nil
+}
+
+func numberedManuscript(lines []string) string {
+	var numbered strings.Builder
+	for index, line := range lines {
+		fmt.Fprintf(&numbered, "%d\t%s\n", index+1, line)
+	}
+	return numbered.String()
+}
+
+func validateReviewFindings(findings []reviewFinding, lines []string) bool {
+	if findings == nil || len(findings) > 12 {
+		return false
+	}
+	for i := range findings {
+		finding := &findings[i]
+		finding.Number, finding.Edit = i+1, nil
+		if finding.Line < 1 || finding.Line > len(lines) || reviewSeverities[finding.Severity] == "" ||
+			strings.TrimSpace(finding.Quote) == "" || utf8.RuneCountInString(finding.Quote) > 200 ||
+			!strings.Contains(strings.TrimSuffix(lines[finding.Line-1], "\r"), finding.Quote) ||
+			strings.TrimSpace(finding.Finding) == "" || strings.TrimSpace(finding.Suggestion) == "" {
+			return false
+		}
+	}
+	return true
 }

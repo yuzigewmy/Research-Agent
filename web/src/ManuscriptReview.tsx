@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { AutomaticReview } from './AutomaticReview'
 import { errorMessage, ProjectApiError, request } from './projects'
 import { isReviewFinding, ReviewFindings } from './ReviewFindingEdit'
 import type { RevisionActions, ReviewFinding } from './ReviewFindingEdit'
@@ -97,8 +98,12 @@ export function ManuscriptReview({ projectId, versionId, sourceSha256, dirty = f
   if (!isPathId(projectId) || !isPathId(versionId)) return <p className="form-error" role="alert">稿件版本链接无效。</p>
   const route = `/api/v1/projects/${encodeURIComponent(projectId)}/files/versions/${encodeURIComponent(versionId)}/reviews`
   const key = JSON.stringify([route, sourceSha256, initialFinding?.reviewId, initialFinding?.number])
-  return <VersionReviews key={key} route={route} projectId={projectId} sourceSha256={sourceSha256}
-    dirty={dirty} revisionActions={revisionActions} initialFinding={initialFinding} />
+  return <>
+    <VersionReviews key={key} route={route} projectId={projectId} sourceSha256={sourceSha256}
+      dirty={dirty} revisionActions={revisionActions} initialFinding={initialFinding} />
+    <AutomaticReview key={JSON.stringify([projectId, versionId, sourceSha256])} projectId={projectId}
+      versionId={versionId} sourceSha256={sourceSha256} dirty={dirty} />
+  </>
 }
 
 function VersionReviews({ route, projectId, sourceSha256, dirty, revisionActions, initialFinding }: Omit<Props, 'versionId' | 'dirty'> & {

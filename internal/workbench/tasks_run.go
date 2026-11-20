@@ -78,6 +78,9 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		if task.workflowRunID != "" || task.reviewVersionID != "" || task.selectionEdit || task.findingRecheck {
 			deadline = 2 * time.Minute
 		}
+		if task.automaticReview {
+			deadline = 15 * time.Minute
+		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
 		worker.taskID, worker.stop = task.TaskID, stop
 		workers.mu.Unlock()
@@ -95,6 +98,15 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			message = "评审未完成。检查模型连接后，可按原稿版本重试。"
 			if errors.Is(err, errManuscriptReviewOutput) {
 				message = "评审结果的评分、格式或原文定位有误，可以重试。"
+			}
+		}
+		if task.automaticReview && (status == taskFailed || status == taskInterrupted) {
+			message = "多轮审稿中断，可从已保存的进度重试。"
+			switch {
+			case errors.Is(err, errManuscriptReviewOutput):
+				message = "模型返回的评分或问题定位不符合要求，可重试此轮。"
+			case errors.Is(err, errAutomaticRevision):
+				message = "模型返回的修订不符合已审范围，可从该轮评审结果重试。"
 			}
 		}
 		if task.selectionEdit && status == taskFailed {
@@ -140,13 +152,16 @@ func (workers *taskWorkers) close() {
 }
 
 type taskResult struct {
-	markdown  string
-	findings  []reviewFinding
-	topicData string
+	markdown         string
+	findings         []reviewFinding
+	topicData        string
+	reviewStopReason string
 }
 
 func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
 	switch {
+	case task.automaticReview:
+		return s.runAutomaticReview(ctx, model, projectID, task.TaskID)
 	case task.reviewVersionID != "":
 		return s.generateManuscriptReview(ctx, model, projectID, task)
 	case task.findingRecheck:

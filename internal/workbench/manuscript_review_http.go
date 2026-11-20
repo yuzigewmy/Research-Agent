@@ -26,6 +26,7 @@ func (api manuscriptReviews) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+base+"/{reviewId}/download", api.read(true))
 	mux.HandleFunc("POST "+base+"/{reviewId}/retry", api.retry)
 	mux.HandleFunc("POST "+base+"/{reviewId}/findings/{number}/edits", api.createFindingEdit)
+	api.registerAutomaticReviews(mux)
 }
 
 func (api manuscriptReviews) source(w http.ResponseWriter, r *http.Request) (WorkspaceFile, bool) {
@@ -38,7 +39,7 @@ func (api manuscriptReviews) source(w http.ResponseWriter, r *http.Request) (Wor
 	case ".md", ".markdown":
 		return file, true
 	default:
-		writeError(w, http.StatusUnprocessableEntity, "FORMAT_UNSUPPORTED", "模拟评审支持已保存的 Markdown 稿件。")
+		writeError(w, http.StatusUnprocessableEntity, "FORMAT_UNSUPPORTED", "稿件评审支持已保存的 Markdown 稿件。")
 		return WorkspaceFile{}, false
 	}
 }
