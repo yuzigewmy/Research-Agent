@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
@@ -9,6 +9,9 @@ import './materials.css'
 const materialDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const sizeFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 })
 const readTimeout = 10_000
+const PdfPreview = lazy(() => import('./PdfMaterialPreview').catch(() => ({
+  default: () => <p className="form-error" role="alert">无法加载 PDF 查看器，请刷新页面或下载原件。</p>,
+})))
 
 type ReadStatus = { kind: 'loading' } | { kind: 'error'; message: string }
 type ListStatus = ReadStatus | { kind: 'ready' }
@@ -160,9 +163,12 @@ export function MaterialPanel({ projectId, onReference, referenceIds = [] }: Mat
         {items.map((material) => {
           const isOpen = previewId === material.materialId
           const previewRegion = `${headingId}-preview-${material.materialId}`
-          const previewLabel = isOpen ? '收起预览' : '预览'
+          const isPdf = material.format === 'pdf'
           const isWord = material.format === 'word'
-          const hasText = material.kind === 'text' || isWord
+          const hasText = !isPdf && (material.kind === 'text' || isWord)
+          const canPreview = isPdf || hasText
+          const previewLabel = isOpen ? '收起预览' : isPdf ? '预览 PDF' : '预览'
+          const downloadPath = materialDownloadPath(projectId, material.materialId)
           const wordScopeId = isWord ? `${previewRegion}-scope` : undefined
           const referenced = referenceIds.includes(material.materialId)
           const atLimit = referenceLimitReached && !referenced
@@ -171,26 +177,30 @@ export function MaterialPanel({ projectId, onReference, referenceIds = [] }: Mat
               <div className="material-info">
                 <strong dir="auto">{material.name}</strong>
                 <div className="material-meta material-note">
-                  <span>{isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件'}</span>
+                  <span>{isPdf ? 'PDF' : isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件'}</span>
                   <span>{formatSize(material.size)}</span>
                   <time dateTime={material.createdAt}>{materialDate.format(new Date(material.createdAt))}</time>
-                  {hasText && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
+                  {canPreview && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
                 </div>
                 {isWord && <p className="material-note" id={wordScopeId}>正文和表格文字节选（预览最多 64 KiB，UTF-8）</p>}
               </div>
               <div className="material-actions">
-                {hasText && <button className="button outline" type="button"
+                {canPreview && <button className="button outline" type="button"
                   aria-label={`${previewLabel}：${material.name}`} aria-expanded={isOpen} aria-controls={previewRegion}
                   aria-describedby={wordScopeId} onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
-                <a className="button outline" href={materialDownloadPath(projectId, material.materialId)}
+                <a className="button outline" href={downloadPath}
                   aria-label={`下载原件：${material.name}`} download>下载原件</a>
                 {hasText && onReference && <button className="button outline" type="button"
                   aria-label={`引用资料：${material.name}`} aria-pressed={referenced} aria-disabled={atLimit}
                   aria-describedby={atLimit ? referenceLimitHint : undefined}
                   onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
               </div>
-              {hasText && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
-                {isOpen && <MaterialPreviewContent material={material} projectId={projectId} />}
+              {canPreview && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
+                {isOpen && (isPdf ? (
+                  <Suspense fallback={<p className="material-note" role="status">正在加载 PDF 查看器…</p>}>
+                    <PdfPreview key={downloadPath} url={downloadPath} />
+                  </Suspense>
+                ) : <MaterialPreviewContent material={material} projectId={projectId} />)}
               </div>}
             </li>
           )

@@ -87,4 +87,22 @@ func TestMaterialsKeepOriginalBytesAndProjectScope(t *testing.T) {
 	}
 	request(http.MethodGet, projectsPath+"/"+second+"/materials/"+material.MaterialID+"/download", "", http.StatusNotFound)
 	request(http.MethodPost, base+"?name=..%2Fsecret.txt", "data", http.StatusBadRequest)
+
+	const pdf = "%PDF-1.7\n"
+	var document Material
+	uploaded := request(http.MethodPost, base+"?name=notes.PDF", pdf, http.StatusCreated)
+	if err := json.Unmarshal(uploaded.Body.Bytes(), &document); err != nil || document.Format != "pdf" {
+		t.Fatalf("PDF upload did not return its format: %v, %s", err, uploaded.Body)
+	}
+	route := base + "/" + document.MaterialID + "/download"
+	partial := httptest.NewRequest(http.MethodGet, "http://127.0.0.1"+route, nil)
+	partial.Header.Set("Range", "bytes=0-4")
+	rangeResult := httptest.NewRecorder()
+	handler.ServeHTTP(rangeResult, partial)
+	if rangeResult.Code != http.StatusPartialContent || rangeResult.Body.String() != "%PDF-" {
+		t.Fatalf("PDF range did not match the uploaded bytes: %d %q", rangeResult.Code, rangeResult.Body)
+	}
+	if original := request(http.MethodGet, route, "", http.StatusOK); original.Body.String() != pdf {
+		t.Fatalf("PDF download changed the uploaded bytes: %q", original.Body)
+	}
 }

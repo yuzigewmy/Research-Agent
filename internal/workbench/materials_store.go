@@ -132,6 +132,8 @@ func materialFormat(name, kind string) string {
 		switch strings.ToLower(filepath.Ext(name)) {
 		case ".docx", ".dotx":
 			return "word"
+		case ".pdf":
+			return "pdf"
 		}
 	}
 	return ""
