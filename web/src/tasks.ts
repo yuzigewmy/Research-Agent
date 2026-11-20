@@ -14,6 +14,12 @@ export const taskStatusLabels = {
 export type TaskStatus = keyof typeof taskStatusLabels
 export type TaskAction = 'confirm' | 'cancel'
 
+export interface TaskInputVersion {
+  versionId: string
+  path: string
+  sha256: string
+}
+
 export interface Task {
   taskId: string
   instruction: string
@@ -21,6 +27,7 @@ export interface Task {
   status: TaskStatus
   createdAt: string
   message?: string
+  inputs?: TaskInputVersion[]
 }
 
 export interface TaskPage {
@@ -29,9 +36,10 @@ export interface TaskPage {
   modelConfigured: boolean
 }
 
-interface ProposalInput {
+export interface ProposalInput {
   requestId: string
   instruction: string
+  inputVersionIds?: string[]
 }
 
 interface ActionInput {
@@ -40,9 +48,18 @@ interface ActionInput {
 }
 
 export const taskInstructionLimit = 8_192
+export const taskInputLimit = 4
 
 export function isTaskActive(status: TaskStatus) {
   return status === 'QUEUED' || status === 'RUNNING' || status === 'CANCELLING'
+}
+
+function isTaskInputVersion(value: unknown): value is TaskInputVersion {
+  const input = value as Partial<TaskInputVersion> | null
+  return !!input && typeof input.versionId === 'string' && !!input.versionId
+    && input.versionId !== '.' && input.versionId !== '..'
+    && typeof input.path === 'string' && !!input.path
+    && typeof input.sha256 === 'string' && /^[a-f\d]{64}$/i.test(input.sha256)
 }
 
 function isTask(value: unknown): value is Task {
@@ -53,6 +70,8 @@ function isTask(value: unknown): value is Task {
     && typeof task.status === 'string' && Object.hasOwn(taskStatusLabels, task.status)
     && typeof task.createdAt === 'string' && Number.isFinite(Date.parse(task.createdAt))
     && (task.message === undefined || typeof task.message === 'string')
+    && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
+      && task.inputs.every(isTaskInputVersion)))
 }
 
 function isTaskPage(value: unknown): value is TaskPage {
@@ -112,7 +131,7 @@ export function changeTask(projectId: string, taskId: string, action: TaskAction
   return sendTask(`${taskPath(projectId, taskId)}/${action}`, input, signal)
 }
 
-export function editTask(projectId: string, taskId: string, input: ActionInput & { instruction: string }, signal: AbortSignal) {
+export function editTask(projectId: string, taskId: string, input: ActionInput & Omit<ProposalInput, 'requestId'>, signal: AbortSignal) {
   return sendTask(taskPath(projectId, taskId), input, signal, 'PATCH')
 }
 

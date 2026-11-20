@@ -80,8 +80,9 @@ func (api researchTasks) list(w http.ResponseWriter, r *http.Request) {
 
 func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		RequestID   string `json:"requestId"`
-		Instruction string `json:"instruction"`
+		RequestID       string   `json:"requestId"`
+		Instruction     string   `json:"instruction"`
+		InputVersionIDs []string `json:"inputVersionIds"`
 	}
 	if !readJSON(w, r, &input, 64<<10) {
 		return
@@ -91,7 +92,8 @@ func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号和 8 KiB 以内的非空任务说明。")
 		return
 	}
-	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), Action: proposeTask, RequestID: input.RequestID, Instruction: input.Instruction})
+	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), Action: proposeTask, RequestID: input.RequestID,
+		Instruction: input.Instruction, InputVersionIDs: input.InputVersionIDs})
 }
 
 func validTaskInstruction(instruction string) bool {
@@ -100,9 +102,10 @@ func validTaskInstruction(instruction string) bool {
 
 func (api researchTasks) edit(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		RequestID        string `json:"requestId"`
-		ExpectedRevision int    `json:"expectedRevision"`
-		Instruction      string `json:"instruction"`
+		RequestID        string   `json:"requestId"`
+		ExpectedRevision int      `json:"expectedRevision"`
+		Instruction      string   `json:"instruction"`
+		InputVersionIDs  []string `json:"inputVersionIds"`
 	}
 	if !readJSON(w, r, &input, 64<<10) {
 		return
@@ -113,7 +116,7 @@ func (api researchTasks) edit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), TaskID: r.PathValue("taskId"), Action: editTask,
-		RequestID: input.RequestID, ExpectedRevision: input.ExpectedRevision, Instruction: instruction})
+		RequestID: input.RequestID, ExpectedRevision: input.ExpectedRevision, Instruction: instruction, InputVersionIDs: input.InputVersionIDs})
 }
 
 func (api researchTasks) change(action string) http.HandlerFunc {
@@ -136,11 +139,17 @@ func (api researchTasks) change(action string) http.HandlerFunc {
 
 func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskRequest) {
 	task, applied, err := api.store.applyTaskRequest(r.Context(), req, api.model != nil)
-	if req.Action == editTask && errors.Is(err, errTaskState) {
+	switch {
+	case errors.Is(err, errTaskInputChanged):
+		writeError(w, http.StatusConflict, "TASK_INPUT_CHANGED", taskInputsChangedMessage)
+		return
+	case errors.Is(err, errInvalidTaskInput):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中最多四个不同文件的已保存版本。")
+		return
+	case req.Action == editTask && errors.Is(err, errTaskState):
 		writeError(w, http.StatusConflict, "TASK_STATE_CONFLICT", "只有待确认的任务可以修改说明。")
 		return
-	}
-	if err != nil {
+	case err != nil:
 		writeTaskError(w, "apply task request", err)
 		return
 	}

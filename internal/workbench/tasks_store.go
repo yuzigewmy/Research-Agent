@@ -10,7 +10,7 @@ import (
 )
 
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
-	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck`
+	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck, inputs_json`
 
 const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0`
 
@@ -48,17 +48,20 @@ type Task struct {
 	reviewVersionID string
 	selectionEdit   bool
 	findingRecheck  bool
-	TaskID          string `json:"taskId"`
-	Instruction     string `json:"instruction"`
-	Revision        int    `json:"revision"`
-	Status          string `json:"status"`
-	CreatedAt       string `json:"createdAt"`
-	Message         string `json:"message,omitempty"`
+	inputsJSON      string
+	TaskID          string      `json:"taskId"`
+	Instruction     string      `json:"instruction"`
+	Revision        int         `json:"revision"`
+	Status          string      `json:"status"`
+	CreatedAt       string      `json:"createdAt"`
+	Message         string      `json:"message,omitempty"`
+	Inputs          []taskInput `json:"inputs,omitempty"`
 }
 
 type taskRequest struct {
 	ProjectID, TaskID, Action, RequestID, Instruction string
 	ExpectedRevision                                  int
+	InputVersionIDs                                   []string
 }
 
 const tasksSchema = `
@@ -116,9 +119,14 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
-	err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
-		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck)
-	return t, err
+	if err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
+		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck, &t.inputsJSON); err != nil {
+		return Task{}, err
+	}
+	if err := json.Unmarshal([]byte(t.inputsJSON), &t.Inputs); err != nil {
+		return Task{}, err
+	}
+	return t, nil
 }
 
 func (s *Store) listTasks(ctx context.Context, projectID string, before int64, limit int) ([]Task, error) {
@@ -149,12 +157,24 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 	}
 	defer tx.Rollback()
 
-	var taskID, action, instruction string
+	if len(req.InputVersionIDs) > maxTaskInputs {
+		return Task{}, false, errInvalidTaskInput
+	}
+	var inputIDs string
+	if len(req.InputVersionIDs) > 0 || (req.Action == editTask && req.InputVersionIDs != nil) {
+		encoded, err := json.Marshal(req.InputVersionIDs)
+		if err != nil {
+			return Task{}, false, err
+		}
+		inputIDs = string(encoded)
+	}
+	var taskID, action, instruction, recordedInputs string
 	var revision int
-	err = tx.QueryRowContext(ctx, `SELECT task_id, action, expected_revision, instruction FROM task_requests
-		WHERE project_id = ? AND request_id = ?`, req.ProjectID, req.RequestID).Scan(&taskID, &action, &revision, &instruction)
+	err = tx.QueryRowContext(ctx, `SELECT task_id, action, expected_revision, instruction, input_version_ids FROM task_requests
+		WHERE project_id = ? AND request_id = ?`, req.ProjectID, req.RequestID).Scan(&taskID, &action, &revision, &instruction, &recordedInputs)
 	if err == nil {
-		if action != req.Action || revision != req.ExpectedRevision || instruction != req.Instruction || (action != proposeTask && taskID != req.TaskID) {
+		if action != req.Action || revision != req.ExpectedRevision || instruction != req.Instruction ||
+			recordedInputs != inputIDs || (action != proposeTask && taskID != req.TaskID) {
 			return Task{}, false, errRequestConflict
 		}
 		task, err := lookupTask(ctx, tx, req.ProjectID, taskID)
@@ -167,36 +187,63 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 	var task Task
 	var nextStatus string
 	if req.Action == proposeTask {
-		task, err = scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at)
-			SELECT project_id, ?, ?, 'PROPOSED', ? FROM projects WHERE project_id = ? RETURNING `+taskColumns,
-			rand.Text(), req.Instruction, time.Now().UTC().Format(createdAtLayout), req.ProjectID))
-	} else {
-		task, err = lookupTask(ctx, tx, req.ProjectID, req.TaskID)
-		if err == nil {
-			nextStatus, err = nextTaskStatus(task, req, modelConfigured)
-		}
-	}
-	if err != nil {
-		return Task{}, false, err
-	}
-
-	_, err = tx.ExecContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision, instruction)
-		VALUES (?, ?, ?, ?, ?, ?)`, req.ProjectID, task.TaskID, req.RequestID, req.Action, req.ExpectedRevision, req.Instruction)
-	if err != nil {
-		return Task{}, false, err
-	}
-	if nextStatus != "" {
-		instruction := task.Instruction
-		if req.Action == editTask {
-			instruction = req.Instruction
-		}
-		task, err = scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = ?, instruction = ?, revision = revision + 1,
-			queued_seq = CASE WHEN ? = 'QUEUED' THEN `+nextTaskQueuePosition+` ELSE queued_seq END
-			WHERE project_id = ? AND task_id = ? AND revision = ? RETURNING `+taskColumns,
-			nextStatus, instruction, nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
+		inputs, err := resolveTaskInputs(ctx, tx, req.ProjectID, req.InputVersionIDs)
 		if err != nil {
 			return Task{}, false, err
 		}
+		task, err = scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, inputs_json)
+			SELECT project_id, ?, ?, 'PROPOSED', ?, ? FROM projects WHERE project_id = ? RETURNING `+taskColumns,
+			rand.Text(), req.Instruction, time.Now().UTC().Format(createdAtLayout), inputs, req.ProjectID))
+		if err != nil {
+			return Task{}, false, err
+		}
+	} else {
+		task, err = lookupTask(ctx, tx, req.ProjectID, req.TaskID)
+		if err != nil {
+			return Task{}, false, err
+		}
+		nextStatus, err = nextTaskStatus(task, req, modelConfigured)
+		if err != nil {
+			return Task{}, false, err
+		}
+	}
+
+	if nextStatus != "" {
+		instruction, inputs, message := task.Instruction, task.inputsJSON, task.Message
+		switch req.Action {
+		case editTask:
+			instruction = req.Instruction
+			if req.InputVersionIDs != nil {
+				inputs, err = resolveTaskInputs(ctx, tx, req.ProjectID, req.InputVersionIDs)
+				if err != nil {
+					return Task{}, false, err
+				}
+				message = ""
+			}
+		case confirmTask:
+			if len(task.Inputs) != 0 {
+				var changed bool
+				if err := tx.QueryRowContext(ctx, `SELECT `+changedTaskInputs+` FROM tasks WHERE ordinal = ?`, task.ordinal).Scan(&changed); err != nil {
+					return Task{}, false, err
+				}
+				if changed {
+					return Task{}, false, errTaskInputChanged
+				}
+			}
+			message = ""
+		}
+		task, err = scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = ?, instruction = ?, inputs_json = ?, message = ?, revision = revision + 1,
+			queued_seq = CASE WHEN ? = 'QUEUED' THEN `+nextTaskQueuePosition+` ELSE queued_seq END
+			WHERE project_id = ? AND task_id = ? AND revision = ? RETURNING `+taskColumns,
+			nextStatus, instruction, inputs, message, nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
+		if err != nil {
+			return Task{}, false, err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision, instruction, input_version_ids)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, req.ProjectID, task.TaskID, req.RequestID, req.Action, req.ExpectedRevision, req.Instruction, inputIDs)
+	if err != nil {
+		return Task{}, false, err
 	}
 	return task, true, tx.Commit()
 }
@@ -241,11 +288,21 @@ func (s *Store) claimQueuedTask(ctx context.Context, projectID string) (Task, er
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'PROPOSED', revision = revision + 1, queued_seq = NULL, message = ?
+		WHERE project_id = ? AND status = 'QUEUED' AND `+changedTaskInputs, taskInputsChangedMessage, projectID); err != nil {
+		return Task{}, err
+	}
 	task, err := scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = 'RUNNING', revision = revision + 1
 		WHERE project_id = ? AND status = 'QUEUED' AND ordinal = (
 			SELECT ordinal FROM tasks WHERE project_id = ? AND status = 'QUEUED' ORDER BY queued_seq, ordinal LIMIT 1
 		) AND NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = ? AND status IN ('RUNNING', 'CANCELLING'))
 		RETURNING `+taskColumns, projectID, projectID, projectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Task{}, commitErr
+		}
+		return Task{}, err
+	}
 	if err != nil {
 		return Task{}, err
 	}

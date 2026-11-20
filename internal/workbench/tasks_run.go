@@ -164,6 +164,13 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	if task.workflowRunID != "" {
 		return s.generateWorkflowResult(ctx, model, project, task, input)
 	}
+	if len(task.Inputs) > 0 {
+		excerpts, err := s.taskInputContext(task.Inputs)
+		if err != nil {
+			return taskResult{}, err
+		}
+		input += excerpts
+	}
 	markdown, err := streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
 	return taskResult{markdown: markdown}, err
 }
