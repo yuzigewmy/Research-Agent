@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { DiagramCanvas } from './DiagramCanvas'
+import { DiagramPngDownload } from './DiagramPngDownload'
 import {
   diagramPath, diagramText, edgeKey, isCoordinate, isDiagram, isDiagramPath, isNodeLabel, maxDiagramEdges,
   maxDiagramNodes, maxNodeX, maxNodeY, newNode, parseDiagram,
@@ -203,6 +204,7 @@ function VersionPreview({ projectId, version, current, restoreDisabled, onRestor
     <DiagramCanvas diagram={preview} />
     <div className="workspace-actions">
       <a className="button outline" download href={diagramSvgPath(projectId, versionId)}>下载此版本 SVG</a>
+      <DiagramPngDownload projectId={projectId} file={version} historical />
       {!current && <button className="button outline" type="button" disabled={restoreDisabled} onClick={onRestore}>恢复此版本</button>}
     </div>
   </section>
@@ -426,14 +428,15 @@ function DiagramWorkspace({ projectId }: { projectId: string }) {
           onClick={() => setHistory((open) => !open)}>流程图版本历史</button>}
         {(saved || conflict) && <button className="button outline" type="button" disabled={!!busy}
           onClick={() => navigate({ kind: 'reload', path: editor.path })}>重新加载流程图</button>}
-        {saved
-          ? <a className="button outline" download href={diagramSvgPath(projectId, saved.file.versionId)}
-            aria-describedby={`${id}-svg-source`}>下载 SVG</a>
-          : <button className="button outline" type="button" disabled>下载 SVG</button>}
+        {saved ? <>
+          <a className="button outline" download href={diagramSvgPath(projectId, saved.file.versionId)}
+            aria-describedby={`${id}-export-source`}>下载 SVG</a>
+          <DiagramPngDownload projectId={projectId} file={saved.file} />
+        </> : <button className="button outline" type="button" disabled>下载 SVG</button>}
       </div>
-      <p className="workspace-note" id={`${id}-svg-source`}>
-        {saved ? <>SVG 来自已保存版本 <code title={saved.file.sha256}>{saved.file.sha256.slice(0, 12)}</code>。
-          {dirty && ' 保存修改后可下载新版。'}</> : '保存流程图后可下载 SVG。'}
+      <p className="workspace-note" id={`${id}-export-source`}>
+        {saved ? <>导出来源为已保存版本 <code title={saved.file.sha256}>{saved.file.sha256.slice(0, 12)}</code>。
+          {dirty && ' 保存修改后可下载新版。'}</> : '保存流程图后可下载 SVG 或 PNG。'}
       </p>
       {!validDraft && <p className="form-error" role="status">请修正节点标签或坐标后再保存。</p>}
       <div className="workspace-actions" role="group" aria-label="画布缩放">
