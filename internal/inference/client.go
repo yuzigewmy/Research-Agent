@@ -73,11 +73,17 @@ type chatRequest struct {
 // Stream forwards public text from the Chat Completions SSE response.
 // https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
 func (c *Client) Stream(ctx context.Context, messages []Message, emit func(string) error) error {
+	return c.StreamWithBudget(ctx, messages, 0, emit)
+}
+
+// StreamWithBudget extends the default output allowance for long writing stages.
+func (c *Client) StreamWithBudget(ctx context.Context, messages []Message, outputTokens int, emit func(string) error) error {
+	outputTokens = max(2048, outputTokens)
 	payload := chatRequest{Model: c.model, Messages: messages, Stream: true, ReasoningEffort: c.reasoningEffort}
 	if c.reasoningEffort == "" {
-		payload.MaxTokens = 2048
+		payload.MaxTokens = outputTokens
 	} else {
-		payload.MaxCompletionTokens = 8192
+		payload.MaxCompletionTokens = max(8192, outputTokens+4096)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

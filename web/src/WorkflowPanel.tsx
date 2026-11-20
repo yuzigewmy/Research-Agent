@@ -234,9 +234,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const selectedCancel = canCancel && cancelTarget && run?.runId === cancelTarget.runId ? cancelTarget : null
   const confirmingCancel = selectedCancel !== null
   const cancelConfirmationId = `${headingId}-cancel-confirmation`
-  const steps = snapshot?.steps ?? []
-  const nextStep = rangeCompleted ? run.steps.find((step) => step.status !== 'SUCCEEDED') : undefined
-  const rangeStartIndex = canStart ? 0 : steps.findIndex((step) => step.key === nextStep?.key)
+  const steps = (canStart ? snapshot.steps : run?.steps) ?? []
+  const rangeStartIndex = rangeCompleted ? run.steps.findIndex((step) => step.status !== 'SUCCEEDED') : canStart ? 0 : -1
   const rangeSteps = rangeStartIndex >= 0 ? steps.slice(rangeStartIndex) : []
   const firstStep = rangeSteps[0]
   const lastStep = rangeSteps.at(-1)
@@ -470,6 +469,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
       {run && <WorkflowProposalSummary run={run} />}
+      {run?.workflowKey === 'proposal-v2' && <p className="workflow-note">正文各节分别保存。本轮可从未完成的一节继续。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} rerun={{
         selected: selectedRerun?.stepKey,
         disabled: rerunDisabled,

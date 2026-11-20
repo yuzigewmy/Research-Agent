@@ -160,7 +160,7 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	if err != nil {
 		return WorkflowRun{}, err
 	}
-	if run.WorkflowKey == proposalWorkflow {
+	if isProposalWorkflow(run.WorkflowKey) {
 		run.Proposal = new(proposalTargets)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Proposal); err != nil {
 			return WorkflowRun{}, err
@@ -367,7 +367,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	switch action {
 	case workflowStart:
 		evidence := "[]"
-		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || key == proposalWorkflow {
+		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || isProposalWorkflow(key) {
 			limit := target
 			if limit == 0 {
 				limit = defaultReviewTarget

@@ -21,7 +21,7 @@ type paperOptions struct {
 }
 
 func workflowStartSettings(key, action string, req workflowRequest) (string, int, error) {
-	if key == proposalWorkflow && action == workflowStart {
+	if isProposalWorkflow(key) && action == workflowStart {
 		if req.Paper != nil || req.Topic != nil {
 			return "", 0, errProposalOptions
 		}

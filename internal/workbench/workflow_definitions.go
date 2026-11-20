@@ -41,14 +41,22 @@ var proposalManuscriptPrompt string
 //go:embed prompts/proposal_defense.md
 var proposalDefensePrompt string
 
+//go:embed prompts/proposal_section.md
+var proposalSectionPrompt string
+
 const (
 	experimentWorkflowV1 = "experiment-v1"
 	experimentWorkflow   = "experiment-v2"
 	reviewWorkflow       = "literature-v1"
 	paperWorkflow        = "paper-v1"
 	topicWorkflow        = "topic-v1"
-	proposalWorkflow     = "proposal-v1"
+	proposalWorkflowV1   = "proposal-v1"
+	proposalWorkflow     = "proposal-v2"
 )
+
+func isProposalWorkflow(key string) bool {
+	return key == proposalWorkflowV1 || key == proposalWorkflow
+}
 
 type workflowStage struct {
 	key, title, prompt string
@@ -84,13 +92,14 @@ var workflowStages = map[string][]workflowStage{
 		{key: "shortlist", title: "评估并筛选构想", prompt: topicShortlistPrompt},
 		{key: "contract", title: "编写研究方案", prompt: topicContractPrompt, acceptMarkdown: true},
 	},
-	proposalWorkflow: {
+	proposalWorkflowV1: {
 		{key: "sources", title: "固定本轮文献"},
 		{key: "outline", title: "编制开题规划", prompt: proposalOutlinePrompt, checkpoint: true, acceptMarkdown: true},
 		{key: "manuscript", title: "撰写开题报告", prompt: proposalManuscriptPrompt, acceptMarkdown: true},
 		{key: "defense", title: "准备开题答辩", prompt: proposalDefensePrompt, acceptMarkdown: true},
 		{key: "check", title: "核对开题交付"},
 	},
+	proposalWorkflow: sectionedProposalStages(),
 }
 
 var projectWorkflows = map[string]string{

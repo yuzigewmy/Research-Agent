@@ -162,19 +162,23 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	}
 	input := fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, task.Instruction)
 	if task.workflowRunID != "" {
-		return s.generateWorkflowResult(ctx, model, projectID, task, input)
+		return s.generateWorkflowResult(ctx, model, project, task, input)
 	}
 	markdown, err := streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
 	return taskResult{markdown: markdown}, err
 }
 
 func streamTaskMarkdown(ctx context.Context, model *inference.Client, prompt, input string) (string, error) {
+	return streamTaskMarkdownWithBudget(ctx, model, prompt, input, 0)
+}
+
+func streamTaskMarkdownWithBudget(ctx context.Context, model *inference.Client, prompt, input string, tokens int) (string, error) {
 	messages := []inference.Message{
 		{Role: "system", Content: strings.TrimSpace(prompt)},
 		{Role: "user", Content: input},
 	}
 	var output strings.Builder
-	err := model.Stream(ctx, messages, func(delta string) error {
+	err := model.StreamWithBudget(ctx, messages, tokens, func(delta string) error {
 		if len(delta) > planMaxSize-output.Len() {
 			return errors.New("research plan exceeds output limit")
 		}

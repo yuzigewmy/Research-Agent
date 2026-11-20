@@ -34,7 +34,8 @@ type workflowOutputError struct{ err error }
 
 func (e workflowOutputError) Error() string { return e.err.Error() }
 
-func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, projectID string, task Task, input string) (taskResult, error) {
+func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, project Project, task Task, input string) (taskResult, error) {
+	projectID := project.ProjectID
 	var key, evidence, options string
 	var selectedNumber int
 	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number FROM workflow_runs WHERE run_id = ?`,
@@ -48,7 +49,7 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	stage := stages[task.workflowStep]
 	var sources []reviewSource
 	first := 0
-	usesLiterature := key == reviewWorkflow || key == paperWorkflow || key == proposalWorkflow
+	usesLiterature := key == reviewWorkflow || key == paperWorkflow || isProposalWorkflow(key)
 	if key == paperWorkflow {
 		if stage.key == "structure" {
 			_, manuscript, err := s.workflowArtifact(ctx, projectID, task.workflowRunID, "manuscript")
@@ -71,15 +72,18 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 			first = 1
 		}
 	}
-	if key == proposalWorkflow {
-		if stage.key == "check" {
+	if isProposalWorkflow(key) {
+		input += "\n\n本轮开题设置（JSON）：\n" + options
+		if stage.key == "check" || (key == proposalWorkflow && task.workflowStep >= firstProposalSection) {
 			var goals proposalTargets
 			if err := json.Unmarshal([]byte(options), &goals); err != nil {
 				return taskResult{}, err
 			}
-			return s.checkProposal(ctx, projectID, task.workflowRunID, goals, sources)
+			if stage.key == "check" {
+				return s.checkProposal(ctx, projectID, task.workflowRunID, goals, sources)
+			}
+			return s.sectionedProposalResult(ctx, model, project, task, input, goals, sources)
 		}
-		input += "\n\n本轮开题设置（JSON）：\n" + options
 	}
 	previous, err := s.workflowContext(ctx, task, stages, first)
 	if err != nil {

@@ -173,7 +173,7 @@ func (s *Store) acceptableWorkflowMarkdown(ctx context.Context, tx *sql.Tx, run 
 	if !utf8.ValidString(document.Content) || strings.TrimSpace(document.Content) == "" || strings.ContainsRune(document.Content, 0) {
 		return "", invalidWorkflowArtifact("该 Markdown 版本没有可验收的 UTF-8 正文。")
 	}
-	if run.WorkflowKey == paperWorkflow || run.WorkflowKey == reviewWorkflow || run.WorkflowKey == topicWorkflow || run.WorkflowKey == proposalWorkflow {
+	if run.WorkflowKey == paperWorkflow || run.WorkflowKey == reviewWorkflow || run.WorkflowKey == topicWorkflow || isProposalWorkflow(run.WorkflowKey) {
 		var evidence string
 		if err := tx.QueryRowContext(ctx, `SELECT evidence_json FROM workflow_runs WHERE run_id = ?`, run.RunID).Scan(&evidence); err != nil {
 			return "", err
