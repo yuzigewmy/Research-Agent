@@ -34,11 +34,15 @@ type workflowOutputError struct{ err error }
 
 func (e workflowOutputError) Error() string { return e.err.Error() }
 
-func (s *Store) generateWorkflowMarkdown(ctx context.Context, model *inference.Client, projectID string, task Task, input string) (string, error) {
+func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, projectID string, task Task, input string) (taskResult, error) {
 	var key, evidence, options string
-	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json FROM workflow_runs WHERE run_id = ?`,
-		task.workflowRunID).Scan(&key, &evidence, &options); err != nil {
-		return "", err
+	var selectedNumber int
+	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number FROM workflow_runs WHERE run_id = ?`,
+		task.workflowRunID).Scan(&key, &evidence, &options, &selectedNumber); err != nil {
+		return taskResult{}, err
+	}
+	if key == topicWorkflow {
+		return s.generateTopicStep(ctx, model, task, input, evidence, options, selectedNumber)
 	}
 	stages := workflowStages[key]
 	stage := stages[task.workflowStep]
@@ -48,18 +52,18 @@ func (s *Store) generateWorkflowMarkdown(ctx context.Context, model *inference.C
 		if stage.key == "structure" {
 			_, manuscript, err := s.workflowArtifact(ctx, projectID, task.workflowRunID, "manuscript")
 			if err != nil {
-				return "", err
+				return taskResult{}, err
 			}
-			return paperCheck(manuscript), nil
+			return taskResult{markdown: paperCheck(manuscript)}, nil
 		}
 		input += "\n\n本轮写作设置（JSON）：\n" + options
 	}
 	if key == reviewWorkflow || key == paperWorkflow {
 		if err := json.Unmarshal([]byte(evidence), &sources); err != nil {
-			return "", err
+			return taskResult{}, err
 		}
 		if stage.key == "sources" {
-			return reviewSourcesMarkdown(sources), nil
+			return taskResult{markdown: reviewSourcesMarkdown(sources)}, nil
 		}
 		input += "\n\n本轮固定的文献元数据（JSON）：\n" + evidence
 		if key == reviewWorkflow {
@@ -68,15 +72,15 @@ func (s *Store) generateWorkflowMarkdown(ctx context.Context, model *inference.C
 	}
 	previous, err := s.workflowContext(ctx, task, stages, first)
 	if err != nil {
-		return "", err
+		return taskResult{}, err
 	}
 	markdown, err := streamTaskMarkdown(ctx, model, stage.prompt, input+previous)
 	if err == nil && (key == reviewWorkflow || key == paperWorkflow) {
 		if invalid := checkWorkflowCitations(markdown, sources, key == reviewWorkflow); invalid != nil {
-			return "", workflowOutputError{invalid}
+			return taskResult{}, workflowOutputError{invalid}
 		}
 	}
-	return markdown, err
+	return taskResult{markdown: markdown}, err
 }
 
 // ResumeQueuedTasks starts the persisted work that had not begun at shutdown.

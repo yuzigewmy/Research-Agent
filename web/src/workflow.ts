@@ -9,6 +9,7 @@ export const runStatusLabels = {
   CANCELLING: '正在取消本轮',
   CANCELLED: '本轮已取消',
   WAITING_CHECKPOINT: '等待确认',
+  WAITING_TOPIC_CHOICE: '待选题',
   RANGE_COMPLETED: '本次范围已完成',
   COMPLETED: '全部步骤已完成',
   FAILED: '失败',
@@ -70,6 +71,24 @@ export interface WorkflowRunPage {
   nextCursor?: string
 }
 
+interface WorkflowTopicCandidate {
+  number: number
+  title: string
+  summary: string
+  noveltyScore: number
+  strength: string
+  risk: string
+  effort: string
+  evidenceKeys?: string[]
+}
+
+export interface WorkflowTopicChoiceData {
+  candidates: WorkflowTopicCandidate[]
+  recommendedNumber: number
+  recommendationReason: string
+  selectedNumber?: number
+}
+
 export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
@@ -80,6 +99,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   acceptStepKey?: string
   skipStepKey?: string
   acceptedArtifactId?: string
+  topicChoice?: WorkflowTopicChoiceData
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -95,6 +115,7 @@ export interface StartWorkflowInput {
   checkpoints: boolean
   targetPaperCount?: number
   paper?: { language: 'zh' | 'en'; outline?: string }
+  topic?: { requirements?: string }
   throughStep?: string
 }
 
@@ -106,6 +127,10 @@ export interface WorkflowRunActionInput {
 
 export interface ContinueWorkflowInput extends WorkflowRunActionInput {
   throughStep?: string
+}
+
+export interface SelectWorkflowTopicInput extends WorkflowRunActionInput {
+  candidateNumber: number
 }
 
 export interface RerunWorkflowInput extends WorkflowRunActionInput {
@@ -186,6 +211,25 @@ function isRunPage(value: unknown): value is WorkflowRunPage {
     && (page.nextCursor === undefined || typeof page.nextCursor === 'string')
 }
 
+function isTopicCandidate(value: unknown): value is WorkflowTopicCandidate {
+  const candidate = value as Partial<WorkflowTopicCandidate> | null
+  return !!candidate && typeof candidate.number === 'number' && Number.isSafeInteger(candidate.number) && candidate.number > 0
+    && typeof candidate.noveltyScore === 'number' && Number.isInteger(candidate.noveltyScore)
+    && candidate.noveltyScore >= 0 && candidate.noveltyScore <= 10
+    && [candidate.title, candidate.summary, candidate.strength, candidate.risk, candidate.effort]
+      .every((text) => typeof text === 'string')
+    && (candidate.evidenceKeys === undefined || (Array.isArray(candidate.evidenceKeys)
+      && candidate.evidenceKeys.every((key) => typeof key === 'string')))
+}
+
+function isTopicChoice(value: unknown): value is WorkflowTopicChoiceData {
+  const choice = value as Partial<WorkflowTopicChoiceData> | null
+  return !!choice && typeof choice.recommendationReason === 'string'
+    && Array.isArray(choice.candidates) && choice.candidates.every(isTopicCandidate)
+    && choice.candidates.some(({ number }) => number === choice.recommendedNumber)
+    && (choice.selectedNumber === undefined || choice.candidates.some(({ number }) => number === choice.selectedNumber))
+}
+
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
@@ -197,6 +241,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && Array.isArray(run.steps) && run.steps.every(isStep)
     && (run.acceptStepKey === undefined || run.steps.some((step) => step.key === run.acceptStepKey))
     && (run.skipStepKey === undefined || run.steps.some((step) => step.key === run.skipStepKey))
+    && (run.topicChoice === undefined || isTopicChoice(run.topicChoice))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 
@@ -260,6 +305,10 @@ export function acceptWorkflow(projectId: string, input: AcceptWorkflowInput, si
 
 export function skipWorkflow(projectId: string, input: SkipWorkflowInput, signal: AbortSignal) {
   return postRun(`${workflowPath(projectId)}/skip`, input, signal)
+}
+
+export function selectWorkflowTopic(projectId: string, input: SelectWorkflowTopicInput, signal: AbortSignal) {
+  return postRun(`${workflowPath(projectId)}/select-topic`, input, signal)
 }
 
 function workflowStepPath(projectId: string, runId: string, key: string) {

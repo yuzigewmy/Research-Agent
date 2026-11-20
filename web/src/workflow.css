@@ -84,6 +84,35 @@
 .workflow-run-row:hover, .workflow-run-row[aria-expanded='true'] { background: var(--selected); }
 .workflow-run-row:focus-visible { outline-offset: -2px; }
 
+.workflow-topic-requirements, .workflow-topic-choice { inline-size: 100%; min-inline-size: 0; }
+.workflow-topic-requirements textarea {
+  padding: 0.5rem 0.75rem;
+  resize: vertical;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+}
+.workflow-topic-requirements textarea[aria-invalid='true'] { border-color: var(--error); }
+.workflow-topic-selected { display: grid; gap: 0.25rem; }
+.workflow-topic-choice {
+  display: grid;
+  gap: 0.625rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+.workflow-topic-choice legend { font-weight: 650; }
+.workflow-topic-list { margin: 0; padding: 0; list-style: none; }
+.workflow-topic-list > li + li { margin-block-start: 0.625rem; padding-block-start: 0.625rem; border-block-start: 1px solid var(--line); }
+.workflow-topic-option { display: flex; align-items: baseline; gap: 0.5rem; }
+.workflow-topic-option input { flex: none; accent-color: var(--green); }
+.workflow-topic-evaluation > div { display: flex; flex-wrap: wrap; column-gap: 0.5rem; }
+.workflow-topic-evaluation dt { font-weight: 650; }
+.workflow-topic-evaluation dd { min-inline-size: 0; }
+
 .workflow-controls { display: grid; gap: 0.75rem; justify-items: start; }
 .workflow-checkpoint {
   display: flex;

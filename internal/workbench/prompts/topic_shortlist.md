@@ -1,0 +1,1 @@
+比较带编号的研究构想与本轮固定的文献节选，选出 3 至 5 个值得深入的构想。衡量与已知方法的区别、关键风险和预计投入。把新颖性分数表述为本轮文献范围内的初步判断。资料不足时在风险中说明还需核对的证据。返回一个 JSON 对象，包含 candidates、recommendedNumber 和 recommendationReason。每个入围项包含 number（构想原编号）、noveltyScore（0 到 10 的整数）、strength、risk、effort、evidenceKeys（本轮文献键数组，无相关文献时为空）。推荐编号须属于入围项。用用户的语言。

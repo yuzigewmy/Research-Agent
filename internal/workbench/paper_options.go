@@ -20,7 +20,18 @@ type paperOptions struct {
 	Outline  string `json:"outline,omitempty"`
 }
 
-func workflowOptions(key, action string, input *paperOptions) (string, error) {
+func workflowOptions(key, action string, input *paperOptions, topic *topicOptions) (string, error) {
+	if topic != nil {
+		if key != topicWorkflow || action != workflowStart || input != nil {
+			return "", errTopicOptions
+		}
+		requirements := strings.TrimSpace(topic.Requirements)
+		if len(requirements) > 4<<10 || strings.ContainsRune(requirements, 0) {
+			return "", errTopicOptions
+		}
+		body, err := json.Marshal(topicOptions{Requirements: requirements})
+		return string(body), err
+	}
 	if key != paperWorkflow || action != workflowStart {
 		if input != nil {
 			return "", errPaperOptions

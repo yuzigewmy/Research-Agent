@@ -25,6 +25,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path+"/rerun", api.change(workflowRerun))
 	mux.HandleFunc("POST "+path+"/accept", api.accept)
 	mux.HandleFunc("POST "+path+"/skip", api.change(workflowSkip))
+	mux.HandleFunc("POST "+path+"/select-topic", api.change(workflowSelectTopic))
 	mux.HandleFunc("GET "+path+"/runs", api.listRuns)
 	mux.HandleFunc("GET "+path+"/runs/{runId}", api.readRun)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
@@ -86,6 +87,10 @@ func (api workflows) change(action string) http.HandlerFunc {
 				return
 			}
 		}
+		if action == workflowSelectTopic && (input.CandidateNumber < 1 || input.ThroughStep != "") {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择一个入围题目。")
+			return
+		}
 		projectID := r.PathValue("id")
 		run, applied, err := api.store.applyWorkflow(r.Context(), projectID, action, input, api.model != nil)
 		switch {
@@ -103,6 +108,10 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "参考文献数量上限须在 10 至 80 之间。")
 		case errors.Is(err, errPaperOptions):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择有效的写作语言，大纲上限为 16 KiB。")
+		case errors.Is(err, errTopicOptions):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "研究选题的补充要求上限为 4 KiB。")
+		case errors.Is(err, errTopicCandidate):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择本轮的入围题目。")
 		case err != nil:
 			writeTaskError(w, "change workflow run", err)
 		default:
@@ -111,7 +120,7 @@ func (api workflows) change(action string) http.HandlerFunc {
 			}
 			if run.Status == taskQueued && api.model != nil {
 				switch action {
-				case workflowStart, workflowContinue, workflowRerun:
+				case workflowStart, workflowContinue, workflowRerun, workflowSelectTopic:
 					api.store.kickTaskQueue(projectID, api.model)
 				}
 			}

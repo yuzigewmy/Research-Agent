@@ -1,23 +1,27 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
+import type { TemplateId } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
 import type { SkipTarget } from './WorkflowSkipStep'
 import { WorkflowStageAcceptance } from './WorkflowStageAcceptance'
 import type { AcceptanceTarget } from './WorkflowStageAcceptance'
+import { WorkflowSelectedTopic, WorkflowTopicChoice } from './WorkflowTopicChoice'
+import type { TopicSelectionTarget } from './WorkflowTopicChoice'
 import {
   acceptWorkflow, cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow,
-  runStatusLabels, saveManuscript, skipWorkflow, startWorkflow, stepStatusLabels, workflowArtifactPath,
+  runStatusLabels, saveManuscript, selectWorkflowTopic, skipWorkflow, startWorkflow, stepStatusLabels, workflowArtifactPath,
 } from './workflow'
 import type {
-  AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, SkipWorkflowInput, StartWorkflowInput,
-  WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
+  AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, SelectWorkflowTopicInput, SkipWorkflowInput,
+  StartWorkflowInput, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
 import './workflow.css'
 
 const pollInterval = 1_000
 const requestTimeout = 10_000
+const topicRequirementsLimit = 4 * 1024
 
 type Attempt =
   | { kind: 'start'; input: StartWorkflowInput }
@@ -27,15 +31,17 @@ type Attempt =
   | { kind: 'rerun'; input: RerunWorkflowInput }
   | { kind: 'accept'; input: AcceptWorkflowInput }
   | { kind: 'skip'; input: SkipWorkflowInput }
+  | { kind: 'select-topic'; input: SelectWorkflowTopicInput }
 
 type CancelTarget = Omit<WorkflowRunActionInput, 'requestId'>
 type RerunTarget = Omit<RerunWorkflowInput, 'requestId'>
 
 function canRerunStep(run: WorkflowRun, index: number) {
-  const status = run.steps[index]?.status
-  return !isWorkflowActive(run) && run.status !== 'CANCELLED'
-    && (status === 'SUCCEEDED' || status === 'STALE' || status === 'SKIPPED')
-    && run.steps.slice(0, index).every((step) => step.status === 'SUCCEEDED')
+  const step = run.steps[index]
+  if (!step || isWorkflowActive(run) || run.status === 'CANCELLED') return false
+  if (step.key === 'contract' && (run.status === 'WAITING_TOPIC_CHOICE' || !run.topicChoice?.selectedNumber)) return false
+  return (step.status === 'SUCCEEDED' || step.status === 'STALE' || step.status === 'SKIPPED')
+    && run.steps.slice(0, index).every((preceding) => preceding.status === 'SUCCEEDED')
 }
 
 function hasNewerRevision(current: WorkflowRun | null | undefined, incoming: WorkflowRun | null) {
@@ -159,14 +165,21 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
 
 export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   projectId: string
-  templateId: 'experiment' | 'literature_review' | 'paper'
+  templateId: Exclude<TemplateId, 'freeform'>
   onManuscriptSaved: (path: string) => void
 }) {
   const isReview = templateId === 'literature_review'
   const isPaper = templateId === 'paper'
-  const title = isPaper ? '论文写作工作流' : isReview ? '文献综述工作流' : '实验工作流'
-  const checkpointLabel = isPaper ? '生成大纲后，等待我确认再继续'
-    : isReview ? '整理主题后，等待我确认再继续' : '生成实验计划后，等待我确认再继续'
+  const isTopic = templateId === 'topic'
+  const title = {
+    experiment: '实验工作流', literature_review: '文献综述工作流', paper: '论文写作工作流', topic: '研究选题工作流',
+  }[templateId]
+  const checkpointLabel = {
+    experiment: '生成实验计划后，等待我确认再继续',
+    literature_review: '整理主题后，等待我确认再继续',
+    paper: '生成大纲后，等待我确认再继续',
+    topic: '入围后由我确认选题',
+  }[templateId]
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
   const cancelButton = useRef<HTMLButtonElement>(null)
@@ -176,6 +189,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
   const [paperOutline, setPaperOutline] = useState('')
+  const [topicRequirements, setTopicRequirements] = useState('')
   const [throughStep, setThroughStep] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
@@ -195,12 +209,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const completedWithSkip = run?.status === 'COMPLETED' && run.steps.some((step) => step.status === 'SKIPPED')
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED' || cancelled)
   const waiting = run?.status === 'WAITING_CHECKPOINT'
+  const waitingTopic = run?.status === 'WAITING_TOPIC_CHOICE'
   const rangeCompleted = run?.status === 'RANGE_COMPLETED'
   const pausing = run?.status === 'PAUSING'
   const paused = run?.status === 'PAUSED'
   const canContinue = rangeCompleted || waiting || paused || run?.status === 'FAILED' || run?.status === 'INTERRUPTED'
   const canPause = run?.status === 'QUEUED' || run?.status === 'RUNNING'
-  const canCancel = canPause || canContinue
+  const canCancel = canPause || canContinue || waitingTopic
   const selectedCancel = canCancel && cancelTarget && run?.runId === cancelTarget.runId ? cancelTarget : null
   const confirmingCancel = selectedCancel !== null
   const cancelConfirmationId = `${headingId}-cancel-confirmation`
@@ -222,6 +237,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const scopeEnd = run?.steps.find((step) => step.key === run.scope.endStep)
   const modelUnavailable = snapshot?.modelConfigured === false
   const requestBlocked = refreshing || readError !== '' || pending !== null
+  const topicSelectionDisabled = requestBlocked || (modelUnavailable && run?.scope.endStep !== 'shortlist')
   const actionDisabled = requestBlocked || modelUnavailable || ((canStart || rangeCompleted) && !firstStep)
   const rerunDisabled = requestBlocked || modelUnavailable
   const selectedRerun = rerunTarget && run?.runId === rerunTarget.runId ? rerunTarget : null
@@ -232,10 +248,15 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     && run.revision === retry.input.expectedRevision && acceptStep?.key === retry.input.stepKey ? retry : null
   const retrySkip = retry?.kind === 'skip' && run?.runId === retry.input.runId
     && run.revision === retry.input.expectedRevision && skipStep?.key === retry.input.stepKey ? retry : null
+  const retryTopic = retry?.kind === 'select-topic' && waitingTopic && run.runId === retry.input.runId
+    && run.revision === retry.input.expectedRevision ? retry : null
   const acceptanceError = acceptError && run?.runId === acceptError.runId
     && run.revision === acceptError.expectedRevision && acceptStep?.key === acceptError.stepKey ? acceptError : undefined
   const target = Number(targetPaperCount)
   const validTarget = !isReview || (Number.isInteger(target) && target >= 10 && target <= 80)
+  const requirements = topicRequirements.trim()
+  const invalidRequirements = isTopic && (new TextEncoder().encode(requirements).length > topicRequirementsLimit
+    || requirements.includes('\0'))
   const currentRun = useEffectEvent(() => run)
 
   useEffect(() => {
@@ -288,9 +309,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   }
 
   async function submit(...[kind, stepTarget]:
-    | [Exclude<Attempt['kind'], 'accept' | 'skip'>]
+    | [Exclude<Attempt['kind'], 'accept' | 'skip' | 'select-topic'>]
     | ['accept', AcceptanceTarget]
     | ['skip', SkipTarget]
+    | ['select-topic', TopicSelectionTarget]
   ) {
     if (submission.current || requestBlocked) return
     if (kind === 'pause') {
@@ -301,11 +323,15 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       const step = kind === 'accept' ? acceptStep : skipStep
       if (!run || stepTarget.runId !== run.runId || stepTarget.expectedRevision !== run.revision
         || stepTarget.stepKey !== step?.key) return
+    } else if (kind === 'select-topic') {
+      if (topicSelectionDisabled || !waitingTopic || stepTarget.runId !== run.runId
+        || stepTarget.expectedRevision !== run.revision
+        || !run.topicChoice?.candidates.some(({ number }) => number === stepTarget.candidateNumber)) return
     } else if (kind === 'rerun') {
       if (rerunDisabled || !selectedRerun || !run) return
       const index = run.steps.findIndex((step) => step.key === selectedRerun.stepKey)
       if (!canRerunStep(run, index)) return
-    } else if (actionDisabled || (kind === 'start' ? !canStart || !validTarget : !canContinue)) return
+    } else if (actionDisabled || (kind === 'start' ? !canStart || !validTarget || invalidRequirements : !canContinue)) return
     const outline = paperOutline
     if (kind === 'start' && isPaper && new TextEncoder().encode(outline).length > 16_384) {
       setActionError('大纲超过 16 KiB，请缩短后提交。')
@@ -322,6 +348,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       start: retryStart, continue: retryContinue, pause: retryPause, cancel: retryCancel, rerun: retryRerun,
       accept: kind === 'accept' && retryAcceptance?.input.sourceVersionId === stepTarget.sourceVersionId ? retryAcceptance : null,
       skip: kind === 'skip' && retrySkip?.input.reason === stepTarget.reason ? retrySkip : null,
+      'select-topic': kind === 'select-topic' && retryTopic?.input.candidateNumber === stepTarget.candidateNumber ? retryTopic : null,
     }[kind]
     try {
       if (!attempt) {
@@ -330,6 +357,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           attempt = { kind, input: {
             requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
             paper: isPaper ? { language: paperLanguage, outline } : undefined,
+            topic: isTopic ? { requirements: requirements || undefined } : undefined,
             throughStep: endStep || undefined,
           } }
         } else if (kind === 'rerun') {
@@ -341,6 +369,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         } else if (kind === 'accept') {
           attempt = { kind, input: { requestId, ...stepTarget } }
         } else if (kind === 'skip') {
+          attempt = { kind, input: { requestId, ...stepTarget } }
+        } else if (kind === 'select-topic') {
           attempt = { kind, input: { requestId, ...stepTarget } }
         } else {
           if (!run) return
@@ -359,6 +389,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         case 'rerun': updated = await rerunWorkflow(projectId, attempt.input, signal); break
         case 'accept': updated = await acceptWorkflow(projectId, attempt.input, signal); break
         case 'skip': updated = await skipWorkflow(projectId, attempt.input, signal); break
+        case 'select-topic': updated = await selectWorkflowTopic(projectId, attempt.input, signal); break
       }
       if (controller.signal.aborted) return
       setRetry(null)
@@ -368,6 +399,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       if (attempt.kind === 'start') setCheckpoints(false)
       if (attempt.kind === 'accept') setFeedback('已将所选稿件验收为步骤成果。')
       if (attempt.kind === 'skip') setFeedback('已跳过该步骤。')
+      if (attempt.kind === 'select-topic') setFeedback('选题已确认。')
       setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
       if (control instanceof HTMLButtonElement && document.activeElement === control) heading.current?.focus()
       // A replay may return an earlier revision. Read the latest state before accepting another action.
@@ -379,7 +411,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         setRerunTarget(null)
         setCancelTarget(null)
         setFeedback('工作流状态已更新，请查看最新进度。')
-        if ((kind === 'cancel' || kind === 'accept' || kind === 'skip') && document.activeElement === control) heading.current?.focus()
+        if ((kind === 'cancel' || kind === 'accept' || kind === 'skip' || kind === 'select-topic')
+          && document.activeElement === control) heading.current?.focus()
         refresh()
       } else {
         const message = errorMessage(error)
@@ -430,6 +463,12 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         onConfirm: () => void submit('rerun'),
         onCancel: () => setRerunTarget(null),
       }} />}
+      {waitingTopic && run.topicChoice && <WorkflowTopicChoice
+        key={JSON.stringify([projectId, run.runId, run.revision, reload])}
+        choice={run.topicChoice} target={{ runId: run.runId, expectedRevision: run.revision }}
+        disabled={topicSelectionDisabled} pending={pending === 'select-topic'} retryNumber={retryTopic?.input.candidateNumber}
+        onConfirm={(target) => void submit('select-topic', target)} />}
+      <WorkflowSelectedTopic choice={run?.topicChoice} />
       {run && manuscript?.artifactId && <ManuscriptHandoff key={manuscript.artifactId}
         projectId={projectId} runId={run.runId} artifactId={manuscript.artifactId} onSaved={onManuscriptSaved} />}
       {run && acceptStep && <WorkflowStageAcceptance key={JSON.stringify([projectId, run.runId, run.revision, acceptStep.key, reload])}
@@ -450,8 +489,18 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {feedback && <p className="workflow-note" role="status">{feedback}</p>}
       {modelUnavailable && <p className="workflow-note">请配置研究模型，然后刷新工作流状态。</p>}
-      {(canStart || canContinue || canPause || readError || modelUnavailable) && (
+      {(canStart || canCancel || readError || modelUnavailable) && (
         <div className="workflow-controls">
+          {canStart && isTopic && <div className="field workflow-topic-requirements">
+            <label htmlFor={`${headingId}-topic-requirements`}>选题要求</label>
+            <textarea id={`${headingId}-topic-requirements`} rows={3} value={topicRequirements}
+              readOnly={actionDisabled || retryStart !== null} aria-invalid={invalidRequirements || undefined}
+              aria-describedby={`${headingId}-topic-input`} onChange={(event) => setTopicRequirements(event.currentTarget.value)} />
+            <p id={`${headingId}-topic-input`} className={invalidRequirements ? 'form-error' : 'workflow-note'}>
+              {invalidRequirements ? '选题要求须为 4 KiB 以内且不含空字符。'
+                : '选填，最多 4 KiB（UTF-8）。选题要求和本轮文献元数据将发送给研究模型。'}
+            </p>
+          </div>}
           {canStart && isReview && <div className="field">
             <label htmlFor={`${headingId}-papers`}>纳入文献数量上限</label>
             <input id={`${headingId}-papers`} type="number" min={10} max={80} step={1} value={targetPaperCount}
@@ -509,7 +558,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           </p>}
           <div className="workflow-actions">
             {canStart && (
-              <button className="button primary" type="button" disabled={!validTarget || (actionDisabled && pending !== 'start')}
+              <button className="button primary" type="button"
+                disabled={!validTarget || invalidRequirements || (actionDisabled && pending !== 'start')}
                 aria-disabled={pending === 'start'} onClick={() => void submit('start')}>
                 {pending === 'start' ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>
@@ -558,7 +608,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         </div>
       )}
       <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId}
-        renderSteps={(historicalRun) => <WorkflowSteps projectId={projectId} run={historicalRun} />} />
+        renderSteps={(historicalRun) => <>
+          <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
+          <WorkflowSteps projectId={projectId} run={historicalRun} />
+        </>} />
     </section>
   )
 }

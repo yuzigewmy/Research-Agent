@@ -140,34 +140,32 @@ func (workers *taskWorkers) close() {
 }
 
 type taskResult struct {
-	markdown string
-	findings []reviewFinding
+	markdown  string
+	findings  []reviewFinding
+	topicData string
 }
 
 func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
-	if task.reviewVersionID != "" {
+	switch {
+	case task.reviewVersionID != "":
 		return s.generateManuscriptReview(ctx, model, projectID, task)
-	}
-	markdown, err := s.generateTaskMarkdown(ctx, model, projectID, task)
-	return taskResult{markdown: markdown}, err
-}
-
-func (s *Store) generateTaskMarkdown(ctx context.Context, model *inference.Client, projectID string, task Task) (string, error) {
-	if task.findingRecheck {
-		return s.generateFindingRecheck(ctx, model, projectID, task)
-	}
-	if task.selectionEdit {
-		return s.generateSelectionEdit(ctx, model, projectID, task)
+	case task.findingRecheck:
+		markdown, err := s.generateFindingRecheck(ctx, model, projectID, task)
+		return taskResult{markdown: markdown}, err
+	case task.selectionEdit:
+		markdown, err := s.generateSelectionEdit(ctx, model, projectID, task)
+		return taskResult{markdown: markdown}, err
 	}
 	project, err := s.getProject(ctx, projectID)
 	if err != nil {
-		return "", err
+		return taskResult{}, err
 	}
 	input := fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, task.Instruction)
 	if task.workflowRunID != "" {
-		return s.generateWorkflowMarkdown(ctx, model, projectID, task, input)
+		return s.generateWorkflowResult(ctx, model, projectID, task, input)
 	}
-	return streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
+	markdown, err := streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
+	return taskResult{markdown: markdown}, err
 }
 
 func streamTaskMarkdown(ctx context.Context, model *inference.Client, prompt, input string) (string, error) {

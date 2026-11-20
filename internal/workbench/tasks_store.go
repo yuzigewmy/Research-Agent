@@ -278,9 +278,11 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
 		message = CASE WHEN status = 'RUNNING' THEN ? ELSE '' END,
 		markdown = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END,
-		review_findings = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '[]' END
+		review_findings = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '[]' END,
+		workflow_topic_data = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END
 		WHERE project_id = ? AND task_id = ? AND status IN ('RUNNING', 'CANCELLING')
-		RETURNING status`, status, message, status, result.markdown, status, findings, projectID, task.TaskID).Scan(&status)
+		RETURNING status`, status, message, status, result.markdown, status, findings, status, result.topicData,
+		projectID, task.TaskID).Scan(&status)
 	if err != nil {
 		return err
 	}

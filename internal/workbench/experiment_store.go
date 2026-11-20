@@ -103,10 +103,12 @@ type WorkflowRun struct {
 	Steps            []WorkflowStep `json:"steps"`
 	AcceptStepKey    string         `json:"acceptStepKey,omitempty"`
 	SkipStepKey      string         `json:"skipStepKey,omitempty"`
+	TopicChoice      *topicChoice   `json:"topicChoice,omitempty"`
 	step             int
 	rangeStart       int
 	rangeEnd         int
 	stepTaskID       string
+	selectedTopic    int
 }
 
 type WorkflowStep struct {
@@ -127,8 +129,10 @@ type workflowRequest struct {
 	ThroughStep      string        `json:"throughStep"`
 	StepKey          string        `json:"stepKey"`
 	Reason           string        `json:"reason"`
+	CandidateNumber  int           `json:"candidateNumber"`
 	TargetPaperCount int           `json:"targetPaperCount"`
 	Paper            *paperOptions `json:"paper"`
+	Topic            *topicOptions `json:"topic"`
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -145,11 +149,11 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	var skipReason string
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
-		w.range_start, w.range_end, COALESCE(r.skip_reason, '')
+		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step,
-			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason)
+			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -167,7 +171,7 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING"}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT t.workflow_step, t.task_id, t.status, t.message, t.workflow_superseded, history.artifacts,
-		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, '')
+		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, ''), t.workflow_topic_data
 		FROM tasks t JOIN (
 			SELECT MAX(ordinal) AS latest, COUNT(CASE WHEN status = 'SUCCEEDED' THEN 1 END) AS artifacts
 			FROM tasks WHERE workflow_run_id = ? GROUP BY workflow_step
@@ -180,10 +184,10 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	for rows.Next() {
 		var index, count int
 		var superseded bool
-		var id, status, message string
+		var id, status, message, topicData string
 		var source workflowArtifactSource
 		if err := rows.Scan(&index, &id, &status, &message, &superseded, &count,
-			&source.VersionID, &source.Path, &source.SHA256); err != nil {
+			&source.VersionID, &source.Path, &source.SHA256, &topicData); err != nil {
 			return WorkflowRun{}, err
 		}
 		step := &run.Steps[index]
@@ -202,6 +206,14 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 			step.ArtifactID = id
 			if source.VersionID != "" {
 				step.Source = &source
+			}
+			if run.WorkflowKey == topicWorkflow && index == topicShortlistStep {
+				var choice topicChoice
+				if err := json.Unmarshal([]byte(topicData), &choice); err != nil {
+					return WorkflowRun{}, err
+				}
+				choice.SelectedNumber = run.selectedTopic
+				run.TopicChoice = &choice
 			}
 		}
 	}
@@ -233,19 +245,20 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	options, err := workflowOptions(key, action, req.Paper)
+	options, err := workflowOptions(key, action, req.Paper, req.Topic)
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
 
 	var runID, recordedAction, recordedEnd, recordedStep, recordedReason string
-	var revision int
-	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key, skip_reason FROM workflow_requests
-		WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).
-		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep, &recordedReason)
+	var revision, recordedCandidate int
+	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key, skip_reason, topic_number
+		FROM workflow_requests WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).
+		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep, &recordedReason, &recordedCandidate)
 	if err == nil {
 		if recordedAction != action || revision != req.ExpectedRevision || recordedEnd != req.ThroughStep ||
-			recordedStep != req.StepKey || recordedReason != req.Reason || (action != workflowStart && runID != req.RunID) {
+			recordedStep != req.StepKey || recordedReason != req.Reason || recordedCandidate != req.CandidateNumber ||
+			(action != workflowStart && runID != req.RunID) {
 			return WorkflowRun{}, false, errRequestConflict
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
@@ -253,7 +266,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			if req.Checkpoints != run.Checkpoints || target != run.TargetPaperCount {
 				return WorkflowRun{}, false, errRequestConflict
 			}
-			if run.WorkflowKey == paperWorkflow {
+			if run.WorkflowKey == paperWorkflow || run.WorkflowKey == topicWorkflow {
 				var saved string
 				if err := tx.QueryRowContext(ctx, `SELECT options_json FROM workflow_runs WHERE run_id = ?`, runID).Scan(&saved); err != nil {
 					return WorkflowRun{}, false, err
@@ -298,7 +311,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		}
 	case workflowCancel:
 		switch current.Status {
-		case taskQueued, taskRunning, workflowPaused, workflowWaiting, workflowRangeCompleted, taskFailed, taskInterrupted:
+		case taskQueued, taskRunning, workflowPaused, workflowWaiting, workflowWaitingTopic, workflowRangeCompleted, taskFailed, taskInterrupted:
 		default:
 			return WorkflowRun{}, false, errWorkflowState
 		}
@@ -311,7 +324,24 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		if err != nil {
 			return WorkflowRun{}, false, err
 		}
+		if key == topicWorkflow {
+			if step == topicContractStep && current.selectedTopic == 0 {
+				return WorkflowRun{}, false, errWorkflowState
+			}
+			if step <= topicShortlistStep {
+				current.selectedTopic = 0
+			}
+		}
 		current.step, current.rangeStart, current.rangeEnd = step, step, step
+	case workflowSelectTopic:
+		if current.Status != workflowWaitingTopic || current.TopicChoice == nil {
+			return WorkflowRun{}, false, errWorkflowState
+		}
+		if _, ok := current.TopicChoice.candidate(req.CandidateNumber); !ok {
+			return WorkflowRun{}, false, errTopicCandidate
+		}
+		current.selectedTopic = req.CandidateNumber
+		queuesWork = current.rangeEnd != topicShortlistStep
 	case workflowSkip:
 		if current.SkipStepKey == "" || current.SkipStepKey != req.StepKey {
 			return WorkflowRun{}, false, errWorkflowState
@@ -338,9 +368,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	switch action {
 	case workflowStart:
 		evidence := "[]"
-		if key == reviewWorkflow || key == paperWorkflow {
+		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow {
 			limit := target
-			if key == paperWorkflow {
+			if key != reviewWorkflow {
 				limit = defaultReviewTarget
 			}
 			sources, err := freezeLiteratureSources(ctx, tx, projectID, limit)
@@ -389,10 +419,14 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, err
 		}
 		fallthrough
-	case workflowContinue:
-		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'QUEUED', revision = revision + 1,
-			step_no = ?, range_start = ?, range_end = ?, skipped_request_id = NULL WHERE run_id = ?`,
-			current.step, current.rangeStart, current.rangeEnd, current.RunID)
+	case workflowContinue, workflowSelectTopic:
+		status := taskQueued
+		if !queuesWork {
+			status = workflowRangeCompleted
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, revision = revision + 1,
+			step_no = ?, range_start = ?, range_end = ?, skipped_request_id = NULL, selected_topic_number = ? WHERE run_id = ?`,
+			status, current.step, current.rangeStart, current.rangeEnd, current.selectedTopic, current.RunID)
 	}
 	if err != nil {
 		return WorkflowRun{}, false, err
@@ -403,9 +437,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_requests
-		(project_id, request_id, run_id, action, expected_revision, through_step, step_key, skip_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision,
-		req.ThroughStep, req.StepKey, req.Reason); err != nil {
+		(project_id, request_id, run_id, action, expected_revision, through_step, step_key, skip_reason, topic_number)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision,
+		req.ThroughStep, req.StepKey, req.Reason, req.CandidateNumber); err != nil {
 		return WorkflowRun{}, false, err
 	}
 	run, err := readWorkflow(ctx, tx, projectID, current.RunID)
@@ -466,10 +500,22 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 			return err
 		}
 		stages = workflowStages[key]
+		if key == topicWorkflow && step == topicShortlistStep && !checkpoints {
+			choice, err := readTopicStep[topicChoice](ctx, tx, task.workflowRunID, step)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET selected_topic_number = ? WHERE run_id = ?`,
+				choice.RecommendedNumber, task.workflowRunID); err != nil {
+				return err
+			}
+		}
 		if step+1 == len(stages) {
 			status = workflowDone
 		} else {
 			switch {
+			case checkpoints && key == topicWorkflow && step == topicShortlistStep:
+				status = workflowWaitingTopic
 			case step == end:
 				status = workflowRangeCompleted
 			case checkpoints && stages[step].checkpoint:

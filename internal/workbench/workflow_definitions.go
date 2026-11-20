@@ -23,11 +23,21 @@ var paperOutlinePrompt string
 //go:embed prompts/paper_draft.md
 var paperDraftPrompt string
 
+//go:embed prompts/topic_brainstorm.md
+var topicBrainstormPrompt string
+
+//go:embed prompts/topic_shortlist.md
+var topicShortlistPrompt string
+
+//go:embed prompts/topic_contract.md
+var topicContractPrompt string
+
 const (
 	experimentWorkflowV1 = "experiment-v1"
 	experimentWorkflow   = "experiment-v2"
 	reviewWorkflow       = "literature-v1"
 	paperWorkflow        = "paper-v1"
+	topicWorkflow        = "topic-v1"
 )
 
 type workflowStage struct {
@@ -58,10 +68,17 @@ var workflowStages = map[string][]workflowStage{
 		{key: "manuscript", title: "撰写论文稿件", prompt: paperDraftPrompt, acceptMarkdown: true},
 		{key: "structure", title: "核对稿件结构"},
 	},
+	topicWorkflow: {
+		{key: "sources", title: "固定本轮文献"},
+		{key: "brainstorm", title: "生成研究构想", prompt: topicBrainstormPrompt},
+		{key: "shortlist", title: "评估并筛选构想", prompt: topicShortlistPrompt},
+		{key: "contract", title: "编写研究方案", prompt: topicContractPrompt, acceptMarkdown: true},
+	},
 }
 
 var projectWorkflows = map[string]string{
 	"experiment":        experimentWorkflow,
 	"literature_review": reviewWorkflow,
 	"paper":             paperWorkflow,
+	"topic":             topicWorkflow,
 }
