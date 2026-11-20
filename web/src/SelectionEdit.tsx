@@ -22,6 +22,8 @@ interface SelectionEditProps {
 const statusLabels = {
   QUEUED: '建议已排队',
   RUNNING: '正在生成建议…',
+  CANCELLING: '正在取消',
+  CANCELLED: '建议生成已取消',
   SUCCEEDED: '建议已生成',
   FAILED: '生成建议失败',
   INTERRUPTED: '生成已中断',
@@ -64,7 +66,7 @@ function isDocument(value: unknown): value is Document {
 }
 
 function active(edit?: EditRecord) {
-  return edit?.status === 'QUEUED' || edit?.status === 'RUNNING'
+  return edit?.status === 'QUEUED' || edit?.status === 'RUNNING' || edit?.status === 'CANCELLING'
 }
 
 function readSavedEdit(key: string) {

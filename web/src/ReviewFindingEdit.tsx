@@ -5,7 +5,8 @@ import { isFileRecord } from './workspace'
 import type { Document } from './workspace'
 
 const editLabels = {
-  QUEUED: '修订已排队', RUNNING: '正在生成修订', SUCCEEDED: '修订已生成', FAILED: '生成修订失败', INTERRUPTED: '生成已中断',
+  QUEUED: '修订已排队', RUNNING: '正在生成修订', CANCELLING: '正在取消', CANCELLED: '修订生成已取消',
+  SUCCEEDED: '修订已生成', FAILED: '生成修订失败', INTERRUPTED: '生成已中断',
 } as const
 
 export type FindingEdit = {
@@ -70,13 +71,14 @@ function editPath(projectId: string, versionId: string, editId: string) {
 }
 
 function isActive(edit?: FindingEdit) {
-  return edit?.status === 'QUEUED' || edit?.status === 'RUNNING'
+  return edit?.status === 'QUEUED' || edit?.status === 'RUNNING' || edit?.status === 'CANCELLING'
 }
 
 function mergeEdit(current: FindingEdit | undefined, latest: FindingEdit) {
   if (current?.editId !== latest.editId) return latest
   if (current.appliedVersionId || (!isActive(current) && isActive(latest))
-    || (current.status === 'RUNNING' && latest.status === 'QUEUED')) return current
+    || (current.status === 'RUNNING' && latest.status === 'QUEUED')
+    || (current.status === 'CANCELLING' && (latest.status === 'QUEUED' || latest.status === 'RUNNING'))) return current
   return latest
 }
 
@@ -136,12 +138,12 @@ export function ReviewFindingEdit({ projectId, reviewId, route, finding, expande
   const mutation = useRef<{ controller: AbortController; release?: () => void } | null>(null)
   const baseVersion = revisionActions?.versionId
   const active = isActive(edit)
-  const failed = edit?.status === 'FAILED' || edit?.status === 'INTERRUPTED'
+  const endedWithoutSuggestion = edit?.status === 'FAILED' || edit?.status === 'INTERRUPTED' || edit?.status === 'CANCELLED'
   const stale = !!edit && edit.versionId !== baseVersion
   const hasConflict = conflictVersion !== undefined && conflictVersion === baseVersion
   const blocked = !revisionActions || !isId(baseVersion) || revisionActions.disabled || !!pending || hasConflict
   const canGenerate = !blocked && !!modelConfigured && !active && !edit?.appliedVersionId
-    && (!edit || failed || stale || edit.replacement === undefined)
+    && (!edit || endedWithoutSuggestion || stale || edit.replacement === undefined)
   const canApply = !blocked && !stale && edit?.status === 'SUCCEEDED'
     && edit.replacement !== undefined && !edit.appliedVersionId
   const editId = edit?.editId
@@ -266,7 +268,7 @@ export function ReviewFindingEdit({ projectId, reviewId, route, finding, expande
     </>}
     {readError && <p className="form-error" role="alert">{readError}</p>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
-    {revisionActions && !active && !edit?.appliedVersionId && (!edit || failed || stale || edit.replacement === undefined) && <>
+    {revisionActions && !active && !edit?.appliedVersionId && (!edit || endedWithoutSuggestion || stale || edit.replacement === undefined) && <>
       <p className="workspace-note">生成修订会将所引原文、邻近文字和评审意见发送给模型。</p>
       <div className="workspace-actions">
         <button className="button outline" type="button" disabled={!canGenerate} onClick={() => void generate()}>

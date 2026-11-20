@@ -6,7 +6,8 @@ import { isReviewFinding, ReviewFindings } from './ReviewFindingEdit'
 import type { RevisionActions, ReviewFinding } from './ReviewFindingEdit'
 
 const statusLabels = {
-  QUEUED: '排队中', RUNNING: '评审中', SUCCEEDED: '已完成', FAILED: '评审失败', INTERRUPTED: '已中断',
+  QUEUED: '排队中', RUNNING: '评审中', CANCELLING: '正在取消', CANCELLED: '已取消',
+  SUCCEEDED: '已完成', FAILED: '评审失败', INTERRUPTED: '已中断',
 } as const
 const reviewDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const pollInterval = 2_000
@@ -65,11 +66,11 @@ function requestSignal(controller: AbortController) {
 }
 
 function isActive(review: Review) {
-  return review.status === 'QUEUED' || review.status === 'RUNNING'
+  return review.status === 'QUEUED' || review.status === 'RUNNING' || review.status === 'CANCELLING'
 }
 
 function canRetry(review: Review) {
-  return review.status === 'FAILED' || review.status === 'INTERRUPTED'
+  return review.status === 'FAILED' || review.status === 'INTERRUPTED' || review.status === 'CANCELLED'
 }
 
 function reviewPath(route: string, reviewId: string) {

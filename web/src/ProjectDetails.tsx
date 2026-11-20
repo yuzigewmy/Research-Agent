@@ -4,6 +4,7 @@ import { DiagramPanel } from './DiagramPanel'
 import { LiteraturePanel } from './LiteraturePanel'
 import { MaterialPanel } from './MaterialPanel'
 import { ProjectAdministration } from './ProjectAdministration'
+import { ProjectTaskQueue } from './ProjectTaskQueue'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
 import type { Task } from './tasks'
@@ -59,6 +60,8 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
   const [workflowRefresh, setWorkflowRefresh] = useState(0)
   const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
+
+  const refreshWorkflow = useCallback(() => setWorkflowRefresh((version) => version + 1), [])
 
   const onTaskChanged = useCallback((task: Task) => {
     setTaskUpdates((previous) => {
@@ -137,6 +140,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         setDetail({ kind: 'ready', project: updated })
         onUpdated(updated)
       }} />
+      <ProjectTaskQueue projectId={project.projectId} onStopped={refreshWorkflow} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)} />
       <SurveyPanel projectId={project.projectId} />
@@ -151,7 +155,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         manuscriptIntake={project.templateId === 'automatic_review'} />
       <DiagramPanel projectId={project.projectId} />
       <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
-        onClearReferences={clearReferences} onWorkflowConfirmed={() => setWorkflowRefresh((version) => version + 1)}
+        onClearReferences={clearReferences} onWorkflowConfirmed={refreshWorkflow}
         taskSync={taskSync} />
     </div>
   )

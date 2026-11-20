@@ -2,7 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { errorMessage, request } from './projects'
 
 const statusLabels = {
-  QUEUED: '复查已排队', RUNNING: '正在复查', SUCCEEDED: '复查已完成', FAILED: '复查失败', INTERRUPTED: '复查已中断',
+  QUEUED: '复查已排队', RUNNING: '正在复查', CANCELLING: '正在取消', CANCELLED: '复查已取消',
+  SUCCEEDED: '复查已完成', FAILED: '复查失败', INTERRUPTED: '复查已中断',
 } as const
 const verdictLabels = { RESOLVED: '已处理', OPEN: '仍需处理', UNVERIFIABLE: '证据不足' } as const
 
@@ -56,7 +57,7 @@ export function FindingRecheck({ editPath, versionId, findingNumber, modelConfig
         if (controller.signal.aborted) return
         setResult(next)
         setReadError('')
-        if (modelConfigured && (next?.status === 'QUEUED' || next?.status === 'RUNNING')) {
+        if (modelConfigured && (next?.status === 'QUEUED' || next?.status === 'RUNNING' || next?.status === 'CANCELLING')) {
           timer = window.setTimeout(() => void read(), 2_000)
         }
       } catch (error) {
@@ -96,7 +97,8 @@ export function FindingRecheck({ editPath, versionId, findingNumber, modelConfig
     }
   }
 
-  const canSubmit = !!modelConfigured && (result === null || result?.status === 'FAILED' || result?.status === 'INTERRUPTED')
+  const canStart = result === null || result?.status === 'FAILED' || result?.status === 'INTERRUPTED' || result?.status === 'CANCELLED'
+  const canSubmit = !!modelConfigured && canStart
   return <section className="workspace-preview" aria-labelledby={id}>
     <strong id={id}>意见复查</strong>
     {result === undefined && !readError && <p className="workspace-note" role="status">正在读取复查记录…</p>}
@@ -109,7 +111,7 @@ export function FindingRecheck({ editPath, versionId, findingNumber, modelConfig
       {result.line && result.quote && <blockquote className="workspace-text" dir="auto">第 {result.line} 行　{result.quote}</blockquote>}
       {result.message && <p className="workspace-note">{result.message}</p>}
     </>}
-    {modelConfigured === false && (result === null || result?.status === 'QUEUED' || result?.status === 'FAILED' || result?.status === 'INTERRUPTED') &&
+    {modelConfigured === false && (canStart || result?.status === 'QUEUED') &&
       <p className="workspace-note">配置模型后可运行复查。</p>}
     {readError && <p className="form-error" role="alert">{readError}</p>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}

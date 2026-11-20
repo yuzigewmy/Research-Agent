@@ -177,7 +177,7 @@ func (s *Store) retryAutomaticReview(ctx context.Context, projectID, versionID, 
 	if review.Revision != revision {
 		return automaticReview{}, false, errTaskRevision
 	}
-	if review.Status != taskFailed && review.Status != taskInterrupted {
+	if !canRetryReview(review.Status) {
 		return automaticReview{}, false, errManuscriptReviewState
 	}
 	if !modelReady {
@@ -205,6 +205,11 @@ func (s *Store) saveAutomaticReviewProgress(ctx context.Context, projectID strin
 		return err
 	}
 	defer tx.Rollback()
+	if err := tx.QueryRowContext(ctx, `UPDATE tasks SET revision = revision + 1
+		WHERE project_id = ? AND task_id = ? AND status = 'RUNNING' RETURNING revision`, projectID, review.ReviewID).
+		Scan(&review.Revision); err != nil {
+		return err
+	}
 	if revised != nil {
 		// A new round has its own path. Publishing a revision never replaces a manuscript path.
 		if _, err := currentWorkspaceFile(ctx, tx, projectID, workPath); !errors.Is(err, sql.ErrNoRows) {
@@ -221,9 +226,6 @@ func (s *Store) saveAutomaticReviewProgress(ctx context.Context, projectID strin
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE automatic_reviews SET working_version_id = ?, rounds_json = ?
 		WHERE project_id = ? AND task_id = ?`, review.workVersion, string(encoded), projectID, review.ReviewID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET revision = revision + 1 WHERE project_id = ? AND task_id = ?`, projectID, review.ReviewID); err != nil {
 		return err
 	}
 	return tx.Commit()

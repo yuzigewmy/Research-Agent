@@ -21,6 +21,10 @@ const retryManuscriptReview = "retry-review"
 
 var errManuscriptReviewState = errors.New("review cannot be retried in its current state")
 
+func canRetryReview(status string) bool {
+	return status == taskFailed || status == taskInterrupted || status == taskCancelled
+}
+
 type manuscriptReview struct {
 	ReviewID     string          `json:"reviewId"`
 	Target       string          `json:"target"`
@@ -122,7 +126,7 @@ func (s *Store) retryManuscriptReview(ctx context.Context, projectID string, fil
 	if review.Revision != revision {
 		return manuscriptReview{}, false, errTaskRevision
 	}
-	if review.Status != taskFailed && review.Status != taskInterrupted {
+	if !canRetryReview(review.Status) {
 		return manuscriptReview{}, false, errManuscriptReviewState
 	}
 	if !modelReady {

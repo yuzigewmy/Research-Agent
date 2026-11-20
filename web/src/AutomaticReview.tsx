@@ -5,7 +5,8 @@ import { isReviewFinding } from './ReviewFindingEdit'
 import type { ReviewFinding } from './ReviewFindingEdit'
 
 const statusLabels = {
-  QUEUED: '排队中', RUNNING: '审稿中', SUCCEEDED: '已完成', FAILED: '审稿失败', INTERRUPTED: '已中断',
+  QUEUED: '排队中', RUNNING: '审稿中', CANCELLING: '正在取消', CANCELLED: '已取消',
+  SUCCEEDED: '已完成', FAILED: '审稿失败', INTERRUPTED: '已中断',
 } as const
 const stopLabels = {
   TARGET_MET: '达到目标分数', MAX_ROUNDS: '达到轮次上限', NO_PROGRESS: '没有可继续的修改',
@@ -82,11 +83,11 @@ function requestSignal(controller: AbortController) {
 }
 
 function isActive(review: AutoReview) {
-  return review.status === 'QUEUED' || review.status === 'RUNNING'
+  return review.status === 'QUEUED' || review.status === 'RUNNING' || review.status === 'CANCELLING'
 }
 
 function canRetry(review: AutoReview) {
-  return review.status === 'FAILED' || review.status === 'INTERRUPTED'
+  return review.status === 'FAILED' || review.status === 'INTERRUPTED' || review.status === 'CANCELLED'
 }
 
 function reviewPath(route: string, reviewId: string) {

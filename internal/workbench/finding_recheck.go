@@ -199,7 +199,7 @@ func (s *Store) queueFindingRecheck(ctx context.Context, projectID, versionID, e
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return FindingRecheck{}, false, err
 	}
-	created := recheck.Status != taskQueued && recheck.Status != taskRunning && recheck.Status != taskSucceeded
+	created := recheck.Status != taskQueued && recheck.Status != taskRunning && recheck.Status != taskCancelling && recheck.Status != taskSucceeded
 	if created {
 		if !modelReady {
 			return FindingRecheck{}, false, errModelUnavailable
