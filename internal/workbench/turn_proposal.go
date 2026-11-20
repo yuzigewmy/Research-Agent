@@ -30,10 +30,11 @@ const turnProposalSchema = `
 `
 
 type sendTurnInput struct {
-	RequestID    string   `json:"requestId"`
-	Text         string   `json:"text"`
-	ReferenceIDs []string `json:"referenceIds"`
-	Mode         string   `json:"mode"`
+	RequestID    string              `json:"requestId"`
+	Text         string              `json:"text"`
+	ReferenceIDs []string            `json:"referenceIds"`
+	PDFQuotes    map[string]pdfQuote `json:"pdfQuotes"`
+	Mode         string              `json:"mode"`
 }
 
 var researchTaskTool = inference.Tool{

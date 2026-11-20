@@ -3,8 +3,10 @@ package workbench
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 const turnReferenceSchema = `
@@ -22,10 +24,18 @@ type TurnReference struct {
 	Name       string `json:"name"`
 	SHA256     string `json:"sha256"`
 	Format     string `json:"format,omitempty"`
+	Page       int    `json:"page,omitempty"`
+	Quote      string `json:"quote,omitempty"`
 }
 
-func validTurnReferenceIDs(ids []string) bool {
-	if len(ids) > maxTurnReferences {
+type pdfQuote struct {
+	SHA256 string `json:"sha256"`
+	Page   int    `json:"page"`
+	Text   string `json:"text"`
+}
+
+func validTurnReferences(ids []string, quotes map[string]pdfQuote) bool {
+	if len(ids) > maxTurnReferences || len(quotes) > len(ids) {
 		return false
 	}
 	seen := make(map[string]bool, len(ids))
@@ -35,10 +45,19 @@ func validTurnReferenceIDs(ids []string) bool {
 		}
 		seen[id] = true
 	}
+	for id, quote := range quotes {
+		if !seen[id] || len(quote.SHA256) != 64 || quote.Page < 1 || quote.Page > 1<<31-1 ||
+			len(quote.Text) > referenceExcerptBytes || strings.TrimSpace(quote.Text) == "" || strings.ContainsRune(quote.Text, 0) {
+			return false
+		}
+		if _, err := hex.DecodeString(quote.SHA256); err != nil {
+			return false
+		}
+	}
 	return true
 }
 
-func resolveTurnReferences(ctx context.Context, tx *sql.Tx, projectID string, ids []string) ([]TurnReference, error) {
+func resolveTurnReferences(ctx context.Context, tx *sql.Tx, projectID string, ids []string, quotes map[string]pdfQuote) ([]TurnReference, error) {
 	references := make([]TurnReference, 0, len(ids))
 	for _, id := range ids {
 		ref := TurnReference{MaterialID: id}
@@ -52,7 +71,12 @@ func resolveTurnReferences(ctx context.Context, tx *sql.Tx, projectID string, id
 			return nil, err
 		}
 		ref.Format = materialFormat(ref.Name, kind)
-		if kind != "text" && ref.Format != "word" {
+		if quote, selected := quotes[id]; selected {
+			if ref.Format != "pdf" || ref.SHA256 != quote.SHA256 {
+				return nil, errInvalidTurnReference
+			}
+			ref.Page, ref.Quote = quote.Page, quote.Text
+		} else if kind != "text" && ref.Format != "word" {
 			return nil, errInvalidTurnReference
 		}
 		references = append(references, ref)
@@ -68,9 +92,15 @@ type turnMaterialExcerpt struct {
 func (s *Store) turnMaterialExcerpts(ctx context.Context, references []TurnReference) ([]turnMaterialExcerpt, error) {
 	materials := make([]turnMaterialExcerpt, 0, len(references))
 	for _, ref := range references {
-		excerpt, err := s.materialExcerpt(ctx, ref.SHA256, ref.Format, referenceExcerptBytes)
-		if err != nil {
-			return nil, err
+		excerpt := MaterialPreview{Text: ref.Quote}
+		if ref.Page != 0 {
+			ref.Quote = ""
+		} else {
+			var err error
+			excerpt, err = s.materialExcerpt(ctx, ref.SHA256, ref.Format, referenceExcerptBytes)
+			if err != nil {
+				return nil, err
+			}
 		}
 		materials = append(materials, turnMaterialExcerpt{ref, excerpt})
 	}

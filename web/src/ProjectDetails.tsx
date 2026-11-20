@@ -73,9 +73,19 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
     else sessionStorage.removeItem(referenceKey)
   }, [referenceKey, references])
 
-  const clearReferences = useCallback((ids: string[]) => {
-    if (ids.length) setReferences((current) => current.filter((reference) => !ids.includes(reference.materialId)))
+  const clearReferences = useCallback((matches: (reference: TurnReference) => boolean) => {
+    setReferences((current) => current.filter((reference) => !matches(reference)))
   }, [])
+
+  function addPdfQuote({ materialId, name, sha256 }: Material, page: number, quote: string) {
+    const selection = { materialId, name, sha256, page, quote }
+    setReferences((current) => {
+      if (current.some((reference) => reference.materialId === materialId)) {
+        return current.map((reference) => reference.materialId === materialId ? selection : reference)
+      }
+      return current.length < turnReferenceLimit ? [...current, selection] : current
+    })
+  }
 
   function toggleReference({ materialId, name, sha256 }: Material) {
     setReferences((current) => {
@@ -127,7 +137,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         onUpdated(updated)
       }} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
-        referenceIds={references.map(({ materialId }) => materialId)} />
+        onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)} />
       <SurveyPanel projectId={project.projectId} />
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
         || project.templateId === 'topic' || project.templateId === 'proposal') && <LiteraturePanel projectId={project.projectId} />}

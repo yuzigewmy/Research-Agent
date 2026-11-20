@@ -71,10 +71,11 @@ function MaterialPreviewContent({ projectId, material }: { projectId: string; ma
 interface MaterialPanelProps {
   projectId: string
   onReference?: (material: Material) => void
+  onPdfQuote?: (material: Material, page: number, text: string) => void
   referenceIds?: string[]
 }
 
-export function MaterialPanel({ projectId, onReference, referenceIds = [] }: MaterialPanelProps) {
+export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [] }: MaterialPanelProps) {
   const headingId = useId()
   const [items, setItems] = useState<Material[]>([])
   const [nextCursor, setNextCursor] = useState<string>()
@@ -198,7 +199,8 @@ export function MaterialPanel({ projectId, onReference, referenceIds = [] }: Mat
               {canPreview && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
                 {isOpen && (isPdf ? (
                   <Suspense fallback={<p className="material-note" role="status">正在加载 PDF 查看器…</p>}>
-                    <PdfPreview key={downloadPath} url={downloadPath} />
+                    <PdfPreview key={downloadPath} url={downloadPath} quoteBlocked={atLimit}
+                      onQuote={onPdfQuote && ((page, text) => onPdfQuote(material, page, text))} />
                   </Suspense>
                 ) : <MaterialPreviewContent material={material} projectId={projectId} />)}
               </div>}

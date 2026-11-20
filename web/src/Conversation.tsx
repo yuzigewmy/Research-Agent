@@ -7,8 +7,8 @@ import { errorMessage, isTurnMode, turnModeLabels } from './projects'
 import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
-import { isProposedTaskId, isWorkflowProposal, listTurns, sendTurn, stopTurn, turnsPath } from './turns'
-import type { Turn, TurnEvent, TurnInput, TurnReference, WorkflowProposal } from './turns'
+import { isPdfQuotes, isProposedTaskId, isWorkflowProposal, listTurns, sendTurn, stopTurn, turnsPath } from './turns'
+import type { PdfQuote, Turn, TurnEvent, TurnInput, TurnReference, WorkflowProposal } from './turns'
 
 type StopState = { turnId: string; kind: 'pending' } | { turnId: string; kind: 'error'; message: string }
 
@@ -35,22 +35,38 @@ function readAttempt(key: string): TurnInput | null {
     if (typeof input.requestId !== 'string' || typeof input.text !== 'string'
       || (input.mode !== undefined && !isTurnMode(input.mode))
       || (input.referenceIds !== undefined && (!Array.isArray(input.referenceIds)
-        || !input.referenceIds.every((id) => typeof id === 'string')))) return null
-    return { requestId: input.requestId, text: input.text, referenceIds: input.referenceIds, mode: input.mode ?? 'CHAT' }
+        || !input.referenceIds.every((id) => typeof id === 'string')))
+      || (input.pdfQuotes !== undefined && !isPdfQuotes(input.pdfQuotes, input.referenceIds))) return null
+    return { requestId: input.requestId, text: input.text, referenceIds: input.referenceIds,
+      pdfQuotes: input.pdfQuotes, mode: input.mode ?? 'CHAT' }
   } catch {
     return null
   }
 }
 
-function sameReferenceIds(first: string[] = [], second: string[]) {
-  return first.length === second.length && first.every((id, index) => id === second[index])
+function matchesSentReference(input: TurnInput, reference: TurnReference) {
+  if (!input.referenceIds?.includes(reference.materialId)) return false
+  const selected = input.pdfQuotes?.[reference.materialId]
+  if (!selected) return reference.page === undefined
+  return selected.page === reference.page && selected.sha256 === reference.sha256 && selected.text === reference.quote
+}
+
+function PdfReferenceDetails({ page, quote }: { page?: number; quote?: string }) {
+  if (page === undefined) return null
+  return <>
+    <span className="turn-status">第 {page} 页</span>
+    <details className="turn-quote">
+      <summary>查看选区</summary>
+      <blockquote className="turn-content" dir="auto">{quote}</blockquote>
+    </details>
+  </>
 }
 
 interface ConversationProps {
   projectId: string
   defaultTurnMode?: TurnMode
   references: TurnReference[]
-  onClearReferences: (ids: string[]) => void
+  onClearReferences: (matches: (reference: TurnReference) => boolean) => void
   onWorkflowConfirmed?: () => void
   taskSync?: TaskPanelSync
 }
@@ -77,8 +93,9 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const [reload, setReload] = useState(0)
   const runningTurn = turns.find((turn) => turn.status === 'RUNNING')
   const streamId = loading ? undefined : runningTurn?.turnId
-  const referenceIds = references.map(({ materialId }) => materialId)
-  const matchingAttempt = attempt?.text === draft && sameReferenceIds(attempt.referenceIds, referenceIds) ? attempt : null
+  const matchingAttempt = attempt && attempt.text === draft && (attempt.referenceIds?.length ?? 0) === references.length
+    && references.every((ref, index) => attempt.referenceIds?.[index] === ref.materialId && matchesSentReference(attempt, ref))
+    ? attempt : null
   const retryMode = matchingAttempt ? matchingAttempt.mode ?? 'CHAT' : undefined
   const inheritedMode = retryMode ?? defaultTurnMode
   const mode = modeOverride ?? inheritedMode
@@ -89,7 +106,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     if (sessionStorage.getItem(draftKey) === input.text) sessionStorage.removeItem(draftKey)
     setDraft((current) => current === input.text ? '' : current)
     setModeOverride(undefined)
-    if (input.referenceIds?.length) onClearReferences(input.referenceIds)
+    if (input.referenceIds?.length) onClearReferences((reference) => matchesSentReference(input, reference))
   }
 
   const reconcileAttempt = useEffectEvent((items: Turn[]) => {
@@ -168,9 +185,15 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       setError('这条消息超过 16 KiB，请拆成几条发送。')
       return
     }
-    const input: TurnInput = matchingAttempt && retryMode === mode
-      ? matchingAttempt
-      : { requestId: crypto.randomUUID(), text: draft, mode, referenceIds: referenceIds.length ? referenceIds : undefined }
+    const pdfQuotes: Record<string, PdfQuote> = {}
+    for (const { materialId, page, quote, sha256 } of references) {
+      if (page !== undefined && quote !== undefined) pdfQuotes[materialId] = { page, text: quote, sha256 }
+    }
+    const input: TurnInput = matchingAttempt && retryMode === mode ? matchingAttempt : {
+      requestId: crypto.randomUUID(), text: draft, mode,
+      referenceIds: references.length ? references.map(({ materialId }) => materialId) : undefined,
+      pdfQuotes: Object.keys(pdfQuotes).length ? pdfQuotes : undefined,
+    }
     setAttempt(input)
     sessionStorage.setItem(attemptKey, JSON.stringify(input))
     const controller = new AbortController()
@@ -267,10 +290,11 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
             {!!turn.references?.length && <div className="turn-references">
               <p className="turn-status">随消息发送的资料</p>
               <ul aria-label="随消息发送的资料">
-                {turn.references.map(({ materialId, name, sha256 }) => <li key={materialId}>
+                {turn.references.map(({ materialId, name, sha256, page, quote }) => <li key={materialId}>
                   <a href={materialDownloadPath(projectId, materialId)} download
                     aria-label={`下载原件：${name}`}><bdi>{name}</bdi></a>
                   <code className="turn-status" title={sha256}>{sha256.slice(0, 8)}</code>
+                  <PdfReferenceDetails page={page} quote={quote} />
                 </li>)}
               </ul>
             </div>}
@@ -321,13 +345,14 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       {!loading && !configured && !error && <p className="turn-status">配置对话模型后即可提问。</p>}
       {references.length > 0 && <div className="turn-references draft-references" aria-labelledby="draft-references-title">
         <p id="draft-references-title">已选资料</p>
-        <p className="turn-status">发送时，已选资料的文字节选会一并发给模型。Word 节选来自正文和表格。</p>
+        <p className="turn-status">发送消息时，模型会收到已选资料的文字节选。PDF 只发送所选文字和页码。</p>
         <ul aria-labelledby="draft-references-title">
-          {references.map(({ materialId, name, sha256 }) => <li key={materialId}>
+          {references.map(({ materialId, name, sha256, page, quote }) => <li key={materialId}>
             <bdi>{name}</bdi>
             <span className="turn-status">原文件 SHA-256 <code title={sha256}>{sha256.slice(0, 8)}</code></span>
             <button className="button outline" type="button" aria-label={`移除资料：${name}`}
-              onClick={() => onClearReferences([materialId])}>移除</button>
+              onClick={() => onClearReferences((reference) => reference.materialId === materialId)}>移除</button>
+            <PdfReferenceDetails page={page} quote={quote} />
           </li>)}
         </ul>
       </div>}

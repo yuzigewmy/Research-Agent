@@ -6,9 +6,11 @@ export type { TurnMode } from './projects'
 
 const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED', 'STOPPED'] as const
 export const turnReferenceLimit = 4
+export const pdfQuoteByteLimit = 8 * 1024
 const turnTaskResultLimit = 4
 export type TurnStatus = typeof statuses[number]
-export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'>
+export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'> & { page?: number; quote?: string }
+export type PdfQuote = { sha256: string; page: number; text: string }
 
 interface TurnTaskResult {
   taskId: string
@@ -20,6 +22,7 @@ export interface TurnInput {
   requestId: string
   text: string
   referenceIds?: string[]
+  pdfQuotes?: Record<string, PdfQuote>
   mode?: TurnMode
 }
 
@@ -83,11 +86,24 @@ export function isWorkflowProposal(value: unknown): value is WorkflowProposal {
   return first >= 0 && last >= first
 }
 
+function isPdfExcerpt(page: unknown, text: unknown) {
+  return typeof page === 'number' && Number.isInteger(page) && page > 0 && page <= 0x7fff_ffff
+    && typeof text === 'string' && !!text.trim() && !text.includes('\0')
+    && new TextEncoder().encode(text).length <= pdfQuoteByteLimit
+}
+
+export function isPdfQuotes(value: unknown, ids: string[] = []): value is Record<string, PdfQuote> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.entries(value).every(([id, quote]: [string, Partial<PdfQuote> | null]) =>
+    ids.includes(id) && !!quote && typeof quote.sha256 === 'string' && /^[0-9a-f]{64}$/.test(quote.sha256)
+    && isPdfExcerpt(quote.page, quote.text))
+}
+
 function isTurnReference(value: unknown): value is TurnReference {
   const reference = value as Partial<TurnReference> | null
-  return !!reference && typeof reference.materialId === 'string' && !!reference.materialId
-    && reference.materialId !== '.' && reference.materialId !== '..'
+  return !!reference && isProposedTaskId(reference.materialId)
     && typeof reference.name === 'string' && typeof reference.sha256 === 'string'
+    && ((reference.page === undefined && reference.quote === undefined) || isPdfExcerpt(reference.page, reference.quote))
 }
 
 export function isTurnReferences(value: unknown): value is TurnReference[] {

@@ -117,7 +117,13 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	if err == nil {
 		// An omitted mode reuses the original choice on replay, even after settings change.
 		if turn.Text != input.Text || (input.Mode != "" && turn.Mode != input.Mode) || !slices.EqualFunc(turn.References, input.ReferenceIDs, func(ref TurnReference, id string) bool {
-			return ref.MaterialID == id
+			if ref.MaterialID != id {
+				return false
+			}
+			if quote, selected := input.PDFQuotes[id]; selected {
+				return quote == (pdfQuote{SHA256: ref.SHA256, Page: ref.Page, Text: ref.Quote})
+			}
+			return ref.Page == 0
 		}) {
 			return Turn{}, Project{}, false, errRequestConflict
 		}
@@ -140,7 +146,7 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	if running {
 		return Turn{}, Project{}, false, errTurnBusy
 	}
-	references, err := resolveTurnReferences(ctx, tx, projectID, input.ReferenceIDs)
+	references, err := resolveTurnReferences(ctx, tx, projectID, input.ReferenceIDs, input.PDFQuotes)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}

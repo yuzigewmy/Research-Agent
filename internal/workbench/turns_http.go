@@ -39,16 +39,17 @@ func (c conversation) register(mux *http.ServeMux) {
 }
 
 func (c conversation) send(w http.ResponseWriter, r *http.Request) {
+	const maxText = 16 << 10
 	var input sendTurnInput
-	if !readJSON(w, r, &input, 128<<10) {
+	if !readJSON(w, r, &input, 6*(maxText+maxTurnReferences*referenceExcerptBytes)+(8<<10)) {
 		return
 	}
-	if !validRequestID(input.RequestID) || strings.TrimSpace(input.Text) == "" || len(input.Text) > 16<<10 {
+	if !validRequestID(input.RequestID) || strings.TrimSpace(input.Text) == "" || len(input.Text) > maxText {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请发送有效的请求编号和 16 KiB 以内的消息。")
 		return
 	}
-	if !validTurnReferenceIDs(input.ReferenceIDs) {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。")
+	if !validTurnReferences(input.ReferenceIDs, input.PDFQuotes) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。PDF 选区需带页码和文件摘要，每段最多 8 KiB。")
 		return
 	}
 	if input.Mode != "" && !validTurnMode(input.Mode) {
@@ -62,7 +63,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errRequestConflict):
 		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联不同的消息、资料或协作方式。")
 	case errors.Is(err, errInvalidTurnReference):
-		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请选择当前项目中支持正文预览的资料。")
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请重新选择当前项目的文本、Word 资料或 PDF 选区。")
 	case errors.Is(err, errTurnBusy):
 		writeError(w, http.StatusConflict, "TURN_RUNNING", "上一轮仍在回复。")
 	case errors.Is(err, errModelUnavailable):

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { AnnotationMode, getDocument, GlobalWorkerOptions, InvalidPDFException, PasswordException, TextLayer } from 'pdfjs-dist'
 import type { PageViewport, PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { pdfQuoteByteLimit } from './turns'
 import './pdf-preview.css'
 
 GlobalWorkerOptions.workerSrc = workerUrl
@@ -127,11 +128,38 @@ function PdfPage({ pdf, pageNumber, availableWidth, zoom }: {
   return <PdfPageSurface key={scale} page={page} scale={scale} />
 }
 
-function PdfDocumentView({ pdf }: { pdf: PDFDocumentProxy }) {
+type PdfQuoteProps = {
+  quoteBlocked?: boolean
+  onQuote?: (page: number, text: string) => void
+}
+
+function PdfDocumentView({ pdf, onQuote, quoteBlocked }: PdfQuoteProps & { pdf: PDFDocumentProxy }) {
   const viewport = useRef<HTMLDivElement>(null)
   const [pageNumber, setPageNumber] = useState(1)
   const [zoom, setZoom] = useState(100)
   const [width, setWidth] = useState(0)
+  const [quoteMessage, setQuoteMessage] = useState('')
+
+  function quoteSelection() {
+    if (!onQuote || quoteBlocked) return
+    const layer = viewport.current?.querySelector('.pdf-text-layer')
+    const selection = window.getSelection()
+    if (!layer || selection?.rangeCount !== 1 || !layer.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+      setQuoteMessage('请先选中当前页的文字。')
+      return
+    }
+    const text = selection.toString().trim()
+    if (!text) {
+      setQuoteMessage('请先选中当前页的文字。')
+      return
+    }
+    if (new TextEncoder().encode(text).length > pdfQuoteByteLimit) {
+      setQuoteMessage('选中文字超过 8 KiB，请缩小范围。')
+      return
+    }
+    onQuote(pageNumber, text)
+    setQuoteMessage(`已将第 ${pageNumber} 页的选区加入对话。`)
+  }
 
   useEffect(() => {
     const container = viewport.current
@@ -144,6 +172,7 @@ function PdfDocumentView({ pdf }: { pdf: PDFDocumentProxy }) {
   function goToPage(next: number) {
     if (!Number.isInteger(next) || next < 1 || next > pdf.numPages || next === pageNumber) return
     setPageNumber(next)
+    setQuoteMessage('')
     viewport.current?.scrollTo(0, 0)
   }
 
@@ -177,13 +206,20 @@ function PdfDocumentView({ pdf }: { pdf: PDFDocumentProxy }) {
         </select>
       </label>
     </div>
+    {onQuote && <div className="pdf-controls">
+      <button className="button outline" type="button" disabled={quoteBlocked}
+        onMouseDown={(event) => event.preventDefault()} onClick={quoteSelection}>引用所选文字</button>
+      <span className="material-note" role="status">
+        {quoteBlocked ? '已选满四份资料。' : quoteMessage || '选中当前页文字后可加入对话。'}
+      </span>
+    </div>}
     <div className="pdf-viewport" tabIndex={0} role="group" aria-label="PDF 页面滚动区" ref={viewport}>
       <PdfPage key={pageNumber} pdf={pdf} pageNumber={pageNumber} availableWidth={width} zoom={zoom} />
     </div>
   </div>
 }
 
-export default function PdfMaterialPreview({ url }: { url: string }) {
+export default function PdfMaterialPreview({ url, onQuote, quoteBlocked }: PdfQuoteProps & { url: string }) {
   const [result, setResult] = useState<ReadState<PDFDocumentProxy>>()
 
   useEffect(() => {
@@ -220,5 +256,5 @@ export default function PdfMaterialPreview({ url }: { url: string }) {
 
   if (result?.error) return <p className="form-error" role="alert">{result.error}</p>
   if (!result?.value) return <p className="material-note" role="status">正在打开 PDF…</p>
-  return <PdfDocumentView pdf={result.value} />
+  return <PdfDocumentView pdf={result.value} onQuote={onQuote} quoteBlocked={quoteBlocked} />
 }
