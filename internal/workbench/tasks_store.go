@@ -10,7 +10,8 @@ import (
 )
 
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
-	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck, inputs_json`
+	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck,
+	inputs_json, COALESCE(source_turn_id, '')`
 
 const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0`
 
@@ -56,12 +57,14 @@ type Task struct {
 	CreatedAt       string      `json:"createdAt"`
 	Message         string      `json:"message,omitempty"`
 	Inputs          []taskInput `json:"inputs,omitempty"`
+	SourceTurnID    string      `json:"sourceTurnId,omitempty"`
 }
 
 type taskRequest struct {
 	ProjectID, TaskID, Action, RequestID, Instruction string
 	ExpectedRevision                                  int
 	InputVersionIDs                                   []string
+	SourceTurnID                                      string
 }
 
 const tasksSchema = `
@@ -120,7 +123,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	if err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
-		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck, &t.inputsJSON); err != nil {
+		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck, &t.inputsJSON, &t.SourceTurnID); err != nil {
 		return Task{}, err
 	}
 	if err := json.Unmarshal([]byte(t.inputsJSON), &t.Inputs); err != nil {
@@ -129,10 +132,15 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	return t, nil
 }
 
-func (s *Store) listTasks(ctx context.Context, projectID string, before int64, limit int) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM tasks
-		WHERE project_id = ? AND `+standaloneTask+` AND (? = 0 OR ordinal < ?)
-		ORDER BY ordinal DESC LIMIT ?`, projectID, before, before, limit)
+func (s *Store) listTasks(ctx context.Context, projectID, sourceTurnID string, before int64, limit int) ([]Task, error) {
+	query := `SELECT ` + taskColumns + ` FROM tasks
+		WHERE project_id = ? AND ` + standaloneTask + ` AND (? = 0 OR ordinal < ?)`
+	args := []any{projectID, before, before}
+	if sourceTurnID != "" {
+		query += ` AND source_turn_id = ?`
+		args = append(args, sourceTurnID)
+	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY ordinal DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +186,9 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 			return Task{}, false, errRequestConflict
 		}
 		task, err := lookupTask(ctx, tx, req.ProjectID, taskID)
+		if err == nil && action == proposeTask && task.SourceTurnID != req.SourceTurnID {
+			return Task{}, false, errRequestConflict
+		}
 		return task, false, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -187,13 +198,16 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 	var task Task
 	var nextStatus string
 	if req.Action == proposeTask {
+		if err := checkTaskSource(ctx, tx, req.ProjectID, req.SourceTurnID); err != nil {
+			return Task{}, false, err
+		}
 		inputs, err := resolveTaskInputs(ctx, tx, req.ProjectID, req.InputVersionIDs)
 		if err != nil {
 			return Task{}, false, err
 		}
-		task, err = scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, inputs_json)
-			SELECT project_id, ?, ?, 'PROPOSED', ?, ? FROM projects WHERE project_id = ? RETURNING `+taskColumns,
-			rand.Text(), req.Instruction, time.Now().UTC().Format(createdAtLayout), inputs, req.ProjectID))
+		task, err = scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, inputs_json, source_turn_id)
+			SELECT project_id, ?, ?, 'PROPOSED', ?, ?, NULLIF(?, '') FROM projects WHERE project_id = ? RETURNING `+taskColumns,
+			rand.Text(), req.Instruction, time.Now().UTC().Format(createdAtLayout), inputs, req.SourceTurnID, req.ProjectID))
 		if err != nil {
 			return Task{}, false, err
 		}

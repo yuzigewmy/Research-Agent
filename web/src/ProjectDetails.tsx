@@ -5,6 +5,7 @@ import { MaterialPanel } from './MaterialPanel'
 import { ProjectAdministration } from './ProjectAdministration'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
+import type { Task } from './tasks'
 import { WorkflowPanel } from './WorkflowPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import type { Material } from './materials'
@@ -55,6 +56,16 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
   const referenceKey = `research.references.${projectId}`
   const [references, setReferences] = useState(() => readReferences(referenceKey))
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
+  const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
+
+  function onTaskChanged(task: Task) {
+    setTaskUpdates((previous) => {
+      const newer = previous.find((item) => item.taskId === task.taskId && item.revision >= task.revision)
+      return newer ? previous : [...previous.filter((item) => item.taskId !== task.taskId), task]
+    })
+  }
+
+  const taskSync = { updates: taskUpdates, onTaskChanged }
 
   useEffect(() => {
     if (references.length) sessionStorage.setItem(referenceKey, JSON.stringify(references))
@@ -121,9 +132,9 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         <WorkflowPanel projectId={project.projectId} templateId={project.templateId} onManuscriptSaved={(path) => {
           setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])
         }} />}
-      <TaskPanel projectId={project.projectId} />
+      <TaskPanel projectId={project.projectId} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths} />
-      <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} />
+      <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} taskSync={taskSync} />
     </div>
   )
 }

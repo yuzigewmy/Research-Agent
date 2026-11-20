@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useEffectEvent, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
 import {
-  changeTask, editTask, isTaskActive, listTasks, proposeTask, refreshTasks,
+  changeTask, conversationTurnAnchor, editTask, isTaskActive, listTasks, proposeTask, refreshTasks,
   taskArtifactPath, taskInputLimit, taskInstructionLimit, taskStatusLabels,
 } from './tasks'
 import type { ProposalInput, Task, TaskAction, TaskInputVersion, TaskPage } from './tasks'
@@ -12,8 +12,14 @@ import './tasks.css'
 const refreshInterval = 2_000
 const requestTimeout = 10_000
 const taskDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
+const turnSourceNotice = '确认运行后，用户原话、部分回复和当时引用的资料节选会发送给研究模型。'
 
-type TaskFields = Omit<ProposalInput, 'requestId'>
+export interface TaskPanelSync {
+  updates: Task[]
+  onTaskChanged: (task: Task) => void
+}
+
+type TaskFields = Omit<ProposalInput, 'requestId' | 'sourceTurnId'>
 type CardMutation = { kind: TaskAction; task: Task }
   | ({ kind: 'edit'; task: Task; expectedRevision: number } & TaskFields)
 type Mutation = ({ kind: 'propose' } & TaskFields) | CardMutation
@@ -67,13 +73,14 @@ function mergeTasks(current: Task[], incoming: Task[]) {
   )
 }
 
-function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction }: {
+function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink }: {
   projectId: string
   task: Task
   statusId: string
   modelConfigured: boolean
   pending: string | null
   onAction: (mutation: CardMutation) => Promise<MutationResult | undefined>
+  showSourceLink: boolean
 }) {
   const [edit, setEdit] = useState<InstructionDraft>()
   const [editError, setEditError] = useState<{ message: string; invalid?: boolean }>()
@@ -140,6 +147,10 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       </div>
       {edit && <p className="task-note">当前任务说明</p>}
       <p className="task-instruction" dir="auto">{task.instruction}</p>
+      {showSourceLink && task.sourceTurnId && <p className="task-note">
+        <a href={`#${encodeURIComponent(conversationTurnAnchor(task.sourceTurnId))}`}>回到原消息</a>
+      </p>}
+      {proposed && task.sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
       <TaskInputSummary projectId={projectId} inputs={task.inputs} />
       {confirmationConflict && <p className="form-error" role="alert">{confirmationConflict}</p>}
       {edit && <form className="field" onSubmit={(event) => void save(event)} noValidate aria-busy={saving}>
@@ -213,16 +224,23 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   )
 }
 
-export function TaskPanel({ projectId }: { projectId: string }) {
+export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', sync }: {
+  projectId: string
+  sourceTurnId?: string
+  initialInstruction?: string
+  sync?: TaskPanelSync
+}) {
   const panelId = useId()
-  const [tasks, setTasks] = useState<Task[]>([])
+  const [localTasks, setTasks] = useState<Task[]>([])
   const [cursor, setCursor] = useState<string>()
   const [configured, setConfigured] = useState<boolean>()
   const [loading, setLoading] = useState(true)
   const [olderPending, setOlderPending] = useState(false)
   const [queueError, setQueueError] = useState('')
   const [reload, setReload] = useState(0)
-  const [draft, setDraft] = useState('')
+  const prefill = initialInstruction.trim()
+  const prefillTooLong = instructionEncoder.encode(prefill).length > taskInstructionLimit
+  const [draft, setDraft] = useState(() => instructionError(prefill) ? '' : prefill)
   const [draftInputs, setDraftInputs] = useState<TaskInputVersion[]>([])
   const [inputError, setInputError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -233,6 +251,12 @@ export function TaskPanel({ projectId }: { projectId: string }) {
   const proposalAttempt = useRef<ProposalInput | null>(null)
   const changeAttempts = useRef(new Map<string, ChangeAttempt>())
   const focusAfterAction = useRef<{ taskId: string; control: Element | null } | null>(null)
+  const sharedUpdates = sync?.updates
+  const tasks = useMemo(() => {
+    if (!sharedUpdates?.length) return localTasks
+    const updates = sourceTurnId ? sharedUpdates.filter((task) => task.sourceTurnId === sourceTurnId) : sharedUpdates
+    return mergeTasks(localTasks, updates)
+  }, [localTasks, sharedUpdates, sourceTurnId])
   const hasActiveTasks = tasks.some((task) => isTaskActive(task.status))
 
   const acceptPage = useCallback((page: TaskPage) => {
@@ -244,7 +268,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     const controller = new AbortController()
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
-    void listTasks(projectId, signal).then((page) => {
+    void listTasks(projectId, signal, undefined, sourceTurnId).then((page) => {
       if (controller.signal.aborted) return
       acceptPage(page)
       setCursor(page.nextCursor)
@@ -254,12 +278,12 @@ export function TaskPanel({ projectId }: { projectId: string }) {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [acceptPage, projectId, reload])
+  }, [acceptPage, projectId, reload, sourceTurnId])
 
   const poll = useEffectEvent(async (signal: AbortSignal) => {
     const activeIds = tasks.filter((task) => isTaskActive(task.status)).map((task) => task.taskId)
     if (activeIds.length === 0) return
-    const page = await refreshTasks(projectId, activeIds, signal)
+    const page = await refreshTasks(projectId, activeIds, signal, sourceTurnId)
     if (!signal.aborted) acceptPage(page)
   })
 
@@ -281,7 +305,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [hasActiveTasks, projectId])
+  }, [hasActiveTasks, projectId, sourceTurnId])
 
   useEffect(() => () => {
     submission.current?.abort()
@@ -303,7 +327,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
     setOlderPending(true)
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
     try {
-      const page = await listTasks(projectId, signal, cursor)
+      const page = await listTasks(projectId, signal, cursor, sourceTurnId)
       if (!controller.signal.aborted) {
         acceptPage(page)
         setCursor(page.nextCursor)
@@ -330,8 +354,9 @@ export function TaskPanel({ projectId }: { projectId: string }) {
       if (mutation.kind === 'propose') {
         const { instruction, inputVersionIds } = mutation
         const previous = proposalAttempt.current
-        const attempt = previous?.instruction === instruction && sameVersionIds(previous.inputVersionIds, inputVersionIds)
-          ? previous : { requestId: crypto.randomUUID(), instruction, inputVersionIds }
+        const attempt = previous?.instruction === instruction && previous.sourceTurnId === sourceTurnId
+          && sameVersionIds(previous.inputVersionIds, inputVersionIds)
+          ? previous : { requestId: crypto.randomUUID(), instruction, inputVersionIds, sourceTurnId }
         proposalAttempt.current = attempt
         task = await proposeTask(projectId, attempt, signal)
         if (controller.signal.aborted) return
@@ -357,6 +382,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
       }
       focusAfterAction.current = { taskId: task.taskId, control: focusControl }
       setTasks((current) => mergeTasks(current, [task]))
+      sync?.onTaskChanged(task)
       return { ok: true } as const
     } catch (error) {
       if (controller.signal.aborted) return
@@ -377,7 +403,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
         if (!inputChanged) changeAttempts.current.delete(key)
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
         try {
-          const page = await refreshTasks(projectId, [mutation.task.taskId], signal)
+          const page = await refreshTasks(projectId, [mutation.task.taskId], signal, sourceTurnId)
           if (controller.signal.aborted) return
           acceptPage(page)
           if (editing && !inputChanged) message = `${message} 草稿已保留，请核对上方任务卡。`
@@ -409,7 +435,8 @@ export function TaskPanel({ projectId }: { projectId: string }) {
 
   return (
     <section className="task-panel" aria-labelledby={`${panelId}-heading`}>
-      <h4 id={`${panelId}-heading`}>研究计划</h4>
+      <h4 id={`${panelId}-heading`}>{sourceTurnId ? '此对话的任务' : '研究计划'}</h4>
+      {sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
       {configured === false && <p className="task-note" role="status">研究模型未配置。可以提交任务提议，配置模型后即可运行。</p>}
       <form className="create-form" onSubmit={submit} noValidate aria-busy={pending === 'propose'}>
         <div className="field">
@@ -421,7 +448,10 @@ export function TaskPanel({ projectId }: { projectId: string }) {
               setDraft(event.currentTarget.value)
               setInputError('')
             }} />
-          <p id={`${panelId}-hint`} className="task-note">说明研究目标，以及计划需要回答的问题。</p>
+          <p id={`${panelId}-hint`} className="task-note">
+            {sourceTurnId && prefillTooLong ? '原话超过 8 KiB，请填写简短的任务说明。'
+              : '说明研究目标，以及计划需要回答的问题。'}
+          </p>
           {inputError && <p className="form-error" role="alert" id={`${panelId}-error`}>{inputError}</p>}
         </div>
         <TaskInputVersions projectId={projectId} inputs={draftInputs} disabled={pending !== null} onChange={setDraftInputs} />
@@ -444,7 +474,7 @@ export function TaskPanel({ projectId }: { projectId: string }) {
       {tasks.length > 0 && <ol className="task-list" aria-label="研究计划任务">
         {tasks.map((task) => <TaskCard key={task.taskId} task={task} projectId={projectId}
           statusId={`${panelId}-${task.taskId}`} modelConfigured={configured === true} pending={pending}
-          onAction={mutate} />)}
+          onAction={mutate} showSourceLink={!sourceTurnId} />)}
       </ol>}
       {!loading && !queueError && tasks.length === 0 && <p className="task-note">提交提议后，可在此查看任务进度并下载计划。</p>}
       {cursor && <div className="task-actions">

@@ -164,6 +164,13 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	if task.workflowRunID != "" {
 		return s.generateWorkflowResult(ctx, model, project, task, input)
 	}
+	if task.SourceTurnID != "" {
+		source, err := s.taskTurnContext(ctx, projectID, task.SourceTurnID)
+		if err != nil {
+			return taskResult{}, err
+		}
+		input += source
+	}
 	if len(task.Inputs) > 0 {
 		excerpts, err := s.taskInputContext(task.Inputs)
 		if err != nil {

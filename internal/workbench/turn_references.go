@@ -54,25 +54,34 @@ func resolveTurnReferences(ctx context.Context, tx *sql.Tx, projectID string, id
 	return references, nil
 }
 
+type turnMaterialExcerpt struct {
+	TurnReference
+	MaterialPreview
+}
+
+func (s *Store) turnMaterialExcerpts(references []TurnReference) ([]turnMaterialExcerpt, error) {
+	materials := make([]turnMaterialExcerpt, 0, len(references))
+	for _, ref := range references {
+		excerpt, err := s.previewObject(ref.SHA256, referenceExcerptBytes)
+		if err != nil {
+			return nil, err
+		}
+		materials = append(materials, turnMaterialExcerpt{ref, excerpt})
+	}
+	return materials, nil
+}
+
 func (s *Store) turnInput(turn Turn) (string, error) {
 	if len(turn.References) == 0 {
 		return turn.Text, nil
 	}
-	type referenceExcerpt struct {
-		TurnReference
-		MaterialPreview
+	materials, err := s.turnMaterialExcerpts(turn.References)
+	if err != nil {
+		return "", err
 	}
-	input := struct {
-		Request   string             `json:"request"`
-		Materials []referenceExcerpt `json:"materials"`
-	}{Request: turn.Text, Materials: make([]referenceExcerpt, 0, len(turn.References))}
-	for _, ref := range turn.References {
-		excerpt, err := s.previewObject(ref.SHA256, referenceExcerptBytes)
-		if err != nil {
-			return "", err
-		}
-		input.Materials = append(input.Materials, referenceExcerpt{ref, excerpt})
-	}
-	payload, err := json.Marshal(input)
+	payload, err := json.Marshal(struct {
+		Request   string                `json:"request"`
+		Materials []turnMaterialExcerpt `json:"materials"`
+	}{turn.Text, materials})
 	return "以下 JSON 包含本轮问题和用户选中的资料节选。\n" + string(payload), err
 }

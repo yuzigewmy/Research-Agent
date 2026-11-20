@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { ConversationTasks } from './ConversationTasks'
 import { materialDownloadPath } from './materials'
 import { errorMessage } from './projects'
+import type { TaskPanelSync } from './TaskPanel'
+import { conversationTurnAnchor } from './tasks'
 import { listTurns, sendTurn, turnsPath } from './turns'
 import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
 
@@ -20,9 +23,10 @@ interface ConversationProps {
   projectId: string
   references: TurnReference[]
   onClearReferences: (ids: string[]) => void
+  taskSync?: TaskPanelSync
 }
 
-export function Conversation({ projectId, references, onClearReferences }: ConversationProps) {
+export function Conversation({ projectId, references, onClearReferences, taskSync }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
   const attempt = useRef<TurnInput | null>(null)
@@ -170,7 +174,7 @@ export function Conversation({ projectId, references, onClearReferences }: Conve
       </button>}
       <ol className="turns" aria-label="对话记录" aria-live="polite" aria-busy={stream !== null}>
         {turns.map((turn) => (
-          <li key={turn.turnId} className="turn">
+          <li key={turn.turnId} className="turn" id={conversationTurnAnchor(turn.turnId)} tabIndex={-1}>
             <p className="turn-role">你</p>
             <p className="turn-content" dir="auto">{turn.text}</p>
             {!!turn.references?.length && <div className="turn-references">
@@ -187,6 +191,8 @@ export function Conversation({ projectId, references, onClearReferences }: Conve
             {turn.answer && <p className="turn-content" dir="auto">{turn.answer}</p>}
             {turn.status === 'RUNNING' && <p className="turn-status" role="status">{connectionLost ? '连接中断，正在续接…' : '正在回复…'}</p>}
             {turn.message && <p className="turn-status">{turn.message}</p>}
+            {turn.status === 'COMPLETED' && <ConversationTasks projectId={projectId} turnId={turn.turnId}
+              text={turn.text} sync={taskSync} />}
           </li>
         ))}
       </ol>

@@ -28,6 +28,7 @@ export interface Task {
   createdAt: string
   message?: string
   inputs?: TaskInputVersion[]
+  sourceTurnId?: string
 }
 
 export interface TaskPage {
@@ -40,6 +41,7 @@ export interface ProposalInput {
   requestId: string
   instruction: string
   inputVersionIds?: string[]
+  sourceTurnId?: string
 }
 
 interface ActionInput {
@@ -70,6 +72,7 @@ function isTask(value: unknown): value is Task {
     && typeof task.status === 'string' && Object.hasOwn(taskStatusLabels, task.status)
     && typeof task.createdAt === 'string' && Number.isFinite(Date.parse(task.createdAt))
     && (task.message === undefined || typeof task.message === 'string')
+    && (task.sourceTurnId === undefined || (typeof task.sourceTurnId === 'string' && task.sourceTurnId.length > 0))
     && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
       && task.inputs.every(isTaskInputVersion)))
 }
@@ -89,14 +92,22 @@ function taskPath(projectId: string, taskId: string) {
   return `${tasksPath(projectId)}/${encodeURIComponent(taskId)}`
 }
 
-export function listTasks(projectId: string, signal: AbortSignal, cursor?: string) {
-  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
-  return request(tasksPath(projectId) + query, isTaskPage, { signal })
+export function conversationTurnAnchor(turnId: string) {
+  return `conversation-turn-${turnId}`
+}
+
+export function listTasks(projectId: string, signal: AbortSignal, cursor?: string, sourceTurnId?: string) {
+  const query = new URLSearchParams()
+  if (cursor) query.set('cursor', cursor)
+  if (sourceTurnId) query.set('sourceTurnId', sourceTurnId)
+  const suffix = query.size ? `?${query}` : ''
+  return request(tasksPath(projectId) + suffix, (value): value is TaskPage =>
+    isTaskPage(value) && (!sourceTurnId || value.items.every((task) => task.sourceTurnId === sourceTurnId)), { signal })
 }
 
 // Poll the latest page, then look up known active tasks that have moved into history.
-export async function refreshTasks(projectId: string, taskIds: string[], signal: AbortSignal) {
-  const first = await listTasks(projectId, signal)
+export async function refreshTasks(projectId: string, taskIds: string[], signal: AbortSignal, sourceTurnId?: string) {
+  const first = await listTasks(projectId, signal, undefined, sourceTurnId)
   const pending = new Set(taskIds)
   const items = [...first.items]
   const visited = new Set<string>()
@@ -105,7 +116,7 @@ export async function refreshTasks(projectId: string, taskIds: string[], signal:
   let cursor = first.nextCursor
   while (pending.size && cursor && !visited.has(cursor)) {
     visited.add(cursor)
-    const page = await listTasks(projectId, signal, cursor)
+    const page = await listTasks(projectId, signal, cursor, sourceTurnId)
     for (const task of page.items) {
       if (pending.delete(task.taskId)) items.push(task)
     }
@@ -131,7 +142,7 @@ export function changeTask(projectId: string, taskId: string, action: TaskAction
   return sendTask(`${taskPath(projectId, taskId)}/${action}`, input, signal)
 }
 
-export function editTask(projectId: string, taskId: string, input: ActionInput & Omit<ProposalInput, 'requestId'>, signal: AbortSignal) {
+export function editTask(projectId: string, taskId: string, input: ActionInput & Omit<ProposalInput, 'requestId' | 'sourceTurnId'>, signal: AbortSignal) {
   return sendTask(taskPath(projectId, taskId), input, signal, 'PATCH')
 }
 

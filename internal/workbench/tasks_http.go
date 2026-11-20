@@ -65,7 +65,12 @@ func (api researchTasks) list(w http.ResponseWriter, r *http.Request) {
 		writeTaskError(w, "lookup project for tasks", err)
 		return
 	}
-	items, err := api.store.listTasks(ctx, projectID, before, limit+1)
+	sourceTurnID := query.Get("sourceTurnId")
+	if sourceTurnID != "" && !validRequestID(sourceTurnID) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的来源对话编号。")
+		return
+	}
+	items, err := api.store.listTasks(ctx, projectID, sourceTurnID, before, limit+1)
 	if err != nil {
 		writeTaskError(w, "list tasks", err)
 		return
@@ -83,6 +88,7 @@ func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 		RequestID       string   `json:"requestId"`
 		Instruction     string   `json:"instruction"`
 		InputVersionIDs []string `json:"inputVersionIds"`
+		SourceTurnID    string   `json:"sourceTurnId"`
 	}
 	if !readJSON(w, r, &input, 64<<10) {
 		return
@@ -93,7 +99,7 @@ func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), Action: proposeTask, RequestID: input.RequestID,
-		Instruction: input.Instruction, InputVersionIDs: input.InputVersionIDs})
+		Instruction: input.Instruction, InputVersionIDs: input.InputVersionIDs, SourceTurnID: input.SourceTurnID})
 }
 
 func validTaskInstruction(instruction string) bool {
@@ -140,6 +146,9 @@ func (api researchTasks) change(action string) http.HandlerFunc {
 func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskRequest) {
 	task, applied, err := api.store.applyTaskRequest(r.Context(), req, api.model != nil)
 	switch {
+	case errors.Is(err, errInvalidTaskSource):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_SOURCE", "请选择此项目中已完成的对话。")
+		return
 	case errors.Is(err, errTaskInputChanged):
 		writeError(w, http.StatusConflict, "TASK_INPUT_CHANGED", taskInputsChangedMessage)
 		return
