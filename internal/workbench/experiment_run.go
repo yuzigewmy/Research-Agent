@@ -11,7 +11,8 @@ import (
 
 func (s *Store) workflowContext(ctx context.Context, task Task, stages []workflowStage, first int) (string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT workflow_step, markdown FROM tasks
-		WHERE workflow_run_id = ? AND workflow_step >= ? AND workflow_step < ? AND status = 'SUCCEEDED'
+		WHERE workflow_run_id = ? AND workflow_step >= ? AND workflow_step < ?
+		AND status = 'SUCCEEDED' AND workflow_superseded = 0
 		ORDER BY workflow_step`, task.workflowRunID, first, task.workflowStep)
 	if err != nil {
 		return "", err

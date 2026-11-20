@@ -19,7 +19,10 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path, api.change(workflowStart))
 	mux.HandleFunc("POST "+path+"/continue", api.change(workflowContinue))
 	mux.HandleFunc("POST "+path+"/pause", api.change(workflowPause))
+	mux.HandleFunc("POST "+path+"/rerun", api.change(workflowRerun))
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
+	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts", api.artifacts)
+	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}", api.artifact)
 	mux.HandleFunc("POST "+path+"/{runId}/manuscript", api.saveManuscript)
 }
 
@@ -61,7 +64,11 @@ func (api workflows) change(action string) http.HandlerFunc {
 			return
 		}
 		if !validRequestID(input.RequestID) || (action != workflowStart && (!validRequestID(input.RunID) || input.ExpectedRevision < 1)) {
-			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号。暂停或继续时还需提供运行编号和当前修订。")
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号。操作已有工作流时还需提供运行编号和当前修订。")
+			return
+		}
+		if action == workflowRerun && (input.StepKey == "" || input.ThroughStep != "") {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择要重跑的步骤。")
 			return
 		}
 		projectID := r.PathValue("id")
@@ -69,6 +76,10 @@ func (api workflows) change(action string) http.HandlerFunc {
 		switch {
 		case errors.Is(err, errWorkflowState):
 			writeError(w, http.StatusConflict, "WORKFLOW_STATE_CONFLICT", "当前工作流状态不支持此操作。")
+		case errors.Is(err, errWorkflowDependency):
+			writeError(w, http.StatusConflict, "WORKFLOW_DEPENDENCY_REQUIRED", "请先完成或更新该步骤之前的步骤。")
+		case errors.Is(err, errWorkflowStep):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "所选步骤不属于此工作流。")
 		case errors.Is(err, errWorkflowRange):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择从本次起点可达的结束步骤。检查点或重试请沿用原范围。")
 		case errors.Is(err, errReviewSources):
@@ -91,24 +102,11 @@ func (api workflows) change(action string) http.HandlerFunc {
 				switch action {
 				case workflowStart:
 					status = http.StatusCreated
-				case workflowContinue:
+				case workflowContinue, workflowRerun:
 					status = http.StatusAccepted
 				}
 			}
 			writeJSON(w, status, run)
 		}
 	}
-}
-
-func (api workflows) artifact(w http.ResponseWriter, r *http.Request) {
-	name, markdown, err := api.store.workflowArtifact(r.Context(), r.PathValue("id"), r.PathValue("runId"), r.PathValue("key"))
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "该步骤暂无可下载的成果。")
-		return
-	}
-	if err != nil {
-		writeStoreError(w, "read workflow artifact", err)
-		return
-	}
-	writeMarkdown(w, r, name, markdown)
 }

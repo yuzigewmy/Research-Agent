@@ -6,27 +6,30 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 )
 
 const (
 	workflowStart          = "start"
 	workflowContinue       = "continue"
+	workflowRerun          = "rerun"
 	workflowPause          = "pause"
 	workflowPausing        = "PAUSING"
 	workflowPaused         = "PAUSED"
 	workflowDone           = "COMPLETED"
 	workflowWaiting        = "WAITING_CHECKPOINT"
 	workflowRangeCompleted = "RANGE_COMPLETED"
+	workflowStepStale      = "STALE"
 	workflowThroughLast    = -1
 )
 
 var (
-	errWorkflowState = errors.New("workflow action is invalid in the current state")
-	errWorkflowRange = errors.New("invalid workflow range")
-	errReviewSources = errors.New("literature review needs at least one verified work")
-	errReviewTarget  = errors.New("invalid literature source target")
+	errWorkflowState      = errors.New("workflow action is invalid in the current state")
+	errWorkflowRange      = errors.New("invalid workflow range")
+	errWorkflowStep       = errors.New("unknown workflow step")
+	errWorkflowDependency = errors.New("a preceding workflow step is not complete")
+	errReviewSources      = errors.New("literature review needs at least one verified work")
+	errReviewTarget       = errors.New("invalid literature source target")
 )
 
 const experimentSchema = `
@@ -73,6 +76,12 @@ const workflowRangeSchema = `
 	PRAGMA user_version = 19;
 `
 
+const workflowRerunSchema = `
+	ALTER TABLE tasks ADD COLUMN workflow_superseded INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE workflow_requests ADD COLUMN step_key TEXT NOT NULL DEFAULT '';
+	PRAGMA user_version = 20;
+`
+
 type WorkflowScope struct {
 	StartStep string `json:"startStep"`
 	EndStep   string `json:"endStep"`
@@ -97,10 +106,12 @@ type WorkflowRun struct {
 }
 
 type WorkflowStep struct {
-	Key     string `json:"key"`
-	Title   string `json:"title"`
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
+	Key           string `json:"key"`
+	Title         string `json:"title"`
+	Status        string `json:"status"`
+	Message       string `json:"message,omitempty"`
+	ArtifactID    string `json:"artifactId,omitempty"`
+	ArtifactCount int    `json:"artifactCount,omitempty"`
 }
 
 type workflowRequest struct {
@@ -109,6 +120,7 @@ type workflowRequest struct {
 	ExpectedRevision int           `json:"expectedRevision"`
 	Checkpoints      bool          `json:"checkpoints"`
 	ThroughStep      string        `json:"throughStep"`
+	StepKey          string        `json:"stepKey"`
 	TargetPaperCount int           `json:"targetPaperCount"`
 	Paper            *paperOptions `json:"paper"`
 }
@@ -146,22 +158,37 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	for i, stage := range stages {
 		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING"}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT workflow_step, task_id, status, message FROM tasks
-		WHERE ordinal IN (SELECT MAX(ordinal) FROM tasks WHERE workflow_run_id = ? GROUP BY workflow_step)`, run.RunID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.workflow_step, t.task_id, t.status, t.message, t.workflow_superseded, history.artifacts
+		FROM tasks t JOIN (
+			SELECT MAX(ordinal) AS latest, COUNT(CASE WHEN status = 'SUCCEEDED' THEN 1 END) AS artifacts
+			FROM tasks WHERE workflow_run_id = ? GROUP BY workflow_step
+		) history ON t.ordinal = history.latest`, run.RunID)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var index int
+		var index, count int
+		var superseded bool
 		var id, status, message string
-		if err := rows.Scan(&index, &id, &status, &message); err != nil {
+		if err := rows.Scan(&index, &id, &status, &message, &superseded, &count); err != nil {
 			return WorkflowRun{}, err
+		}
+		step := &run.Steps[index]
+		step.ArtifactCount = count
+		if superseded {
+			if count > 0 {
+				step.Status = workflowStepStale
+			}
+			continue
 		}
 		if index == run.step {
 			run.stepTaskID = id
 		}
-		run.Steps[index].Status, run.Steps[index].Message = status, message
+		step.Status, step.Message = status, message
+		if status == taskSucceeded {
+			step.ArtifactID = id
+		}
 	}
 	return run, rows.Err()
 }
@@ -190,13 +217,14 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		return WorkflowRun{}, false, err
 	}
 
-	var runID, recordedAction, recordedEnd string
+	var runID, recordedAction, recordedEnd, recordedStep string
 	var revision int
-	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step FROM workflow_requests
-		WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).Scan(&runID, &recordedAction, &revision, &recordedEnd)
+	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key FROM workflow_requests
+		WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).
+		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep)
 	if err == nil {
 		if recordedAction != action || revision != req.ExpectedRevision || recordedEnd != req.ThroughStep ||
-			(action != workflowStart && runID != req.RunID) {
+			recordedStep != req.StepKey || (action != workflowStart && runID != req.RunID) {
 			return WorkflowRun{}, false, errRequestConflict
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
@@ -243,6 +271,16 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		if current.Status != taskQueued && current.Status != taskRunning {
 			return WorkflowRun{}, false, errWorkflowState
 		}
+	case workflowRerun:
+		switch current.Status {
+		case taskQueued, taskRunning, workflowPausing:
+			return WorkflowRun{}, false, errWorkflowState
+		}
+		step, err := rerunnableStep(current.Steps, req.StepKey)
+		if err != nil {
+			return WorkflowRun{}, false, err
+		}
+		current.step, current.rangeStart, current.rangeEnd = step, step, step
 	case workflowContinue:
 		switch current.Status {
 		case workflowRangeCompleted:
@@ -297,9 +335,16 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, revision = revision + 1 WHERE run_id = ?`, runStatus, current.RunID)
+	case workflowRerun:
+		// Retain prior attempts for downloads, but remove them from dependency resolution.
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET workflow_superseded = 1
+			WHERE workflow_run_id = ? AND workflow_step >= ? AND workflow_superseded = 0`, current.RunID, current.step); err != nil {
+			return WorkflowRun{}, false, err
+		}
+		fallthrough
 	case workflowContinue:
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'QUEUED', revision = revision + 1,
-			range_start = ?, range_end = ? WHERE run_id = ?`, current.rangeStart, current.rangeEnd, current.RunID)
+			step_no = ?, range_start = ?, range_end = ? WHERE run_id = ?`, current.step, current.rangeStart, current.rangeEnd, current.RunID)
 	}
 	if err != nil {
 		return WorkflowRun{}, false, err
@@ -310,8 +355,8 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_requests
-		(project_id, request_id, run_id, action, expected_revision, through_step)
-		VALUES (?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision, req.ThroughStep); err != nil {
+		(project_id, request_id, run_id, action, expected_revision, through_step, step_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision, req.ThroughStep, req.StepKey); err != nil {
 		return WorkflowRun{}, false, err
 	}
 	run, err := readWorkflow(ctx, tx, projectID, current.RunID)
@@ -319,6 +364,24 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		return WorkflowRun{}, false, err
 	}
 	return run, true, tx.Commit()
+}
+
+func rerunnableStep(steps []WorkflowStep, key string) (int, error) {
+	for i, step := range steps {
+		if step.Key != key {
+			continue
+		}
+		if step.Status != taskSucceeded && step.Status != workflowStepStale {
+			return 0, errWorkflowState
+		}
+		for _, preceding := range steps[:i] {
+			if preceding.Status != taskSucceeded {
+				return 0, errWorkflowDependency
+			}
+		}
+		return i, nil
+	}
+	return 0, errWorkflowStep
 }
 
 func workflowEndIndex(stages []workflowStage, throughStep string) (int, error) {
@@ -384,20 +447,4 @@ func recoverInterruptedWorkflows(tx *sql.Tx) error {
 		status = CASE WHEN status = 'PAUSING' THEN 'PAUSED' ELSE 'INTERRUPTED' END
 		WHERE status IN ('RUNNING', 'PAUSING')`)
 	return err
-}
-
-func (s *Store) workflowArtifact(ctx context.Context, projectID, runID, key string) (string, string, error) {
-	var workflow string
-	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key FROM workflow_runs WHERE project_id = ? AND run_id = ?`, projectID, runID).Scan(&workflow); err != nil {
-		return "", "", err
-	}
-	for i, stage := range workflowStages[workflow] {
-		if stage.key == key {
-			var markdown string
-			err := s.db.QueryRowContext(ctx, `SELECT markdown FROM tasks WHERE project_id = ? AND workflow_run_id = ?
-				AND workflow_step = ? AND status = 'SUCCEEDED' ORDER BY ordinal DESC LIMIT 1`, projectID, runID, i).Scan(&markdown)
-			return strings.TrimSuffix(workflow, "-v1") + "-" + key + ".md", markdown, err
-		}
-	}
-	return "", "", sql.ErrNoRows
 }

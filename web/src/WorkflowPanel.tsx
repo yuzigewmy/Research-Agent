@@ -1,10 +1,13 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
+import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import {
-  continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, runStatusLabels, saveManuscript, startWorkflow,
-  stepStatusLabels, workflowArtifactPath,
+  continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow, runStatusLabels, saveManuscript,
+  startWorkflow, stepStatusLabels, workflowArtifactPath,
 } from './workflow'
-import type { ContinueWorkflowInput, PauseWorkflowInput, WorkflowRun, StartWorkflowInput, WorkflowSnapshot } from './workflow'
+import type {
+  ContinueWorkflowInput, PauseWorkflowInput, RerunWorkflowInput, StartWorkflowInput, WorkflowRun, WorkflowSnapshot,
+} from './workflow'
 import './workflow.css'
 
 const pollInterval = 1_000
@@ -14,6 +17,15 @@ type Attempt =
   | { kind: 'start'; input: StartWorkflowInput }
   | { kind: 'continue'; input: ContinueWorkflowInput }
   | { kind: 'pause'; input: PauseWorkflowInput }
+  | { kind: 'rerun'; input: RerunWorkflowInput }
+
+type RerunTarget = Omit<RerunWorkflowInput, 'requestId'>
+
+function canRerunStep(run: WorkflowRun, index: number) {
+  const status = run.steps[index]?.status
+  return !isWorkflowActive(run) && (status === 'SUCCEEDED' || status === 'STALE')
+    && run.steps.slice(0, index).every((step) => step.status === 'SUCCEEDED')
+}
 
 function hasNewerRevision(current: WorkflowRun | null | undefined, incoming: WorkflowRun | null) {
   return !!current && !!incoming && current.runId === incoming.runId && current.revision > incoming.revision
@@ -23,29 +35,74 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
 }
 
-function WorkflowSteps({ projectId, run }: { projectId: string; run: WorkflowRun }) {
+function WorkflowSteps({ projectId, run, rerun }: {
+  projectId: string
+  run: WorkflowRun
+  rerun: {
+    selected?: string
+    disabled: boolean
+    pending: boolean
+    retry: boolean
+    onSelect: (target: RerunTarget) => void
+    onConfirm: () => void
+    onCancel: () => void
+  }
+}) {
+  const confirmationId = useId()
+  const selectedButton = useRef<HTMLButtonElement>(null)
   return (
     <ol className="workflow-steps" aria-label="工作流步骤">
-      {run.steps.map((step) => (
-        <li key={step.key}>
+      {run.steps.map((step, index) => {
+        const selected = rerun.selected === step.key
+        const eligible = canRerunStep(run, index)
+        const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
+        return <li key={step.key}>
           <div className="workflow-step-heading">
             <strong dir="auto">{step.title}</strong>
             <span className="workflow-step-status" data-status={step.status}>{stepStatusLabels[step.status]}</span>
           </div>
           {step.message && <p className="workflow-note workflow-step-message" dir="auto">{step.message}</p>}
-          {step.status === 'SUCCEEDED' && (
-            <a className="workflow-download" href={workflowArtifactPath(projectId, run.runId, step.key)}
-              aria-label={`下载 Markdown：${step.title}`} download>下载 Markdown</a>
-          )}
+          {(step.status === 'SUCCEEDED' || eligible) && <div className="workflow-actions">
+            {step.status === 'SUCCEEDED' && <a className="workflow-download"
+              href={workflowArtifactPath(projectId, run.runId, step.key, step.artifactId)}
+              aria-label={`下载当前成果：${step.title}`} download>下载当前成果</a>}
+            {eligible && <button className="button outline" type="button" disabled={rerun.disabled}
+              aria-label={`重跑此步骤：${step.title}`} aria-expanded={selected}
+              aria-controls={selected ? confirmationId : undefined} onClick={(event) => {
+                if (selected) rerun.onCancel()
+                else {
+                  selectedButton.current = event.currentTarget
+                  rerun.onSelect({ runId: run.runId, expectedRevision: run.revision, stepKey: step.key })
+                }
+              }}>重跑此步骤</button>}
+          </div>}
+          {selected && <div className="workflow-rerun-confirm" id={confirmationId} role="group" aria-labelledby={`${confirmationId}-help`}>
+            <p className="workflow-note" id={`${confirmationId}-help`}>
+              仅重跑「{step.title}」。旧成果仍可从历史下载，后续已生成的成果会标为待重算。
+            </p>
+            <div className="workflow-actions">
+              <button className="button primary" type="button" disabled={!eligible || (rerun.disabled && !rerun.pending)}
+                aria-disabled={rerun.pending} onClick={rerun.onConfirm}>
+                {rerun.pending ? '正在提交…' : rerun.retry ? '重试重跑' : '确认重跑'}
+              </button>
+              <button className="button outline" type="button" disabled={rerun.pending} onClick={() => {
+                rerun.onCancel()
+                selectedButton.current?.focus()
+              }}>取消</button>
+            </div>
+          </div>}
+          {hasHistory && <WorkflowArtifactHistory projectId={projectId} runId={run.runId} stepKey={step.key}
+            stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount} />}
         </li>
-      ))}
+      })}
     </ol>
   )
 }
 
-function ManuscriptHandoff({ projectId, runId, onSaved }: {
+function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
   projectId: string
   runId: string
+  artifactId: string
   onSaved: (path: string) => void
 }) {
   const active = useRef<AbortController | null>(null)
@@ -61,7 +118,7 @@ function ManuscriptHandoff({ projectId, runId, onSaved }: {
     setSaving(true)
     setError('')
     try {
-      const file = await saveManuscript(projectId, runId, requestSignal(controller))
+      const file = await saveManuscript(projectId, runId, requestSignal(controller), artifactId)
       if (controller.signal.aborted) return
       onSaved(file.path)
       setSaved(true)
@@ -107,8 +164,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [actionError, setActionError] = useState('')
   const [feedback, setFeedback] = useState('')
   const [retry, setRetry] = useState<Attempt | null>(null)
+  const [rerunTarget, setRerunTarget] = useState<RerunTarget | null>(null)
   const [pending, setPending] = useState<Attempt['kind'] | null>(null)
   const run = snapshot?.run ?? null
+  const manuscript = run?.steps.find((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED')
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED')
   const waiting = run?.status === 'WAITING_CHECKPOINT'
   const rangeCompleted = run?.status === 'RANGE_COMPLETED'
@@ -133,6 +192,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const modelUnavailable = snapshot?.modelConfigured === false
   const requestBlocked = refreshing || readError !== '' || pending !== null
   const actionDisabled = requestBlocked || modelUnavailable || ((canStart || rangeCompleted) && !firstStep)
+  const rerunDisabled = requestBlocked || modelUnavailable
+  const selectedRerun = rerunTarget && run?.runId === rerunTarget.runId ? rerunTarget : null
+  const retryRerun = retry?.kind === 'rerun' && selectedRerun
+    && retry.input.runId === selectedRerun.runId && retry.input.expectedRevision === selectedRerun.expectedRevision
+    && retry.input.stepKey === selectedRerun.stepKey ? retry : null
   const target = Number(targetPaperCount)
   const validTarget = !isReview || (Number.isInteger(target) && target >= 10 && target <= 80)
   const currentRun = useEffectEvent(() => run)
@@ -180,6 +244,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     if (submission.current || requestBlocked) return
     if (kind === 'pause') {
       if (!canPause) return
+    } else if (kind === 'rerun') {
+      if (rerunDisabled || !selectedRerun || !run) return
+      const index = run.steps.findIndex((step) => step.key === selectedRerun.stepKey)
+      if (!canRerunStep(run, index)) return
     } else if (actionDisabled || (kind === 'start' ? !canStart || !validTarget : !canContinue)) return
     const outline = paperOutline
     if (kind === 'start' && isPaper && new TextEncoder().encode(outline).length > 16_384) {
@@ -192,7 +260,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     setPending(kind)
     setActionError('')
     setFeedback('')
-    let attempt: Attempt | null = kind === 'start' ? retryStart : kind === 'pause' ? retryPause : retryContinue
+    let attempt: Attempt | null = {
+      start: retryStart, continue: retryContinue, pause: retryPause, rerun: retryRerun,
+    }[kind]
     try {
       if (!attempt) {
         const requestId = crypto.randomUUID()
@@ -202,6 +272,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
             paper: isPaper ? { language: paperLanguage, outline } : undefined,
             throughStep: endStep || undefined,
           } }
+        } else if (kind === 'rerun') {
+          if (!selectedRerun) return
+          attempt = { kind, input: { requestId, ...selectedRerun } }
         } else {
           if (!run) return
           const input = { requestId, runId: run.runId, expectedRevision: run.revision }
@@ -215,9 +288,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         case 'start': updated = await startWorkflow(projectId, attempt.input, signal); break
         case 'continue': updated = await continueWorkflow(projectId, attempt.input, signal); break
         case 'pause': updated = await pauseWorkflow(projectId, attempt.input, signal); break
+        case 'rerun': updated = await rerunWorkflow(projectId, attempt.input, signal); break
       }
       if (controller.signal.aborted) return
       setRetry(null)
+      setRerunTarget(null)
       setThroughStep('')
       if (attempt.kind === 'start') setCheckpoints(false)
       setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
@@ -228,6 +303,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       if (controller.signal.aborted) return
       if (error instanceof ProjectApiError && (error.status === 409 || error.code === 'REVISION_CONFLICT')) {
         setRetry(null)
+        setRerunTarget(null)
         setFeedback('工作流状态已更新，请查看最新进度。')
         refresh()
       } else {
@@ -265,9 +341,17 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       </p>}
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
-      {run && <WorkflowSteps projectId={projectId} run={run} />}
-      {run?.steps.some((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED') &&
-        <ManuscriptHandoff key={run.runId} projectId={projectId} runId={run.runId} onSaved={onManuscriptSaved} />}
+      {run && <WorkflowSteps projectId={projectId} run={run} rerun={{
+        selected: selectedRerun?.stepKey,
+        disabled: rerunDisabled,
+        pending: pending === 'rerun',
+        retry: retryRerun !== null,
+        onSelect: setRerunTarget,
+        onConfirm: () => void submit('rerun'),
+        onCancel: () => setRerunTarget(null),
+      }} />}
+      {run && manuscript?.artifactId && <ManuscriptHandoff key={manuscript.artifactId}
+        projectId={projectId} runId={run.runId} artifactId={manuscript.artifactId} onSaved={onManuscriptSaved} />}
       {waiting && <p className="workflow-note">{isPaper ? '确认论文大纲后生成正文。'
         : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}

@@ -2,14 +2,14 @@ package workbench
 
 import (
 	"context"
-	"crypto/sha256"
+	"database/sql"
 	"errors"
-	"fmt"
 	"net/http"
 )
 
 func (api workflows) saveManuscript(w http.ResponseWriter, r *http.Request) {
-	file, err := api.store.saveWorkflowManuscript(r.Context(), r.PathValue("id"), r.PathValue("runId"))
+	artifactID := r.URL.Query().Get("artifactId")
+	file, err := api.store.saveWorkflowManuscript(r.Context(), r.PathValue("id"), r.PathValue("runId"), artifactID)
 	if err != nil {
 		writeWorkspaceError(w, "save workflow manuscript", err)
 		return
@@ -17,27 +17,54 @@ func (api workflows) saveManuscript(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, file)
 }
 
-func (s *Store) saveWorkflowManuscript(ctx context.Context, projectID, runID string) (WorkspaceFile, error) {
-	_, markdown, err := s.workflowArtifact(ctx, projectID, runID, "manuscript")
+func (s *Store) saveWorkflowManuscript(ctx context.Context, projectID, runID, expectedArtifactID string) (WorkspaceFile, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return WorkspaceFile{}, err
 	}
+	defer tx.Rollback()
+
+	step, _, err := workflowArtifactStep(ctx, tx, projectID, runID, "manuscript")
+	if err != nil {
+		return WorkspaceFile{}, err
+	}
+	artifact, err := lookupWorkflowArtifact(ctx, tx, projectID, runID, step, "")
+	if expectedArtifactID != "" && (errors.Is(err, sql.ErrNoRows) || (err == nil && artifact.ArtifactID != expectedArtifactID)) {
+		return WorkspaceFile{}, errWorkspaceConflict
+	}
+	if err != nil {
+		return WorkspaceFile{}, err
+	}
+	var firstID string
+	if err := tx.QueryRowContext(ctx, `SELECT task_id FROM tasks WHERE project_id = ? AND workflow_run_id = ?
+		AND workflow_step = ? AND status = 'SUCCEEDED' ORDER BY ordinal LIMIT 1`, projectID, runID, step).Scan(&firstID); err != nil {
+		return WorkspaceFile{}, err
+	}
 	path := "manuscripts/" + runID + "/main.md"
-	document, err := s.saveWorkspaceDocument(ctx, projectID, path, "", markdown)
-	if !errors.Is(err, errWorkspaceConflict) {
-		return document.WorkspaceFile, err
+	if artifact.ArtifactID != firstID {
+		path = "manuscripts/" + runID + "/" + artifact.ArtifactID + ".md"
+	}
+	file := workspaceTextFile(path, artifact.markdown)
+	current, err := currentWorkspaceFile(ctx, tx, projectID, path)
+	if errors.Is(err, sql.ErrNoRows) {
+		file, err = s.insertWorkspaceVersion(ctx, tx, projectID, file, &artifact.markdown)
+		if err != nil {
+			return WorkspaceFile{}, err
+		}
+		return file, tx.Commit()
+	}
+	if err != nil {
+		return WorkspaceFile{}, err
 	}
 
-	// Reopening a published manuscript keeps its later edits. A different file
-	// created at this path before the initial handoff is a genuine conflict.
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(markdown)))
+	// Reopening the same result preserves any subsequent edits in the workspace.
 	var originalExists bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workspace_versions
-		WHERE project_id = ? AND path = ? AND sha256 = ?)`, projectID, path, digest).Scan(&originalExists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workspace_versions
+		WHERE project_id = ? AND path = ? AND sha256 = ?)`, projectID, path, file.SHA256).Scan(&originalExists); err != nil {
 		return WorkspaceFile{}, err
 	}
 	if !originalExists {
 		return WorkspaceFile{}, errWorkspaceConflict
 	}
-	return s.workspaceFile(ctx, projectID, path)
+	return current, nil
 }

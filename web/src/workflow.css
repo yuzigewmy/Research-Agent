@@ -31,9 +31,9 @@
   background: var(--background);
 }
 
-.workflow-steps li { padding-block: 0.75rem; padding-inline-start: 0.25rem; }
-.workflow-steps li + li { border-block-start: 1px solid var(--line); }
-.workflow-steps li::marker { color: var(--muted); font-size: 0.875rem; }
+.workflow-steps > li { padding-block: 0.75rem; padding-inline-start: 0.25rem; }
+.workflow-steps > li + li { border-block-start: 1px solid var(--line); }
+.workflow-steps > li::marker { color: var(--muted); font-size: 0.875rem; }
 .workflow-step-heading strong { min-inline-size: 0; overflow-wrap: anywhere; font-weight: 650; }
 .workflow-step-message { margin-block-start: 0.25rem; white-space: pre-wrap; }
 .workflow-download {
@@ -47,6 +47,13 @@
   text-underline-offset: 0.15em;
 }
 .workflow-download:hover { color: var(--green-active); }
+
+.workflow-rerun-confirm, .workflow-artifact-page { display: grid; gap: 0.5rem; margin-block-start: 0.5rem; }
+.workflow-artifact-history { margin-block-start: 0.5rem; }
+.workflow-artifact-history summary { color: var(--green); font-size: 0.875rem; cursor: pointer; }
+.workflow-artifact-list { margin: 0; padding: 0; list-style: none; }
+.workflow-artifact-list > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; }
+.workflow-artifact-page > .button { justify-self: start; }
 
 .workflow-controls { display: grid; gap: 0.75rem; justify-items: start; }
 .workflow-checkpoint {

@@ -20,6 +20,7 @@ export const stepStatusLabels = {
   CANCELLING: '正在停止',
   CANCELLED: '已停止',
   SUCCEEDED: '已完成',
+  STALE: '待重算',
   FAILED: '失败',
   INTERRUPTED: '已中断',
 } as const
@@ -32,6 +33,19 @@ interface WorkflowStepDefinition {
 interface WorkflowStep extends WorkflowStepDefinition {
   status: keyof typeof stepStatusLabels
   message?: string
+  artifactId?: string
+  artifactCount?: number
+}
+
+interface WorkflowArtifact {
+  artifactId: string
+  createdAt: string
+  current: boolean
+}
+
+export interface WorkflowArtifactPage {
+  items: WorkflowArtifact[]
+  nextCursor?: string
 }
 
 export interface WorkflowRun {
@@ -72,6 +86,10 @@ export interface ContinueWorkflowInput extends PauseWorkflowInput {
   throughStep?: string
 }
 
+export interface RerunWorkflowInput extends PauseWorkflowInput {
+  stepKey: string
+}
+
 export function isWorkflowActive(run: WorkflowRun | null) {
   return run?.status === 'QUEUED' || run?.status === 'RUNNING' || run?.status === 'PAUSING'
 }
@@ -81,10 +99,29 @@ function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
   return !!step && typeof step.key === 'string' && /^[a-z][a-z0-9-]*$/.test(step.key) && typeof step.title === 'string'
 }
 
+function isPathId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
+}
+
 function isStep(value: unknown): value is WorkflowStep {
   const step = value as Partial<WorkflowStep> | null
   return !!step && typeof step.status === 'string' && Object.hasOwn(stepStatusLabels, step.status)
-    && (step.message === undefined || typeof step.message === 'string') && isStepDefinition(step)
+    && (step.message === undefined || typeof step.message === 'string')
+    && (step.artifactId === undefined || isPathId(step.artifactId))
+    && (step.artifactCount === undefined || (Number.isSafeInteger(step.artifactCount) && step.artifactCount >= 0))
+    && isStepDefinition(step)
+}
+
+function isWorkflowArtifact(value: unknown): value is WorkflowArtifact {
+  const artifact = value as Partial<WorkflowArtifact> | null
+  return !!artifact && isPathId(artifact.artifactId) && typeof artifact.current === 'boolean'
+    && typeof artifact.createdAt === 'string' && Number.isFinite(Date.parse(artifact.createdAt))
+}
+
+function isWorkflowArtifactPage(value: unknown): value is WorkflowArtifactPage {
+  const page = value as Partial<WorkflowArtifactPage> | null
+  return !!page && Array.isArray(page.items) && page.items.every(isWorkflowArtifact)
+    && (page.nextCursor === undefined || typeof page.nextCursor === 'string')
 }
 
 function isScope(value: unknown, steps: WorkflowStep[]) {
@@ -97,7 +134,7 @@ function isScope(value: unknown, steps: WorkflowStep[]) {
 
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
-  return !!run && typeof run.runId === 'string' && !!run.runId && run.runId !== '.' && run.runId !== '..'
+  return !!run && isPathId(run.runId)
     && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
     && typeof run.status === 'string' && Object.hasOwn(runStatusLabels, run.status)
     && typeof run.checkpoints === 'boolean' && typeof run.createdAt === 'string'
@@ -122,7 +159,7 @@ export function getWorkflow(projectId: string, signal: AbortSignal) {
   return request(workflowPath(projectId), isSnapshot, { cache: 'no-store', signal })
 }
 
-function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | PauseWorkflowInput, signal: AbortSignal) {
+function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | PauseWorkflowInput | RerunWorkflowInput, signal: AbortSignal) {
   return request(path, isRun, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -143,10 +180,25 @@ export function pauseWorkflow(projectId: string, input: PauseWorkflowInput, sign
   return postRun(`${workflowPath(projectId)}/pause`, input, signal)
 }
 
-export function workflowArtifactPath(projectId: string, runId: string, key: string) {
-  return `${workflowPath(projectId)}/${encodeURIComponent(runId)}/steps/${encodeURIComponent(key)}/artifact`
+export function rerunWorkflow(projectId: string, input: RerunWorkflowInput, signal: AbortSignal) {
+  return postRun(`${workflowPath(projectId)}/rerun`, input, signal)
 }
 
-export function saveManuscript(projectId: string, runId: string, signal: AbortSignal) {
-  return request(`${workflowPath(projectId)}/${encodeURIComponent(runId)}/manuscript`, isFileRecord, { method: 'POST', signal })
+function workflowStepPath(projectId: string, runId: string, key: string) {
+  return `${workflowPath(projectId)}/${encodeURIComponent(runId)}/steps/${encodeURIComponent(key)}`
+}
+
+export function workflowArtifactPath(projectId: string, runId: string, key: string, artifactId?: string) {
+  const step = workflowStepPath(projectId, runId, key)
+  return artifactId === undefined ? `${step}/artifact` : `${step}/artifacts/${encodeURIComponent(artifactId)}`
+}
+
+export function listWorkflowArtifacts(projectId: string, runId: string, key: string, signal: AbortSignal, cursor?: string) {
+  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
+  return request(`${workflowStepPath(projectId, runId, key)}/artifacts${query}`, isWorkflowArtifactPage, { cache: 'no-store', signal })
+}
+
+export function saveManuscript(projectId: string, runId: string, signal: AbortSignal, artifactId?: string) {
+  const query = artifactId ? `?${new URLSearchParams({ artifactId })}` : ''
+  return request(`${workflowPath(projectId)}/${encodeURIComponent(runId)}/manuscript${query}`, isFileRecord, { method: 'POST', signal })
 }
