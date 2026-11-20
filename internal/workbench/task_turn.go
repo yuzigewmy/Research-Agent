@@ -38,7 +38,7 @@ func (s *Store) taskTurnContext(ctx context.Context, projectID, turnID string) (
 	if err != nil {
 		return "", err
 	}
-	materials, err := s.turnMaterialExcerpts(turn.References)
+	materials, err := s.turnMaterialExcerpts(ctx, turn.References)
 	if err != nil {
 		return "", err
 	}

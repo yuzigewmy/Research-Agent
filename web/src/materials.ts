@@ -6,6 +6,7 @@ export interface Material {
   sha256: string
   size: number
   kind: 'text' | 'file'
+  format?: 'word'
   createdAt: string
 }
 
@@ -32,6 +33,7 @@ export function isMaterial(value: unknown): value is Material {
     && typeof material.sha256 === 'string' && /^[a-f\d]{64}$/i.test(material.sha256)
     && typeof material.size === 'number' && Number.isSafeInteger(material.size) && material.size >= 0
     && (material.kind === 'text' || material.kind === 'file')
+    && (material.format === undefined || material.format === 'word')
     && typeof material.createdAt === 'string' && Number.isFinite(Date.parse(material.createdAt))
 }
 

@@ -53,11 +53,14 @@ function MaterialPreviewContent({ projectId, material }: { projectId: string; ma
     </div>
   )
   const { text, truncated } = status.preview
+  const isWord = material.format === 'word'
   return (
     <>
       {text ? <pre className="material-text" tabIndex={0} aria-label={`文本预览：${material.name}`} dir="auto">{text}</pre>
-        : <p className="material-note" role="status">文件无文本内容</p>}
-      {truncated && <p className="material-note" role="status">预览已截断，可下载原件查看全文。</p>}
+        : <p className="material-note" role="status">{isWord ? '未读取到正文或表格文字。' : '文件无文本内容'}</p>}
+      {truncated && <p className="material-note" role="status">
+        {isWord ? '文字节选已截断，可下载 Word 原件。' : '预览已截断，可下载原件查看全文。'}
+      </p>}
     </>
   )
 }
@@ -158,6 +161,9 @@ export function MaterialPanel({ projectId, onReference, referenceIds = [] }: Mat
           const isOpen = previewId === material.materialId
           const previewRegion = `${headingId}-preview-${material.materialId}`
           const previewLabel = isOpen ? '收起预览' : '预览'
+          const isWord = material.format === 'word'
+          const hasText = material.kind === 'text' || isWord
+          const wordScopeId = isWord ? `${previewRegion}-scope` : undefined
           const referenced = referenceIds.includes(material.materialId)
           const atLimit = referenceLimitReached && !referenced
           return (
@@ -165,23 +171,25 @@ export function MaterialPanel({ projectId, onReference, referenceIds = [] }: Mat
               <div className="material-info">
                 <strong dir="auto">{material.name}</strong>
                 <div className="material-meta material-note">
-                  <span>{material.kind === 'text' ? '文本' : '文件'}</span>
+                  <span>{isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件'}</span>
                   <span>{formatSize(material.size)}</span>
                   <time dateTime={material.createdAt}>{materialDate.format(new Date(material.createdAt))}</time>
+                  {hasText && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
                 </div>
+                {isWord && <p className="material-note" id={wordScopeId}>正文和表格文字节选（预览最多 64 KiB，UTF-8）</p>}
               </div>
               <div className="material-actions">
-                {material.kind === 'text' && <button className="button outline" type="button"
+                {hasText && <button className="button outline" type="button"
                   aria-label={`${previewLabel}：${material.name}`} aria-expanded={isOpen} aria-controls={previewRegion}
-                  onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
+                  aria-describedby={wordScopeId} onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
                 <a className="button outline" href={materialDownloadPath(projectId, material.materialId)}
                   aria-label={`下载原件：${material.name}`} download>下载原件</a>
-                {material.kind === 'text' && onReference && <button className="button outline" type="button"
+                {hasText && onReference && <button className="button outline" type="button"
                   aria-label={`引用资料：${material.name}`} aria-pressed={referenced} aria-disabled={atLimit}
                   aria-describedby={atLimit ? referenceLimitHint : undefined}
                   onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
               </div>
-              {material.kind === 'text' && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
+              {hasText && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
                 {isOpen && <MaterialPreviewContent material={material} projectId={projectId} />}
               </div>}
             </li>

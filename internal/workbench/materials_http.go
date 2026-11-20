@@ -140,9 +140,9 @@ func (s *Store) handlePreviewMaterial(w http.ResponseWriter, r *http.Request) {
 		writeMaterialError(w, "read material for preview", err)
 		return
 	}
-	excerpt, err := s.previewMaterial(material, materialPreviewBytes)
+	excerpt, err := s.previewMaterial(r.Context(), material, materialPreviewBytes)
 	if errors.Is(err, errMaterialNotText) {
-		writeError(w, http.StatusUnprocessableEntity, "PREVIEW_UNAVAILABLE", "此资料暂不支持文本预览。")
+		writeError(w, http.StatusUnprocessableEntity, "PREVIEW_UNAVAILABLE", "无法提取此资料的正文，可下载原件查看。")
 		return
 	}
 	if err != nil {

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"research-agent/internal/wordread"
 )
 
 const materialColumns = `ordinal, material_id, name, sha256, size, kind, created_at`
@@ -43,6 +45,7 @@ type Material struct {
 	SHA256     string `json:"sha256"`
 	Size       int64  `json:"size"`
 	Kind       string `json:"kind"`
+	Format     string `json:"format,omitempty"`
 	CreatedAt  string `json:"createdAt"`
 	ordinal    int64
 }
@@ -124,9 +127,20 @@ func (s *Store) materialObject(digest string) string {
 	return filepath.Join(s.objectsDir, digest)
 }
 
+func materialFormat(name, kind string) string {
+	if kind == "file" {
+		switch strings.ToLower(filepath.Ext(name)) {
+		case ".docx", ".dotx":
+			return "word"
+		}
+	}
+	return ""
+}
+
 func scanMaterial(row interface{ Scan(...any) error }) (Material, error) {
 	var material Material
 	err := row.Scan(&material.ordinal, &material.MaterialID, &material.Name, &material.SHA256, &material.Size, &material.Kind, &material.CreatedAt)
+	material.Format = materialFormat(material.Name, material.Kind)
 	return material, err
 }
 
@@ -157,11 +171,31 @@ func (s *Store) queryMaterials(ctx context.Context, query string, args ...any) (
 	return items, rows.Err()
 }
 
-func (s *Store) previewMaterial(material Material, limit int) (MaterialPreview, error) {
-	if material.Kind != "text" {
+func (s *Store) previewMaterial(ctx context.Context, material Material, limit int) (MaterialPreview, error) {
+	if material.Kind != "text" && material.Format != "word" {
 		return MaterialPreview{}, errMaterialNotText
 	}
-	return s.previewObject(material.SHA256, limit)
+	return s.materialExcerpt(ctx, material.SHA256, material.Format, limit)
+}
+
+func (s *Store) materialExcerpt(ctx context.Context, digest, format string, limit int) (MaterialPreview, error) {
+	if format != "word" {
+		return s.previewObject(digest, limit)
+	}
+	file, err := os.Open(s.materialObject(digest))
+	if err != nil {
+		return MaterialPreview{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return MaterialPreview{}, err
+	}
+	text, truncated, err := wordread.Excerpt(ctx, file, info.Size(), limit)
+	if errors.Is(err, wordread.ErrDocument) {
+		return MaterialPreview{}, errMaterialNotText
+	}
+	return MaterialPreview{Text: text, Truncated: truncated}, err
 }
 
 func (s *Store) previewObject(digest string, limit int) (MaterialPreview, error) {

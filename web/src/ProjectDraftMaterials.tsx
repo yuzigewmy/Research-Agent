@@ -99,7 +99,7 @@ export function ProjectDraftMaterials({ draftId, canUpload, uploading, onUpload 
         <div className="material-info">
           <strong dir="auto">{item.name}</strong>
           <div className="material-meta material-note">
-            <span>{item.kind === 'text' ? '文本' : '文件'}</span>
+            <span>{item.format === 'word' ? 'Word' : item.kind === 'text' ? '文本' : '文件'}</span>
             <span>SHA-256 <code title={item.sha256}>{item.sha256.slice(0, 12)}</code></span>
             <time dateTime={item.createdAt}>{materialDate.format(new Date(item.createdAt))}</time>
           </div>

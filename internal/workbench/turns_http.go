@@ -57,7 +57,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errRequestConflict):
 		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联另一条消息或另一组资料。")
 	case errors.Is(err, errInvalidTurnReference):
-		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请引用当前项目中可读取的文本资料。")
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请选择当前项目中支持正文预览的资料。")
 	case errors.Is(err, errTurnBusy):
 		writeError(w, http.StatusConflict, "TURN_RUNNING", "上一轮仍在回复。")
 	case errors.Is(err, errModelUnavailable):
@@ -79,6 +79,9 @@ func (c conversation) reply(project Project, turn Turn) {
 	if err := c.generate(ctx, project, turn); err != nil {
 		log.Printf("conversation %s: %v", turn.TurnID, err)
 		status, message = "FAILED", "回复未完成。请检查模型连接，或重新发送。"
+		if errors.Is(err, errMaterialNotText) {
+			message = "无法读取引用资料的正文。请在资料预览中核对后重新发送。"
+		}
 	}
 	// Completion still needs to be recorded if the generation deadline expired.
 	saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -116,7 +119,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		}
 		messages = append(messages, inference.Message{Role: "user", Content: results})
 	}
-	input, err := c.store.turnInput(turn)
+	input, err := c.store.turnInput(ctx, turn)
 	if err != nil {
 		return err
 	}

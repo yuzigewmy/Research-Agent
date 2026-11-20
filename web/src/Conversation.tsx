@@ -217,11 +217,11 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
       {!loading && !configured && !error && <p className="turn-status">配置对话模型后即可提问。</p>}
       {references.length > 0 && <div className="turn-references draft-references" aria-labelledby="draft-references-title">
         <p id="draft-references-title">已选资料</p>
-        <p className="turn-status">发送时会将所选文本的节选一并发给模型。</p>
+        <p className="turn-status">发送时，已选资料的文字节选会一并发给模型。Word 节选来自正文和表格。</p>
         <ul aria-labelledby="draft-references-title">
           {references.map(({ materialId, name, sha256 }) => <li key={materialId}>
             <bdi>{name}</bdi>
-            <code className="turn-status" title={sha256}>{sha256.slice(0, 8)}</code>
+            <span className="turn-status">原文件 SHA-256 <code title={sha256}>{sha256.slice(0, 8)}</code></span>
             <button className="button outline" type="button" aria-label={`移除资料：${name}`}
               onClick={() => onClearReferences([materialId])}>移除</button>
           </li>)}

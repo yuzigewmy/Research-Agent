@@ -15,12 +15,13 @@ const turnReferenceSchema = `
 const maxTurnReferences = 4
 const referenceExcerptBytes = 8 << 10
 
-var errInvalidTurnReference = errors.New("reference is not a text material in this project")
+var errInvalidTurnReference = errors.New("reference does not identify a readable material in this project")
 
 type TurnReference struct {
 	MaterialID string `json:"materialId"`
 	Name       string `json:"name"`
 	SHA256     string `json:"sha256"`
+	Format     string `json:"format,omitempty"`
 }
 
 func validTurnReferenceIDs(ids []string) bool {
@@ -41,13 +42,18 @@ func resolveTurnReferences(ctx context.Context, tx *sql.Tx, projectID string, id
 	references := make([]TurnReference, 0, len(ids))
 	for _, id := range ids {
 		ref := TurnReference{MaterialID: id}
-		err := tx.QueryRowContext(ctx, `SELECT name, sha256 FROM materials
-			WHERE project_id = ? AND material_id = ? AND kind = 'text'`, projectID, id).Scan(&ref.Name, &ref.SHA256)
+		var kind string
+		err := tx.QueryRowContext(ctx, `SELECT name, sha256, kind FROM materials
+			WHERE project_id = ? AND material_id = ?`, projectID, id).Scan(&ref.Name, &ref.SHA256, &kind)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errInvalidTurnReference
 		}
 		if err != nil {
 			return nil, err
+		}
+		ref.Format = materialFormat(ref.Name, kind)
+		if kind != "text" && ref.Format != "word" {
+			return nil, errInvalidTurnReference
 		}
 		references = append(references, ref)
 	}
@@ -59,10 +65,10 @@ type turnMaterialExcerpt struct {
 	MaterialPreview
 }
 
-func (s *Store) turnMaterialExcerpts(references []TurnReference) ([]turnMaterialExcerpt, error) {
+func (s *Store) turnMaterialExcerpts(ctx context.Context, references []TurnReference) ([]turnMaterialExcerpt, error) {
 	materials := make([]turnMaterialExcerpt, 0, len(references))
 	for _, ref := range references {
-		excerpt, err := s.previewObject(ref.SHA256, referenceExcerptBytes)
+		excerpt, err := s.materialExcerpt(ctx, ref.SHA256, ref.Format, referenceExcerptBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -71,11 +77,11 @@ func (s *Store) turnMaterialExcerpts(references []TurnReference) ([]turnMaterial
 	return materials, nil
 }
 
-func (s *Store) turnInput(turn Turn) (string, error) {
+func (s *Store) turnInput(ctx context.Context, turn Turn) (string, error) {
 	if len(turn.References) == 0 {
 		return turn.Text, nil
 	}
-	materials, err := s.turnMaterialExcerpts(turn.References)
+	materials, err := s.turnMaterialExcerpts(ctx, turn.References)
 	if err != nil {
 		return "", err
 	}

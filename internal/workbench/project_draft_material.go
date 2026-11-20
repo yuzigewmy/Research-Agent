@@ -98,7 +98,7 @@ func (s *Store) draftPlanMaterials(ctx context.Context, draftID string) ([]turnM
 	for _, material := range materials {
 		refs = append(refs, TurnReference{MaterialID: material.MaterialID, Name: material.Name, SHA256: material.SHA256})
 	}
-	return s.turnMaterialExcerpts(refs)
+	return s.turnMaterialExcerpts(ctx, refs)
 }
 
 func publishDraftMaterials(ctx context.Context, tx *sql.Tx, draftID, projectID string) error {
