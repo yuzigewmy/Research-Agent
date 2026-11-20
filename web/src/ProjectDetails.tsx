@@ -58,12 +58,12 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
   const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
 
-  function onTaskChanged(task: Task) {
+  const onTaskChanged = useCallback((task: Task) => {
     setTaskUpdates((previous) => {
       const newer = previous.find((item) => item.taskId === task.taskId && item.revision >= task.revision)
       return newer ? previous : [...previous.filter((item) => item.taskId !== task.taskId), task]
     })
-  }
+  }, [])
 
   const taskSync = { updates: taskUpdates, onTaskChanged }
 

@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at, references_json, task_results_json`
+const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at,
+	references_json, task_results_json, mode, proposed_task_id`
 
 var (
 	errTurnBusy         = errors.New("project already has a running turn")
@@ -18,25 +19,29 @@ var (
 )
 
 type Turn struct {
-	ordinal     int64
-	TurnID      string           `json:"turnId"`
-	RequestID   string           `json:"requestId"`
-	Text        string           `json:"text"`
-	Answer      string           `json:"answer"`
-	Status      string           `json:"status"`
-	Message     string           `json:"message,omitempty"`
-	AfterSeq    int64            `json:"afterSeq"`
-	CreatedAt   string           `json:"createdAt"`
-	References  []TurnReference  `json:"references,omitempty"`
-	TaskResults []turnTaskResult `json:"taskResults,omitempty"`
+	ordinal        int64
+	TurnID         string           `json:"turnId"`
+	RequestID      string           `json:"requestId"`
+	Text           string           `json:"text"`
+	Answer         string           `json:"answer"`
+	Status         string           `json:"status"`
+	Message        string           `json:"message,omitempty"`
+	AfterSeq       int64            `json:"afterSeq"`
+	CreatedAt      string           `json:"createdAt"`
+	References     []TurnReference  `json:"references,omitempty"`
+	TaskResults    []turnTaskResult `json:"taskResults,omitempty"`
+	Mode           string           `json:"mode"`
+	ProposedTaskID string           `json:"proposedTaskId,omitempty"`
 }
 
 type TurnEvent struct {
-	Seq     int64  `json:"seq"`
-	Kind    string `json:"kind"`
-	Text    string `json:"text,omitempty"`
-	Status  string `json:"status,omitempty"`
-	Message string `json:"message,omitempty"`
+	Seq                 int64  `json:"seq"`
+	Kind                string `json:"kind"`
+	Text                string `json:"text,omitempty"`
+	Status              string `json:"status,omitempty"`
+	Message             string `json:"message,omitempty"`
+	ProposedTaskID      string `json:"proposedTaskId,omitempty"`
+	proposalInstruction string
 }
 
 const turnsSchema = `
@@ -84,7 +89,7 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var t Turn
 	var references, taskResults []byte
 	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message,
-		&t.AfterSeq, &t.CreatedAt, &references, &taskResults); err != nil {
+		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(references, &t.References); err != nil {
@@ -96,16 +101,16 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	return t, nil
 }
 
-func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string, referenceIDs []string, modelReady bool) (Turn, Project, bool, error) {
+func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnInput, modelReady bool) (Turn, Project, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
 	defer tx.Rollback()
 
-	turn, err := scanTurn(tx.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND request_id = ?`, projectID, requestID))
+	turn, err := scanTurn(tx.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND request_id = ?`, projectID, input.RequestID))
 	if err == nil {
-		if turn.Text != text || !slices.EqualFunc(turn.References, referenceIDs, func(ref TurnReference, id string) bool {
+		if turn.Text != input.Text || turn.Mode != input.Mode || !slices.EqualFunc(turn.References, input.ReferenceIDs, func(ref TurnReference, id string) bool {
 			return ref.MaterialID == id
 		}) {
 			return Turn{}, Project{}, false, errRequestConflict
@@ -129,7 +134,7 @@ func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string
 	if running {
 		return Turn{}, Project{}, false, errTurnBusy
 	}
-	references, err := resolveTurnReferences(ctx, tx, projectID, referenceIDs)
+	references, err := resolveTurnReferences(ctx, tx, projectID, input.ReferenceIDs)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
@@ -145,11 +150,11 @@ func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
-	turn = Turn{TurnID: rand.Text(), RequestID: requestID, Text: text, References: references, TaskResults: results,
-		Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
-	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at, references_json, task_results_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, requestID, turn.Text,
-		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON)).Scan(&turn.ordinal)
+	turn = Turn{TurnID: rand.Text(), RequestID: input.RequestID, Text: input.Text, References: references, TaskResults: results,
+		Mode: input.Mode, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at, references_json, task_results_json, mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
+		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON), turn.Mode).Scan(&turn.ordinal)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
@@ -186,15 +191,21 @@ func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent)
 	}
 	defer tx.Rollback()
 
+	if e.Kind == "done" && e.Status == "COMPLETED" && e.proposalInstruction != "" {
+		e.ProposedTaskID, err = insertTurnProposal(ctx, tx, turnID, e.proposalInstruction)
+		if err != nil {
+			return err
+		}
+	}
 	var seq int64
-	if err := tx.QueryRowContext(ctx, `INSERT INTO turn_events(turn_id, kind, text, status, message)
-		VALUES (?, ?, ?, ?, ?) RETURNING seq`, turnID, e.Kind, e.Text, e.Status, e.Message).Scan(&seq); err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO turn_events(turn_id, kind, text, status, message, proposed_task_id)
+		VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`, turnID, e.Kind, e.Text, e.Status, e.Message, e.ProposedTaskID).Scan(&seq); err != nil {
 		return err
 	}
 	var storedID string
 	if err := tx.QueryRowContext(ctx, `UPDATE turns SET answer = answer || ?,
-		status = COALESCE(NULLIF(?, ''), status), message = ?, event_seq = ?
-		WHERE turn_id = ? AND status = 'RUNNING' RETURNING turn_id`, e.Text, e.Status, e.Message, seq, turnID).Scan(&storedID); err != nil {
+		status = COALESCE(NULLIF(?, ''), status), message = ?, event_seq = ?, proposed_task_id = ?
+		WHERE turn_id = ? AND status = 'RUNNING' RETURNING turn_id`, e.Text, e.Status, e.Message, seq, e.ProposedTaskID, turnID).Scan(&storedID); err != nil {
 		return err
 	}
 	if e.Kind == "done" && e.Status == "COMPLETED" {
@@ -208,7 +219,7 @@ func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent)
 const streamBatch = 128
 
 func (s *Store) readTurnEvents(ctx context.Context, turnID string, after int64) ([]TurnEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT seq, kind, text, status, message FROM turn_events
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, kind, text, status, message, proposed_task_id FROM turn_events
 		WHERE turn_id = ? AND seq > ? ORDER BY seq LIMIT ?`, turnID, after, streamBatch)
 	if err != nil {
 		return nil, err
@@ -218,7 +229,7 @@ func (s *Store) readTurnEvents(ctx context.Context, turnID string, after int64) 
 	var items []TurnEvent
 	for rows.Next() {
 		var e TurnEvent
-		if err := rows.Scan(&e.Seq, &e.Kind, &e.Text, &e.Status, &e.Message); err != nil {
+		if err := rows.Scan(&e.Seq, &e.Kind, &e.Text, &e.Status, &e.Message, &e.ProposedTaskID); err != nil {
 			return nil, err
 		}
 		items = append(items, e)

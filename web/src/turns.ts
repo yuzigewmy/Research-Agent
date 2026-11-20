@@ -5,6 +5,7 @@ const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED'] as const
 export const turnReferenceLimit = 4
 const turnTaskResultLimit = 4
 export type TurnStatus = typeof statuses[number]
+export type TurnMode = 'CHAT' | 'CONFIRM'
 export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'>
 
 interface TurnTaskResult {
@@ -17,11 +18,13 @@ export interface TurnInput {
   requestId: string
   text: string
   referenceIds?: string[]
+  mode?: TurnMode
 }
 
-export interface Turn extends Pick<TurnInput, 'requestId' | 'text'> {
+export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode'> {
   references?: TurnReference[]
   taskResults?: TurnTaskResult[]
+  proposedTaskId?: string
   turnId: string
   answer: string
   status: TurnStatus
@@ -38,7 +41,11 @@ export interface TurnPage {
 
 export type TurnEvent =
   | { seq: number; kind: 'delta'; text: string }
-  | { seq: number; kind: 'done'; status: Exclude<TurnStatus, 'RUNNING'>; message?: string }
+  | { seq: number; kind: 'done'; status: Exclude<TurnStatus, 'RUNNING'>; message?: string; proposedTaskId?: string }
+
+export function isProposedTaskId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
+}
 
 function isTurnReference(value: unknown): value is TurnReference {
   const reference = value as Partial<TurnReference> | null
@@ -73,6 +80,8 @@ function isTurn(value: unknown): value is Turn {
     && typeof turn.afterSeq === 'number' && typeof turn.createdAt === 'string'
     && (turn.references === undefined || isTurnReferences(turn.references))
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
+    && (turn.mode === undefined || turn.mode === 'CHAT' || turn.mode === 'CONFIRM')
+    && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
 }
 
 function isTurnPage(value: unknown): value is TurnPage {

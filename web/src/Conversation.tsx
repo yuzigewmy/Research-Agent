@@ -5,8 +5,8 @@ import { materialDownloadPath } from './materials'
 import { errorMessage } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
-import { listTurns, sendTurn, turnsPath } from './turns'
-import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
+import { isProposedTaskId, listTurns, sendTurn, turnsPath } from './turns'
+import type { Turn, TurnEvent, TurnInput, TurnMode, TurnReference } from './turns'
 
 type StreamTarget = { id: string; after: number }
 
@@ -35,6 +35,7 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
   const [cursor, setCursor] = useState<string>()
   const [configured, setConfigured] = useState(false)
   const [draft, setDraft] = useState(() => sessionStorage.getItem(draftKey) ?? readAttempt(attemptKey)?.text ?? '')
+  const [mode, setMode] = useState<TurnMode>(() => readAttempt(attemptKey)?.mode === 'CONFIRM' ? 'CONFIRM' : 'CHAT')
   const [loading, setLoading] = useState(true)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [sending, setSending] = useState(false)
@@ -54,6 +55,7 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
     sessionStorage.removeItem(attemptKey)
     if (sessionStorage.getItem(draftKey) === input.text) sessionStorage.removeItem(draftKey)
     setDraft((current) => current === input.text ? '' : current)
+    setMode('CHAT')
     if (input.referenceIds?.length) onClearReferences(input.referenceIds)
   }, [attemptKey, draftKey, onClearReferences])
 
@@ -97,7 +99,9 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
       setTurns((items) => items.map((turn) => {
         if (turn.turnId !== stream.id || event.seq <= turn.afterSeq) return turn
         if (event.kind === 'delta') return { ...turn, answer: turn.answer + event.text, afterSeq: event.seq }
-        return { ...turn, status: event.status, message: event.message, afterSeq: event.seq }
+        const proposedTaskId = event.status === 'COMPLETED' && isProposedTaskId(event.proposedTaskId)
+          ? event.proposedTaskId : undefined
+        return { ...turn, status: event.status, message: event.message, afterSeq: event.seq, proposedTaskId }
       }))
       if (event.kind === 'done') {
         source.close()
@@ -117,9 +121,10 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
     }
     const referenceIds = references.map(({ materialId }) => materialId)
     const previous = attempt.current
-    const input = previous?.text === draft && sameReferenceIds(previous.referenceIds, referenceIds)
+    const input: TurnInput = previous?.text === draft && (previous.mode ?? 'CHAT') === mode
+      && sameReferenceIds(previous.referenceIds, referenceIds)
       ? previous
-      : { requestId: crypto.randomUUID(), text: draft, referenceIds: referenceIds.length ? referenceIds : undefined }
+      : { requestId: crypto.randomUUID(), text: draft, mode, referenceIds: referenceIds.length ? referenceIds : undefined }
     attempt.current = input
     sessionStorage.setItem(attemptKey, JSON.stringify(input))
     const controller = new AbortController()
@@ -207,8 +212,9 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
             {turn.answer && <p className="turn-content" dir="auto">{turn.answer}</p>}
             {turn.status === 'RUNNING' && <p className="turn-status" role="status">{connectionLost ? '连接中断，正在续接…' : '正在回复…'}</p>}
             {turn.message && <p className="turn-status">{turn.message}</p>}
-            {turn.status === 'COMPLETED' && <ConversationTasks projectId={projectId} turnId={turn.turnId}
-              text={turn.text} sync={taskSync} />}
+            {turn.status === 'COMPLETED' && <ConversationTasks key={turn.proposedTaskId ?? turn.turnId}
+              projectId={projectId} turnId={turn.turnId} text={turn.text}
+              proposedTaskId={turn.proposedTaskId} sync={taskSync} />}
           </li>
         ))}
       </ol>
@@ -229,6 +235,14 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
       </div>}
       {configured && (
         <form className="create-form" onSubmit={send} aria-busy={sending}>
+          <div className="field">
+            <label htmlFor="turn-mode">本轮协作</label>
+            <select id="turn-mode" value={mode} disabled={loading || sending}
+              onChange={(event) => setMode(event.currentTarget.value === 'CONFIRM' ? 'CONFIRM' : 'CHAT')}>
+              <option value="CHAT">仅问答</option>
+              <option value="CONFIRM">建议任务，确认后运行</option>
+            </select>
+          </div>
           <div className="field">
             <label htmlFor="turn-message">消息</label>
             <textarea id="turn-message" rows={3} maxLength={16_384} value={draft} readOnly={sending}

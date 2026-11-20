@@ -224,10 +224,11 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   )
 }
 
-export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', sync }: {
+export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', proposedTaskId, sync }: {
   projectId: string
   sourceTurnId?: string
   initialInstruction?: string
+  proposedTaskId?: string
   sync?: TaskPanelSync
 }) {
   const panelId = useId()
@@ -253,22 +254,28 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', sy
   const focusAfterAction = useRef<{ taskId: string; control: Element | null } | null>(null)
   const sharedUpdates = sync?.updates
   const tasks = useMemo(() => {
-    if (!sharedUpdates?.length) return localTasks
-    const updates = sourceTurnId ? sharedUpdates.filter((task) => task.sourceTurnId === sourceTurnId) : sharedUpdates
-    return mergeTasks(localTasks, updates)
-  }, [localTasks, sharedUpdates, sourceTurnId])
+    const updates = sourceTurnId ? sharedUpdates?.filter((task) => task.sourceTurnId === sourceTurnId) : sharedUpdates
+    const merged = updates?.length ? mergeTasks(localTasks, updates) : localTasks
+    const proposedTask = proposedTaskId && merged.find((task) => task.taskId === proposedTaskId)
+    return proposedTask ? [proposedTask, ...merged.filter((task) => task.taskId !== proposedTaskId)] : merged
+  }, [localTasks, sharedUpdates, sourceTurnId, proposedTaskId])
   const hasActiveTasks = tasks.some((task) => isTaskActive(task.status))
 
+  const onTaskChanged = sync?.onTaskChanged
   const acceptPage = useCallback((page: TaskPage) => {
     setTasks((current) => mergeTasks(current, page.items))
     setConfigured(page.modelConfigured)
     setQueueError('')
-  }, [])
+    const proposedTask = proposedTaskId && page.items.find((task) => task.taskId === proposedTaskId)
+    if (proposedTask) onTaskChanged?.(proposedTask)
+  }, [onTaskChanged, proposedTaskId])
 
   useEffect(() => {
     const controller = new AbortController()
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
-    void listTasks(projectId, signal, undefined, sourceTurnId).then((page) => {
+    const request = proposedTaskId ? refreshTasks(projectId, [proposedTaskId], signal, sourceTurnId)
+      : listTasks(projectId, signal, undefined, sourceTurnId)
+    void request.then((page) => {
       if (controller.signal.aborted) return
       acceptPage(page)
       setCursor(page.nextCursor)
@@ -278,7 +285,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', sy
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [acceptPage, projectId, reload, sourceTurnId])
+  }, [acceptPage, projectId, proposedTaskId, reload, sourceTurnId])
 
   const poll = useEffectEvent(async (signal: AbortSignal) => {
     const activeIds = tasks.filter((task) => isTaskActive(task.status)).map((task) => task.taskId)
@@ -433,34 +440,38 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', sy
     void mutate({ kind: 'propose', instruction, inputVersionIds: draftInputs.length ? versionIds(draftInputs) : undefined })
   }
 
+  const proposalForm = (
+    <form className="create-form" onSubmit={submit} noValidate aria-busy={pending === 'propose'}>
+      <div className="field">
+        <label htmlFor={`${panelId}-instruction`}>任务说明</label>
+        <textarea id={`${panelId}-instruction`} name="instruction" rows={3} required ref={instructionField}
+          value={draft} readOnly={pending === 'propose'} aria-invalid={inputError ? true : undefined}
+          aria-describedby={`${panelId}-hint${inputError ? ` ${panelId}-error` : ''}`}
+          onChange={(event) => {
+            setDraft(event.currentTarget.value)
+            setInputError('')
+          }} />
+        <p id={`${panelId}-hint`} className="task-note">
+          {sourceTurnId && prefillTooLong ? '原话超过 8 KiB，请填写简短的任务说明。'
+            : '说明研究目标，以及计划需要回答的问题。'}
+        </p>
+        {inputError && <p className="form-error" role="alert" id={`${panelId}-error`}>{inputError}</p>}
+      </div>
+      <TaskInputVersions projectId={projectId} inputs={draftInputs} disabled={pending !== null} onChange={setDraftInputs} />
+      <div className="task-actions">
+        <button className="button primary" type="submit" disabled={configured === undefined} aria-disabled={pending !== null}>
+          {pending === 'propose' ? '正在提交…' : '提交提议'}
+        </button>
+      </div>
+    </form>
+  )
+
   return (
     <section className="task-panel" aria-labelledby={`${panelId}-heading`}>
       <h4 id={`${panelId}-heading`}>{sourceTurnId ? '此对话的任务' : '研究计划'}</h4>
       {sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
       {configured === false && <p className="task-note" role="status">研究模型未配置。可以提交任务提议，配置模型后即可运行。</p>}
-      <form className="create-form" onSubmit={submit} noValidate aria-busy={pending === 'propose'}>
-        <div className="field">
-          <label htmlFor={`${panelId}-instruction`}>任务说明</label>
-          <textarea id={`${panelId}-instruction`} name="instruction" rows={3} required ref={instructionField}
-            value={draft} readOnly={pending === 'propose'} aria-invalid={inputError ? true : undefined}
-            aria-describedby={`${panelId}-hint${inputError ? ` ${panelId}-error` : ''}`}
-            onChange={(event) => {
-              setDraft(event.currentTarget.value)
-              setInputError('')
-            }} />
-          <p id={`${panelId}-hint`} className="task-note">
-            {sourceTurnId && prefillTooLong ? '原话超过 8 KiB，请填写简短的任务说明。'
-              : '说明研究目标，以及计划需要回答的问题。'}
-          </p>
-          {inputError && <p className="form-error" role="alert" id={`${panelId}-error`}>{inputError}</p>}
-        </div>
-        <TaskInputVersions projectId={projectId} inputs={draftInputs} disabled={pending !== null} onChange={setDraftInputs} />
-        <div className="task-actions">
-          <button className="button primary" type="submit" disabled={configured === undefined} aria-disabled={pending !== null}>
-            {pending === 'propose' ? '正在提交…' : '提交提议'}
-          </button>
-        </div>
-      </form>
+      {!proposedTaskId && proposalForm}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {loading && <p className="task-note" role="status">正在读取任务…</p>}
       {queueError && <div className="request-error">
@@ -477,6 +488,10 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', sy
           onAction={mutate} showSourceLink={!sourceTurnId} />)}
       </ol>}
       {!loading && !queueError && tasks.length === 0 && <p className="task-note">提交提议后，可在此查看任务进度并下载计划。</p>}
+      {proposedTaskId && <details>
+        <summary className="turn-role">从此对话提议任务</summary>
+        {proposalForm}
+      </details>}
       {cursor && <div className="task-actions">
         <button className="button outline" type="button" disabled={loading || olderPending} onClick={() => void loadOlder()}>
           {olderPending ? '正在读取…' : '更早的任务'}

@@ -73,7 +73,7 @@ func TestTaskKeepsItsCompletedTurnAndReferences(t *testing.T) {
 	}
 	turn := func(id, requestID, text, answer string, references []string) string {
 		t.Helper()
-		started, _, _, err := store.beginTurn(ctx, id, requestID, text, references, true)
+		started, _, _, err := store.beginTurn(ctx, id, sendTurnInput{RequestID: requestID, Text: text, ReferenceIDs: references, Mode: turnModeChat}, true)
 		if err != nil {
 			t.Fatal(err)
 		}

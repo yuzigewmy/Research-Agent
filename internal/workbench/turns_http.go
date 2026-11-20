@@ -34,11 +34,7 @@ func (c conversation) register(mux *http.ServeMux) {
 }
 
 func (c conversation) send(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		RequestID    string   `json:"requestId"`
-		Text         string   `json:"text"`
-		ReferenceIDs []string `json:"referenceIds"`
-	}
+	var input sendTurnInput
 	if !readJSON(w, r, &input, 128<<10) {
 		return
 	}
@@ -50,12 +46,19 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。")
 		return
 	}
-	turn, project, created, err := c.store.beginTurn(r.Context(), r.PathValue("id"), input.RequestID, input.Text, input.ReferenceIDs, c.model != nil)
+	if input.Mode == "" {
+		input.Mode = turnModeChat
+	}
+	if input.Mode != turnModeChat && input.Mode != turnModeConfirm {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择仅问答或建议任务后确认。")
+		return
+	}
+	turn, project, created, err := c.store.beginTurn(r.Context(), r.PathValue("id"), input, c.model != nil)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "项目不存在。")
 	case errors.Is(err, errRequestConflict):
-		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联另一条消息或另一组资料。")
+		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联不同的消息、资料或协作方式。")
 	case errors.Is(err, errInvalidTurnReference):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请选择当前项目中支持正文预览的资料。")
 	case errors.Is(err, errTurnBusy):
@@ -75,26 +78,32 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 func (c conversation) reply(project Project, turn Turn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	status, message := "COMPLETED", ""
-	if err := c.generate(ctx, project, turn); err != nil {
+	instruction, err := c.generate(ctx, project, turn)
+	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposalInstruction: instruction}
+	if err != nil {
 		log.Printf("conversation %s: %v", turn.TurnID, err)
-		status, message = "FAILED", "回复未完成。请检查模型连接，或重新发送。"
-		if errors.Is(err, errMaterialNotText) {
-			message = "无法读取引用资料的正文。请在资料预览中核对后重新发送。"
+		event.Status = "FAILED"
+		switch {
+		case errors.Is(err, errMaterialNotText):
+			event.Message = "无法读取引用资料的正文。请在资料预览中核对后重新发送。"
+		case errors.Is(err, errInvalidTaskProposal):
+			event.Message = "任务建议缺少有效的说明。可重新发送消息。"
+		default:
+			event.Message = "回复未完成。请检查模型连接，或重新发送。"
 		}
 	}
 	// Completion still needs to be recorded if the generation deadline expired.
 	saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if err := c.store.appendTurnEvent(saveCtx, turn.TurnID, TurnEvent{Kind: "done", Status: status, Message: message}); err != nil {
+	if err := c.store.appendTurnEvent(saveCtx, turn.TurnID, event); err != nil {
 		log.Printf("finish conversation %s: %v", turn.TurnID, err)
 	}
 }
 
-func (c conversation) generate(ctx context.Context, project Project, turn Turn) error {
+func (c conversation) generate(ctx context.Context, project Project, turn Turn) (string, error) {
 	previous, err := c.store.listTurns(ctx, project.ProjectID, turn.ordinal, 6)
 	if err != nil {
-		return err
+		return "", err
 	}
 	projectData, err := json.Marshal(struct {
 		Title        string `json:"title"`
@@ -103,7 +112,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		Deliverables string `json:"deliverables,omitempty"`
 	}{project.Title, project.TemplateID, project.Goal, project.Deliverables})
 	if err != nil {
-		return err
+		return "", err
 	}
 	messages := []inference.Message{{Role: "system", Content: strings.TrimSpace(conversationPrompt)},
 		{Role: "user", Content: "以下 JSON 是当前项目资料。\n" + string(projectData)}}
@@ -115,27 +124,48 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	if len(turn.TaskResults) != 0 {
 		results, err := c.store.turnTaskResultsContext(ctx, project.ProjectID, turn.TaskResults)
 		if err != nil {
-			return err
+			return "", err
 		}
 		messages = append(messages, inference.Message{Role: "user", Content: results})
 	}
 	input, err := c.store.turnInput(ctx, turn)
 	if err != nil {
-		return err
+		return "", err
 	}
 	messages = append(messages, inference.Message{Role: "user", Content: input})
 	var bytesWritten int
-	err = c.model.Stream(ctx, messages, func(delta string) error {
+	emit := func(delta string) error {
 		bytesWritten += len(delta)
 		if bytesWritten > 64<<10 {
 			return errors.New("conversation output exceeds 64 KiB")
 		}
 		return c.store.appendTurnEvent(ctx, turn.TurnID, TurnEvent{Kind: "delta", Text: delta})
-	})
-	if err == nil && bytesWritten == 0 {
-		return errors.New("model returned no text")
 	}
-	return err
+	var arguments json.RawMessage
+	if turn.Mode == turnModeConfirm {
+		arguments, err = c.model.StreamWithTool(ctx, messages, researchTaskTool, emit)
+	} else {
+		err = c.model.Stream(ctx, messages, emit)
+	}
+	if err != nil {
+		return "", err
+	}
+	if len(arguments) == 0 {
+		if bytesWritten == 0 {
+			return "", errors.New("model returned no text or task proposal")
+		}
+		return "", nil
+	}
+	instruction, err := researchTaskInstruction(arguments)
+	if err != nil {
+		return "", err
+	}
+	if bytesWritten == 0 {
+		if err := emit("请核对助手建议的研究任务。"); err != nil {
+			return "", err
+		}
+	}
+	return instruction, nil
 }
 
 func (c conversation) list(w http.ResponseWriter, r *http.Request) {
