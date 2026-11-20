@@ -48,7 +48,7 @@
 }
 .workflow-download:hover { color: var(--green-active); }
 
-.workflow-rerun-confirm, .workflow-cancel-confirm, .workflow-artifact-page {
+.workflow-rerun-confirm, .workflow-cancel-confirm, .workflow-acceptance-fields, .workflow-artifact-page {
   display: grid;
   gap: 0.5rem;
   margin-block-start: 0.5rem;

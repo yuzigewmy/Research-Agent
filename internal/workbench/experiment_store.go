@@ -100,6 +100,7 @@ type WorkflowRun struct {
 	Language         string         `json:"language,omitempty"`
 	Scope            WorkflowScope  `json:"scope"`
 	Steps            []WorkflowStep `json:"steps"`
+	AcceptStepKey    string         `json:"acceptStepKey,omitempty"`
 	step             int
 	rangeStart       int
 	rangeEnd         int
@@ -107,12 +108,13 @@ type WorkflowRun struct {
 }
 
 type WorkflowStep struct {
-	Key           string `json:"key"`
-	Title         string `json:"title"`
-	Status        string `json:"status"`
-	Message       string `json:"message,omitempty"`
-	ArtifactID    string `json:"artifactId,omitempty"`
-	ArtifactCount int    `json:"artifactCount,omitempty"`
+	Key           string                  `json:"key"`
+	Title         string                  `json:"title"`
+	Status        string                  `json:"status"`
+	Message       string                  `json:"message,omitempty"`
+	ArtifactID    string                  `json:"artifactId,omitempty"`
+	ArtifactCount int                     `json:"artifactCount,omitempty"`
+	Source        *workflowArtifactSource `json:"source,omitempty"`
 }
 
 type workflowRequest struct {
@@ -159,11 +161,13 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	for i, stage := range stages {
 		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING"}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.workflow_step, t.task_id, t.status, t.message, t.workflow_superseded, history.artifacts
+	rows, err := tx.QueryContext(ctx, `SELECT t.workflow_step, t.task_id, t.status, t.message, t.workflow_superseded, history.artifacts,
+		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, '')
 		FROM tasks t JOIN (
 			SELECT MAX(ordinal) AS latest, COUNT(CASE WHEN status = 'SUCCEEDED' THEN 1 END) AS artifacts
 			FROM tasks WHERE workflow_run_id = ? GROUP BY workflow_step
-		) history ON t.ordinal = history.latest`, run.RunID)
+		) history ON t.ordinal = history.latest
+		LEFT JOIN workspace_versions v ON v.version_id = t.workflow_source_version_id AND v.project_id = t.project_id`, run.RunID)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -172,7 +176,9 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		var index, count int
 		var superseded bool
 		var id, status, message string
-		if err := rows.Scan(&index, &id, &status, &message, &superseded, &count); err != nil {
+		var source workflowArtifactSource
+		if err := rows.Scan(&index, &id, &status, &message, &superseded, &count,
+			&source.VersionID, &source.Path, &source.SHA256); err != nil {
 			return WorkflowRun{}, err
 		}
 		step := &run.Steps[index]
@@ -189,8 +195,12 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		step.Status, step.Message = status, message
 		if status == taskSucceeded {
 			step.ArtifactID = id
+			if source.VersionID != "" {
+				step.Source = &source
+			}
 		}
 	}
+	run.AcceptStepKey = acceptableWorkflowStep(run, stages)
 	return run, rows.Err()
 }
 

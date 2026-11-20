@@ -45,13 +45,14 @@ function ArtifactList({ projectId, runId, stepKey, stepTitle }: ArtifactSource) 
 
   return <div className="workflow-artifact-page">
     {page.items.length > 0 && <ul className="workflow-artifact-list" aria-label={`${stepTitle}成果版本`}>
-      {page.items.map(({ artifactId, createdAt, current }) => {
+      {page.items.map(({ artifactId, createdAt, current, source }) => {
         const date = artifactDate.format(new Date(createdAt))
         const label = current ? '当前成果' : '历史成果'
         return <li key={artifactId}>
           <span className="workflow-note">{label} · <time dateTime={createdAt}>{date}</time></span>
           <a className="workflow-download" href={workflowArtifactPath(projectId, runId, stepKey, artifactId)}
             aria-label={`下载${label}版本 ${stepTitle} ${date}`} download>下载此版本</a>
+          {source && <span className="workflow-note">工作区来源 <bdi>{source.path}</bdi> · 版本 <bdi>{source.versionId}</bdi></span>}
         </li>
       })}
     </ul>}

@@ -10,9 +10,10 @@ import (
 )
 
 type workflowArtifactRecord struct {
-	ArtifactID string `json:"artifactId"`
-	CreatedAt  string `json:"createdAt"`
-	Current    bool   `json:"current"`
+	ArtifactID string                  `json:"artifactId"`
+	CreatedAt  string                  `json:"createdAt"`
+	Current    bool                    `json:"current"`
+	Source     *workflowArtifactSource `json:"source,omitempty"`
 	ordinal    int64
 	markdown   string
 }
@@ -63,9 +64,11 @@ func (api workflows) artifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const limit = 30
-	rows, err := api.store.db.QueryContext(ctx, `SELECT ordinal, task_id, created_at, workflow_superseded = 0
-		FROM tasks WHERE project_id = ? AND workflow_run_id = ? AND workflow_step = ? AND status = 'SUCCEEDED'
-		AND (? = 0 OR ordinal < ?) ORDER BY ordinal DESC LIMIT ?`, projectID, runID, step, cursor, cursor, limit+1)
+	rows, err := api.store.db.QueryContext(ctx, `SELECT t.ordinal, t.task_id, t.created_at, t.workflow_superseded = 0,
+		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, '')
+		FROM tasks t LEFT JOIN workspace_versions v ON v.version_id = t.workflow_source_version_id AND v.project_id = t.project_id
+		WHERE t.project_id = ? AND t.workflow_run_id = ? AND t.workflow_step = ? AND t.status = 'SUCCEEDED'
+		AND (? = 0 OR t.ordinal < ?) ORDER BY t.ordinal DESC LIMIT ?`, projectID, runID, step, cursor, cursor, limit+1)
 	if err != nil {
 		writeWorkflowArtifactError(w, err)
 		return
@@ -77,13 +80,18 @@ func (api workflows) artifacts(w http.ResponseWriter, r *http.Request) {
 	}{Items: make([]workflowArtifactRecord, 0, limit)}
 	for rows.Next() {
 		var record workflowArtifactRecord
-		if err := rows.Scan(&record.ordinal, &record.ArtifactID, &record.CreatedAt, &record.Current); err != nil {
+		var source workflowArtifactSource
+		if err := rows.Scan(&record.ordinal, &record.ArtifactID, &record.CreatedAt, &record.Current,
+			&source.VersionID, &source.Path, &source.SHA256); err != nil {
 			writeWorkflowArtifactError(w, err)
 			return
 		}
 		if len(page.Items) == limit {
 			page.NextCursor = strconv.FormatInt(page.Items[limit-1].ordinal, 10)
 			break
+		}
+		if source.VersionID != "" {
+			record.Source = &source
 		}
 		page.Items = append(page.Items, record)
 	}

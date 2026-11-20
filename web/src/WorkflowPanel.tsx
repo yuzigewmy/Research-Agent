@@ -2,12 +2,15 @@ import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
+import { WorkflowStageAcceptance } from './WorkflowStageAcceptance'
+import type { AcceptanceTarget } from './WorkflowStageAcceptance'
 import {
-  cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow, runStatusLabels,
-  saveManuscript, startWorkflow, stepStatusLabels, workflowArtifactPath,
+  acceptWorkflow, cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow,
+  runStatusLabels, saveManuscript, startWorkflow, stepStatusLabels, workflowArtifactPath,
 } from './workflow'
 import type {
-  ContinueWorkflowInput, RerunWorkflowInput, StartWorkflowInput, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
+  AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, StartWorkflowInput, WorkflowRun,
+  WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
 import './workflow.css'
 
@@ -20,6 +23,7 @@ type Attempt =
   | { kind: 'pause'; input: WorkflowRunActionInput }
   | { kind: 'cancel'; input: WorkflowRunActionInput }
   | { kind: 'rerun'; input: RerunWorkflowInput }
+  | { kind: 'accept'; input: AcceptWorkflowInput }
 
 type CancelTarget = Omit<WorkflowRunActionInput, 'requestId'>
 type RerunTarget = Omit<RerunWorkflowInput, 'requestId'>
@@ -67,6 +71,9 @@ function WorkflowSteps({ projectId, run, rerun }: {
             <span className="workflow-step-status" data-status={step.status}>{stepStatusLabels[step.status]}</span>
           </div>
           {step.message && <p className="workflow-note workflow-step-message" dir="auto">{step.message}</p>}
+          {step.source && <p className="workflow-note">
+            工作区来源 <bdi>{step.source.path}</bdi> · 版本 <bdi>{step.source.versionId}</bdi>
+          </p>}
           {(canDownload || eligible) && <div className="workflow-actions">
             {canDownload && <a className="workflow-download"
               href={workflowArtifactPath(projectId, run.runId, step.key, step.artifactId)}
@@ -168,12 +175,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [reload, setReload] = useState(0)
   const [readError, setReadError] = useState('')
   const [actionError, setActionError] = useState('')
+  const [acceptError, setAcceptError] = useState<AcceptanceTarget & { message: string }>()
   const [feedback, setFeedback] = useState('')
   const [retry, setRetry] = useState<Attempt | null>(null)
   const [rerunTarget, setRerunTarget] = useState<RerunTarget | null>(null)
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null)
   const [pending, setPending] = useState<Attempt['kind'] | null>(null)
   const run = snapshot?.run ?? null
+  const acceptStep = run?.steps.find((step) => step.key === run.acceptStepKey)
   const manuscript = run?.steps.find((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED')
   const cancelled = run?.status === 'CANCELLED'
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED' || cancelled)
@@ -211,6 +220,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const retryRerun = retry?.kind === 'rerun' && selectedRerun
     && retry.input.runId === selectedRerun.runId && retry.input.expectedRevision === selectedRerun.expectedRevision
     && retry.input.stepKey === selectedRerun.stepKey ? retry : null
+  const retryAcceptance = retry?.kind === 'accept' && run?.runId === retry.input.runId
+    && run.revision === retry.input.expectedRevision && acceptStep?.key === retry.input.stepKey ? retry : null
+  const acceptanceError = acceptError && run?.runId === acceptError.runId
+    && run.revision === acceptError.expectedRevision && acceptStep?.key === acceptError.stepKey ? acceptError : undefined
   const target = Number(targetPaperCount)
   const validTarget = !isReview || (Number.isInteger(target) && target >= 10 && target <= 80)
   const currentRun = useEffectEvent(() => run)
@@ -264,12 +277,15 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     }
   }
 
-  async function submit(kind: Attempt['kind']) {
+  async function submit(kind: Attempt['kind'], acceptance?: AcceptanceTarget) {
     if (submission.current || requestBlocked) return
     if (kind === 'pause') {
       if (!canPause) return
     } else if (kind === 'cancel') {
       if (!selectedCancel) return
+    } else if (kind === 'accept') {
+      if (!acceptance || !run || acceptance.runId !== run.runId || acceptance.expectedRevision !== run.revision
+        || acceptance.stepKey !== acceptStep?.key) return
     } else if (kind === 'rerun') {
       if (rerunDisabled || !selectedRerun || !run) return
       const index = run.steps.findIndex((step) => step.key === selectedRerun.stepKey)
@@ -285,9 +301,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     submission.current = controller
     setPending(kind)
     setActionError('')
+    setAcceptError(undefined)
     setFeedback('')
     let attempt: Attempt | null = {
       start: retryStart, continue: retryContinue, pause: retryPause, cancel: retryCancel, rerun: retryRerun,
+      accept: retryAcceptance?.input.sourceVersionId === acceptance?.sourceVersionId ? retryAcceptance : null,
     }[kind]
     try {
       if (!attempt) {
@@ -304,6 +322,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         } else if (kind === 'cancel') {
           if (!selectedCancel) return
           attempt = { kind, input: { requestId, ...selectedCancel } }
+        } else if (kind === 'accept') {
+          if (!acceptance) return
+          attempt = { kind, input: { requestId, ...acceptance } }
         } else {
           if (!run) return
           const input = { requestId, runId: run.runId, expectedRevision: run.revision }
@@ -319,6 +340,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         case 'pause': updated = await pauseWorkflow(projectId, attempt.input, signal); break
         case 'cancel': updated = await cancelWorkflow(projectId, attempt.input, signal); break
         case 'rerun': updated = await rerunWorkflow(projectId, attempt.input, signal); break
+        case 'accept': updated = await acceptWorkflow(projectId, attempt.input, signal); break
       }
       if (controller.signal.aborted) return
       setRetry(null)
@@ -326,6 +348,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       setCancelTarget(null)
       setThroughStep('')
       if (attempt.kind === 'start') setCheckpoints(false)
+      if (attempt.kind === 'accept') setFeedback('已将所选稿件验收为步骤成果。')
       setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
       if (control instanceof HTMLButtonElement && document.activeElement === control) heading.current?.focus()
       // A replay may return an earlier revision. Read the latest state before accepting another action.
@@ -337,10 +360,12 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         setRerunTarget(null)
         setCancelTarget(null)
         setFeedback('工作流状态已更新，请查看最新进度。')
-        if (kind === 'cancel' && document.activeElement === control) heading.current?.focus()
+        if ((kind === 'cancel' || kind === 'accept') && document.activeElement === control) heading.current?.focus()
         refresh()
       } else {
-        setActionError(errorMessage(error))
+        const message = errorMessage(error)
+        if (attempt?.kind === 'accept') setAcceptError({ ...attempt.input, message })
+        else setActionError(message)
         const modelRejected = error instanceof ProjectApiError && error.code === 'MODEL_UNAVAILABLE'
         if (modelRejected) setSnapshot((current) => current && { ...current, modelConfigured: false })
         // Retain the full payload if the server may have applied it before the response failed.
@@ -388,6 +413,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       }} />}
       {run && manuscript?.artifactId && <ManuscriptHandoff key={manuscript.artifactId}
         projectId={projectId} runId={run.runId} artifactId={manuscript.artifactId} onSaved={onManuscriptSaved} />}
+      {run && acceptStep && <WorkflowStageAcceptance key={JSON.stringify([projectId, run.runId, run.revision, acceptStep.key, reload])}
+        projectId={projectId} target={{ runId: run.runId, expectedRevision: run.revision, stepKey: acceptStep.key }}
+        stepTitle={acceptStep.title} disabled={requestBlocked} pending={pending === 'accept'}
+        retryVersionId={retryAcceptance?.input.sourceVersionId} submissionError={acceptanceError}
+        onConfirm={(target) => void submit('accept', target)} />}
       {waiting && <p className="workflow-note">{isPaper ? '确认论文大纲后生成正文。'
         : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}

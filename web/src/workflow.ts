@@ -32,17 +32,25 @@ interface WorkflowStepDefinition {
   title: string
 }
 
+interface WorkflowArtifactSource {
+  versionId: string
+  path: string
+  sha256: string
+}
+
 interface WorkflowStep extends WorkflowStepDefinition {
   status: keyof typeof stepStatusLabels
   message?: string
   artifactId?: string
   artifactCount?: number
+  source?: WorkflowArtifactSource
 }
 
 interface WorkflowArtifact {
   artifactId: string
   createdAt: string
   current: boolean
+  source?: WorkflowArtifactSource
 }
 
 export interface WorkflowArtifactPage {
@@ -68,6 +76,8 @@ export interface WorkflowRun extends WorkflowRunSummary {
   targetPaperCount?: number
   sourceCount?: number
   language?: 'zh' | 'en'
+  acceptStepKey?: string
+  acceptedArtifactId?: string
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -100,6 +110,11 @@ export interface RerunWorkflowInput extends WorkflowRunActionInput {
   stepKey: string
 }
 
+export interface AcceptWorkflowInput extends WorkflowRunActionInput {
+  stepKey: string
+  sourceVersionId: string
+}
+
 export function isWorkflowActive(run: WorkflowRun | null) {
   const status = run?.status
   return status === 'QUEUED' || status === 'RUNNING' || status === 'PAUSING' || status === 'CANCELLING'
@@ -114,12 +129,19 @@ function isPathId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
 }
 
+function isArtifactSource(value: unknown): value is WorkflowArtifactSource {
+  const source = value as Partial<WorkflowArtifactSource> | null
+  return !!source && isPathId(source.versionId) && typeof source.path === 'string' && source.path.length > 0
+    && typeof source.sha256 === 'string' && /^[a-f\d]{64}$/i.test(source.sha256)
+}
+
 function isStep(value: unknown): value is WorkflowStep {
   const step = value as Partial<WorkflowStep> | null
   return !!step && typeof step.status === 'string' && Object.hasOwn(stepStatusLabels, step.status)
     && (step.message === undefined || typeof step.message === 'string')
     && (step.artifactId === undefined || isPathId(step.artifactId))
     && (step.artifactCount === undefined || (Number.isSafeInteger(step.artifactCount) && step.artifactCount >= 0))
+    && (step.source === undefined || isArtifactSource(step.source))
     && isStepDefinition(step)
 }
 
@@ -127,6 +149,7 @@ function isWorkflowArtifact(value: unknown): value is WorkflowArtifact {
   const artifact = value as Partial<WorkflowArtifact> | null
   return !!artifact && isPathId(artifact.artifactId) && typeof artifact.current === 'boolean'
     && typeof artifact.createdAt === 'string' && Number.isFinite(Date.parse(artifact.createdAt))
+    && (artifact.source === undefined || isArtifactSource(artifact.source))
 }
 
 function isWorkflowArtifactPage(value: unknown): value is WorkflowArtifactPage {
@@ -163,7 +186,10 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.sourceCount === undefined || Number.isSafeInteger(run.sourceCount))
     && (run.targetPaperCount === undefined || Number.isSafeInteger(run.targetPaperCount))
     && (run.language === undefined || run.language === 'zh' || run.language === 'en')
-    && Array.isArray(run.steps) && run.steps.every(isStep) && isScope(run.scope, run.steps) && isRunSummary(run)
+    && (run.acceptedArtifactId === undefined || isPathId(run.acceptedArtifactId))
+    && Array.isArray(run.steps) && run.steps.every(isStep)
+    && (run.acceptStepKey === undefined || run.steps.some((step) => step.key === run.acceptStepKey))
+    && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 
 function isSnapshot(value: unknown): value is WorkflowSnapshot {
@@ -191,7 +217,7 @@ export function getWorkflowRun(projectId: string, runId: string, signal: AbortSi
     (value): value is WorkflowRun => isRun(value) && value.runId === runId, { cache: 'no-store', signal })
 }
 
-function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | WorkflowRunActionInput | RerunWorkflowInput, signal: AbortSignal) {
+function postRun(path: string, input: StartWorkflowInput | WorkflowRunActionInput, signal: AbortSignal) {
   return request(path, isRun, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -218,6 +244,10 @@ export function cancelWorkflow(projectId: string, input: WorkflowRunActionInput,
 
 export function rerunWorkflow(projectId: string, input: RerunWorkflowInput, signal: AbortSignal) {
   return postRun(`${workflowPath(projectId)}/rerun`, input, signal)
+}
+
+export function acceptWorkflow(projectId: string, input: AcceptWorkflowInput, signal: AbortSignal) {
+  return postRun(`${workflowPath(projectId)}/accept`, input, signal)
 }
 
 function workflowStepPath(projectId: string, runId: string, key: string) {
