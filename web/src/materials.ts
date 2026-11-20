@@ -9,7 +9,7 @@ export interface Material {
   createdAt: string
 }
 
-interface MaterialPage {
+export interface MaterialPage {
   items: Material[]
   nextCursor?: string
 }
@@ -19,13 +19,13 @@ export interface MaterialPreview {
   truncated: boolean
 }
 
-const materialSizeLimit = 64 * 1024 * 1024
+export const materialSizeLimit = 64 * 1024 * 1024
 
 function isPathId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
 }
 
-function isMaterial(value: unknown): value is Material {
+export function isMaterial(value: unknown): value is Material {
   const material = value as Partial<Material> | null
   return !!material && isPathId(material.materialId)
     && typeof material.name === 'string' && material.name.length > 0
@@ -35,7 +35,7 @@ function isMaterial(value: unknown): value is Material {
     && typeof material.createdAt === 'string' && Number.isFinite(Date.parse(material.createdAt))
 }
 
-function isMaterialPage(value: unknown): value is MaterialPage {
+export function isMaterialPage(value: unknown): value is MaterialPage {
   const page = value as Partial<MaterialPage> | null
   return !!page && Array.isArray(page.items) && page.items.every(isMaterial)
     && (page.nextCursor === undefined || typeof page.nextCursor === 'string')

@@ -3,6 +3,7 @@ package workbench
 import (
 	"database/sql"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -43,6 +44,10 @@ func (s *Store) handleListMaterials(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, "list materials", err)
 		return
 	}
+	writeMaterialPage(w, items, pageSize)
+}
+
+func writeMaterialPage(w http.ResponseWriter, items []Material, pageSize int) {
 	var next string
 	if len(items) > pageSize {
 		next = strconv.FormatInt(items[pageSize-1].ordinal, 10)
@@ -54,20 +59,37 @@ func (s *Store) handleListMaterials(w http.ResponseWriter, r *http.Request) {
 	}{items, next})
 }
 
-func (s *Store) handleUploadMaterial(w http.ResponseWriter, r *http.Request) {
+func materialUpload(w http.ResponseWriter, r *http.Request) (string, io.Reader) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/octet-stream" {
 		writeError(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "请以原始文件格式上传。")
-		return
+		return "", nil
 	}
 	name := r.URL.Query().Get("name")
 	if strings.TrimSpace(name) == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") ||
 		!utf8.ValidString(name) || utf8.RuneCountInString(name) > 255 || strings.ContainsFunc(name, unicode.IsControl) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供一个有效的文件名。")
-		return
+		return "", nil
 	}
 	if r.ContentLength > maxUploadBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "单个资料不能超过 64 MiB。")
+		return "", nil
+	}
+	return name, http.MaxBytesReader(w, r.Body, maxUploadBytes)
+}
+
+func writeMaterialTooLarge(w http.ResponseWriter, err error) bool {
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		return false
+	}
+	writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "单个资料不能超过 64 MiB。")
+	return true
+}
+
+func (s *Store) handleUploadMaterial(w http.ResponseWriter, r *http.Request) {
+	name, body := materialUpload(w, r)
+	if body == nil {
 		return
 	}
 	ctx, projectID := r.Context(), r.PathValue("id")
@@ -75,10 +97,8 @@ func (s *Store) handleUploadMaterial(w http.ResponseWriter, r *http.Request) {
 		writeMaterialError(w, "read project for upload", err)
 		return
 	}
-	material, created, err := s.saveMaterial(ctx, projectID, name, http.MaxBytesReader(w, r.Body, maxUploadBytes))
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
-		writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "单个资料不能超过 64 MiB。")
+	material, created, err := s.saveMaterial(ctx, projectID, name, body)
+	if writeMaterialTooLarge(w, err) {
 		return
 	}
 	if err != nil {
@@ -98,6 +118,10 @@ func (s *Store) handleDownloadMaterial(w http.ResponseWriter, r *http.Request) {
 		writeMaterialError(w, "read material for download", err)
 		return
 	}
+	s.serveMaterial(w, r, material)
+}
+
+func (s *Store) serveMaterial(w http.ResponseWriter, r *http.Request, material Material) {
 	file, err := os.Open(s.materialObject(material.SHA256))
 	if err != nil {
 		writeStoreError(w, "open material object", err)

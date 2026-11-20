@@ -146,6 +146,39 @@ func (s *Store) listProjectDrafts(ctx context.Context, cursor projectCursor, lim
 	return items, rows.Err()
 }
 
+func prepareDraftMutation(ctx context.Context, tx *sql.Tx, id, action string, req draftChangeInput, payload string) (projectDraft, bool, error) {
+	draft, err := readProjectDraft(ctx, tx, id)
+	if err != nil {
+		return projectDraft{}, false, err
+	}
+	var previousAction, previousPayload string
+	var previousRevision int
+	err = tx.QueryRowContext(ctx, `SELECT action, expected_revision, payload FROM project_draft_requests
+		WHERE draft_id = ? AND request_id = ?`, id, req.RequestID).Scan(&previousAction, &previousRevision, &previousPayload)
+	if err == nil {
+		if previousAction != action || previousRevision != req.ExpectedRevision || previousPayload != payload {
+			return projectDraft{}, false, errRequestConflict
+		}
+		return draft, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return projectDraft{}, false, err
+	}
+	if draft.Revision != req.ExpectedRevision {
+		return projectDraft{}, false, errProjectRevision
+	}
+	if draft.Status != draftOpen {
+		return projectDraft{}, false, errDraftState
+	}
+	return draft, false, nil
+}
+
+func saveDraftReceipt(ctx context.Context, tx *sql.Tx, id, action string, req draftChangeInput, payload string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO project_draft_requests (draft_id, request_id, action, expected_revision, payload)
+		VALUES (?, ?, ?, ?, ?)`, id, req.RequestID, action, req.ExpectedRevision, payload)
+	return err
+}
+
 func (s *Store) changeProjectDraft(ctx context.Context, id, action string, req draftChangeInput, fields projectDraftFields, modelReady bool) (projectDraft, bool, error) {
 	payload := ""
 	if action == draftSave {
@@ -160,28 +193,9 @@ func (s *Store) changeProjectDraft(ctx context.Context, id, action string, req d
 		return projectDraft{}, false, err
 	}
 	defer tx.Rollback()
-	draft, err := readProjectDraft(ctx, tx, id)
-	if err != nil {
-		return projectDraft{}, false, err
-	}
-	var previousAction, previousPayload string
-	var previousRevision int
-	err = tx.QueryRowContext(ctx, `SELECT action, expected_revision, payload FROM project_draft_requests
-		WHERE draft_id = ? AND request_id = ?`, id, req.RequestID).Scan(&previousAction, &previousRevision, &previousPayload)
-	if err == nil {
-		if previousAction != action || previousRevision != req.ExpectedRevision || previousPayload != payload {
-			return projectDraft{}, false, errRequestConflict
-		}
-		return draft, false, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return projectDraft{}, false, err
-	}
-	if draft.Revision != req.ExpectedRevision {
-		return projectDraft{}, false, errProjectRevision
-	}
-	if draft.Status != draftOpen {
-		return projectDraft{}, false, errDraftState
+	draft, replayed, err := prepareDraftMutation(ctx, tx, id, action, req, payload)
+	if err != nil || replayed {
+		return draft, false, err
 	}
 	stamp := time.Now().UTC().Format(createdAtLayout)
 	switch action {
@@ -202,6 +216,9 @@ func (s *Store) changeProjectDraft(ctx context.Context, id, action string, req d
 			VALUES (?, ?, ?, ?, ?, ?, 'READY', 1, ?)`, draft.ProjectID, rand.Text(), draft.Title, draft.TemplateID, draft.Goal, draft.Deliverables, stamp); err != nil {
 			return projectDraft{}, false, err
 		}
+		if err := publishDraftMaterials(ctx, tx, draft.DraftID, draft.ProjectID); err != nil {
+			return projectDraft{}, false, err
+		}
 		draft.Status = draftCreated
 	}
 	updated, err := scanProjectDraft(tx.QueryRowContext(ctx, `UPDATE project_drafts SET title = ?, template_id = ?, goal = ?, deliverables = ?,
@@ -211,8 +228,7 @@ func (s *Store) changeProjectDraft(ctx context.Context, id, action string, req d
 	if err != nil {
 		return projectDraft{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO project_draft_requests (draft_id, request_id, action, expected_revision, payload)
-		VALUES (?, ?, ?, ?, ?)`, id, req.RequestID, action, req.ExpectedRevision, payload); err != nil {
+	if err := saveDraftReceipt(ctx, tx, id, action, req, payload); err != nil {
 		return projectDraft{}, false, err
 	}
 	return updated, true, tx.Commit()

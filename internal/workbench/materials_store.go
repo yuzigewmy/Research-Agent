@@ -73,36 +73,48 @@ func previewText(reader io.Reader, limit int) (MaterialPreview, error) {
 	return MaterialPreview{Text: string(bytes.TrimPrefix(prefix, []byte("\xef\xbb\xbf"))), Truncated: truncated}, nil
 }
 
-func (s *Store) saveMaterial(ctx context.Context, projectID, name string, body io.Reader) (Material, bool, error) {
+func (s *Store) stageMaterial(name string, body io.Reader) (Material, *os.File, error) {
 	file, err := os.CreateTemp(s.objectsDir, ".upload-")
 	if err != nil {
-		return Material{}, false, err
+		return Material{}, nil, err
 	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-
 	hash := sha256.New()
 	size, err := io.Copy(io.MultiWriter(file, hash), body)
 	if err != nil {
-		return Material{}, false, err
+		discardMaterialStage(file)
+		return Material{}, nil, err
 	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	kind := "file"
+	material := Material{Name: name, SHA256: hex.EncodeToString(hash.Sum(nil)), Size: size, Kind: "file"}
 	if preview, err := previewText(io.NewSectionReader(file, 0, materialPreviewBytes+1), materialPreviewBytes); err == nil &&
 		strings.HasPrefix(http.DetectContentType([]byte(preview.Text)), "text/") {
-		kind = "text"
+		material.Kind = "text"
 	}
-	if err := s.publishObject(file, digest); err != nil {
+	return material, file, nil
+}
+
+func discardMaterialStage(file *os.File) {
+	_ = file.Close()
+	_ = os.Remove(file.Name())
+}
+
+func (s *Store) saveMaterial(ctx context.Context, projectID, name string, body io.Reader) (Material, bool, error) {
+	staged, file, err := s.stageMaterial(name, body)
+	if err != nil {
+		return Material{}, false, err
+	}
+	defer discardMaterialStage(file)
+	if err := s.publishObject(file, staged.SHA256); err != nil {
 		return Material{}, false, err
 	}
 
 	material, err := scanMaterial(s.db.QueryRowContext(ctx, `INSERT INTO materials
 		(material_id, project_id, name, sha256, size, kind, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, name, sha256) DO NOTHING
-		RETURNING `+materialColumns, rand.Text(), projectID, name, digest, size, kind, time.Now().UTC().Format(createdAtLayout)))
+		RETURNING `+materialColumns, rand.Text(), projectID, staged.Name, staged.SHA256, staged.Size, staged.Kind,
+		time.Now().UTC().Format(createdAtLayout)))
 	if errors.Is(err, sql.ErrNoRows) {
 		material, err = scanMaterial(s.db.QueryRowContext(ctx, `SELECT `+materialColumns+`
-			FROM materials WHERE project_id = ? AND name = ? AND sha256 = ?`, projectID, name, digest))
+			FROM materials WHERE project_id = ? AND name = ? AND sha256 = ?`, projectID, staged.Name, staged.SHA256))
 		return material, false, err
 	}
 	return material, err == nil, err
@@ -124,13 +136,17 @@ func (s *Store) getMaterial(ctx context.Context, projectID, materialID string) (
 }
 
 func (s *Store) listMaterials(ctx context.Context, projectID string, cursor int64, limit int) ([]Material, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+materialColumns+` FROM materials
+	return s.queryMaterials(ctx, `SELECT `+materialColumns+` FROM materials
 		WHERE project_id = ? AND (? = 0 OR ordinal < ?) ORDER BY ordinal DESC LIMIT ?`, projectID, cursor, cursor, limit)
+}
+
+func (s *Store) queryMaterials(ctx context.Context, query string, args ...any) ([]Material, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := make([]Material, 0, limit)
+	items := make([]Material, 0)
 	for rows.Next() {
 		material, err := scanMaterial(rows)
 		if err != nil {

@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { ProjectDraftMaterials } from './ProjectDraftMaterials'
 import {
   createProjectDraft, finalizeProjectDraft, getProjectDraft, listProjectDrafts, planProjectDraft, saveProjectDraft,
+  uploadDraftMaterial,
 } from './projectDrafts'
-import type { ProjectDraft, ProjectDraftFields } from './projectDrafts'
+import type { DraftRevision, ProjectDraft, ProjectDraftFields } from './projectDrafts'
 import { errorMessage, isTemplateId, ProjectApiError, templates } from './projects'
 import type { Project } from './projects'
 
@@ -49,6 +51,7 @@ function DraftWorkspace({ onCreated }: Props) {
   const editorHeading = useRef<HTMLHeadingElement>(null)
   const mutation = useRef<AbortController | null>(null)
   const attempt = useRef<{ key: string; requestId: string } | undefined>(undefined)
+  const uploadAttempt = useRef<{ draftId: string; file: File; input: DraftRevision } | null>(null)
   const [drafts, setDrafts] = useState<ProjectDraft[]>([])
   const [cursor, setCursor] = useState<string>()
   const [page, setPage] = useState<{ cursor?: string }>({})
@@ -57,7 +60,7 @@ function DraftWorkspace({ onCreated }: Props) {
   const [modelConfigured, setConfigured] = useState<boolean>()
   const [prompt, setPrompt] = useState('')
   const [edit, setEdit] = useState<DraftEdit>()
-  const [pending, setPending] = useState<Operation>()
+  const [pending, setPending] = useState<Operation | 'upload'>()
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
   const [pollError, setPollError] = useState<{ draftId: string; message: string }>()
@@ -70,6 +73,7 @@ function DraftWorkspace({ onCreated }: Props) {
   const invalidText = (text: string) => encoder.encode(text).length > 4 * 1024 || text.includes('\0')
   const invalidFields = invalidTitle || (!!fields && textFields.some(([key]) => invalidText(fields[key])))
   const editable = draft?.status === 'DRAFT' && !pending
+  const canUpload = editable && !dirty && !conflict
   const trimmedPrompt = prompt.trim()
   const invalidPrompt = encoder.encode(trimmedPrompt).length > 8 * 1024 || trimmedPrompt.includes('\0')
   const visibleDrafts = drafts.filter((item) => item.status !== 'CREATED')
@@ -158,6 +162,7 @@ function DraftWorkspace({ onCreated }: Props) {
           const project = await finalizeProjectDraft(draft.draftId, input, signal)
           if (controller.signal.aborted) return
           attempt.current = undefined
+          uploadAttempt.current = null
           setDrafts((current) => mergeDrafts(current, [{ ...draft, status: 'CREATED', revision: expectedRevision + 1 }]))
           setEdit(undefined)
           onCreated(project)
@@ -182,6 +187,38 @@ function DraftWorkspace({ onCreated }: Props) {
           if (kind !== 'create') setConflict(true)
         }
       }
+    } finally {
+      mutation.current = null
+      if (!controller.signal.aborted) setPending(undefined)
+    }
+  }
+
+  async function upload(file: File) {
+    if (!draft || !canUpload || mutation.current) return
+    const controller = new AbortController()
+    mutation.current = controller
+    setPending('upload')
+    setError('')
+    const previous = uploadAttempt.current
+    const input = previous?.draftId === draft.draftId && previous.file === file
+      && previous.input.expectedRevision === draft.revision
+      ? previous.input
+      : { requestId: crypto.randomUUID(), expectedRevision: draft.revision }
+    uploadAttempt.current = { draftId: draft.draftId, file, input }
+    try {
+      const { draft: updated, material } = await uploadDraftMaterial(draft.draftId, file, input, requestSignal(controller, 120_000))
+      if (controller.signal.aborted) return
+      uploadAttempt.current = null
+      setDrafts((current) => mergeDrafts(current, [updated]))
+      setEdit({ draft: updated, fields: draftFields(updated) })
+      return material
+    } catch (cause) {
+      if (controller.signal.aborted) return
+      if (cause instanceof ProjectApiError && cause.status === 409) {
+        uploadAttempt.current = null
+        setConflict(true)
+      }
+      throw cause
     } finally {
       mutation.current = null
       if (!controller.signal.aborted) setPending(undefined)
@@ -260,9 +297,11 @@ function DraftWorkspace({ onCreated }: Props) {
             {invalid && <p className="form-error">{label}须在 4 KiB 以内且不含空字符。</p>}
           </div>
         })}
+        <ProjectDraftMaterials key={draft.draftId} draftId={draft.draftId}
+          canUpload={canUpload} uploading={pending === 'upload'} onUpload={upload} />
         {modelConfigured === false && <p className="workspace-note">可手工填写并创建项目。配置研究模型后可整理草稿。</p>}
-        <p className="workspace-note">{conflict ? '草稿已有更新，请加载最新版本。' : dirty ? '请先保存修改，再整理草稿或创建项目。'
-          : '填写题名和研究目标后即可创建。整理草稿会将研究描述及已保存的表单发送给研究模型。'}</p>
+        <p className="workspace-note">{conflict ? '草稿已有更新，请加载最新版本。' : dirty ? '请先保存修改，再上传资料、整理草稿或创建项目。'
+          : '填写题名和研究目标后即可创建。整理草稿会将研究描述、已保存的表单和符合条件的资料节选发送给研究模型。'}</p>
         <div className="workspace-actions">
           {conflict ? <button className="button outline" type="button" disabled={!!pending} onClick={() => void run('read', draft.draftId)}>
             {dirty ? '放弃修改并读取最新草稿' : '读取最新草稿'}

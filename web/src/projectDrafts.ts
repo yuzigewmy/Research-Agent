@@ -1,3 +1,5 @@
+import { isMaterial, isMaterialPage, materialSizeLimit } from './materials'
+import type { Material } from './materials'
 import { isProject, isTemplateId, ProjectApiError, request } from './projects'
 import type { TemplateId } from './projects'
 
@@ -29,9 +31,14 @@ interface DraftPage {
   nextCursor?: string
 }
 
-interface DraftRevision {
+export interface DraftRevision {
   requestId: string
   expectedRevision: number
+}
+
+interface MaterialReceipt {
+  draft: ProjectDraft
+  material: Material
 }
 
 function isPathId(value: unknown): value is string {
@@ -92,4 +99,29 @@ export async function planProjectDraft(draftId: string, input: DraftRevision, si
 
 export async function finalizeProjectDraft(draftId: string, input: DraftRevision, signal: AbortSignal) {
   return request(`${draftPath(draftId)}/finalize`, isProject, jsonRequest('POST', input, signal))
+}
+
+function draftMaterialsPath(draftId: string) {
+  return `${draftPath(draftId)}/materials`
+}
+
+export async function listDraftMaterials(draftId: string, signal: AbortSignal, cursor?: string) {
+  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
+  return request(draftMaterialsPath(draftId) + query, isMaterialPage, { cache: 'no-store', signal })
+}
+
+export async function uploadDraftMaterial(draftId: string, file: File, input: DraftRevision, signal: AbortSignal) {
+  if (file.size > materialSizeLimit) throw new ProjectApiError('单个文件不能超过 64 MiB。', 413)
+  const query = new URLSearchParams({
+    name: file.name, requestId: input.requestId, expectedRevision: String(input.expectedRevision),
+  })
+  return request(`${draftMaterialsPath(draftId)}?${query}`, (value): value is MaterialReceipt => {
+    const receipt = value as Partial<MaterialReceipt> | null
+    return !!receipt && isDraft(receipt.draft) && receipt.draft.draftId === draftId && isMaterial(receipt.material)
+  }, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal })
+}
+
+export function draftMaterialDownloadPath(draftId: string, materialId: string) {
+  if (!isPathId(materialId)) throw new ProjectApiError('资料链接无效。', 400)
+  return `${draftMaterialsPath(draftId)}/${encodeURIComponent(materialId)}/download`
 }

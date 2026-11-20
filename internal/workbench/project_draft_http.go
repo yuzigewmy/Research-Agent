@@ -33,6 +33,10 @@ func (api projectDrafts) register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH "+item, api.change(draftSave))
 	mux.HandleFunc("POST "+item+"/plan", api.change(draftPlan))
 	mux.HandleFunc("POST "+item+"/finalize", api.change(draftFinalize))
+	materials := item + "/materials"
+	mux.HandleFunc("GET "+materials, api.listMaterials)
+	mux.HandleFunc("POST "+materials, api.uploadMaterial)
+	mux.HandleFunc("GET "+materials+"/{materialId}/download", api.downloadMaterial)
 }
 
 func (api projectDrafts) list(w http.ResponseWriter, r *http.Request) {
@@ -149,17 +153,26 @@ func (api projectDrafts) change(action string) http.HandlerFunc {
 	}
 }
 
-func (api projectDrafts) plan(ctx context.Context, draft projectDraft) (projectDraft, error) {
-	input, err := json.Marshal(struct {
-		Prompt   string             `json:"prompt"`
-		Fields   projectDraftFields `json:"currentDraft"`
-		Question string             `json:"previousQuestion,omitempty"`
-	}{draft.Prompt, draft.projectDraftFields, draft.Question})
+func (api projectDrafts) generatePlan(ctx context.Context, draft projectDraft) (string, error) {
+	materials, err := api.store.draftPlanMaterials(ctx, draft.DraftID)
 	if err != nil {
-		return projectDraft{}, err
+		return "", err
 	}
+	input, err := json.Marshal(struct {
+		Prompt    string                `json:"prompt"`
+		Fields    projectDraftFields    `json:"currentDraft"`
+		Question  string                `json:"previousQuestion,omitempty"`
+		Materials []turnMaterialExcerpt `json:"materials,omitempty"`
+	}{draft.Prompt, draft.projectDraftFields, draft.Question, materials})
+	if err != nil {
+		return "", err
+	}
+	return streamTaskMarkdown(ctx, api.model, projectDraftPrompt, string(input))
+}
+
+func (api projectDrafts) plan(ctx context.Context, draft projectDraft) (projectDraft, error) {
 	modelCtx, stop := context.WithTimeout(ctx, 90*time.Second)
-	output, err := streamTaskMarkdown(modelCtx, api.model, projectDraftPrompt, string(input))
+	output, err := api.generatePlan(modelCtx, draft)
 	stop()
 	var suggestion struct {
 		projectDraftFields
