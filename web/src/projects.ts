@@ -18,6 +18,8 @@ export interface Project {
   status: ProjectStatus
   revision: number
   createdAt: string
+  goal?: string
+  deliverables?: string
 }
 
 export interface ProjectPage {
@@ -59,7 +61,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isProject(value: unknown): value is Project {
+export function isProject(value: unknown): value is Project {
   return isRecord(value)
     && typeof value.projectId === 'string' && value.projectId.length > 0
     && typeof value.title === 'string' && value.title.trim().length > 0
@@ -68,6 +70,8 @@ function isProject(value: unknown): value is Project {
     && (value.status === 'READY' || value.status === 'ARCHIVED')
     && typeof value.revision === 'number' && Number.isSafeInteger(value.revision)
     && typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
+    && (value.goal === undefined || typeof value.goal === 'string')
+    && (value.deliverables === undefined || typeof value.deliverables === 'string')
 }
 
 function isProjectPage(value: unknown): value is ProjectPage {

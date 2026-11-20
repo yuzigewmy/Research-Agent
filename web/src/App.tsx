@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { CreateProjectForm } from './CreateProjectForm'
 import { ProjectDetails } from './ProjectDetails'
+import { ProjectDraftPanel } from './ProjectDraftPanel'
 import { ProjectList, useProjectList } from './ProjectList'
 import type { Project } from './projects'
 
@@ -75,7 +76,10 @@ export function App() {
               </a>
             )}
           </header>
-          <div hidden={selectedId !== null}><CreateProjectForm onCreated={handleCreated} /></div>
+          <div hidden={selectedId !== null}>
+            <CreateProjectForm onCreated={handleCreated} />
+            <ProjectDraftPanel onCreated={handleCreated} />
+          </div>
           {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} onUpdated={list.refresh} />}
         </section>
         <ProjectList list={list} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />

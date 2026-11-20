@@ -94,9 +94,11 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		return err
 	}
 	projectData, err := json.Marshal(struct {
-		Title    string `json:"title"`
-		Template string `json:"template"`
-	}{project.Title, project.TemplateID})
+		Title        string `json:"title"`
+		Template     string `json:"template"`
+		Goal         string `json:"goal,omitempty"`
+		Deliverables string `json:"deliverables,omitempty"`
+	}{project.Title, project.TemplateID, project.Goal, project.Deliverables})
 	if err != nil {
 		return err
 	}

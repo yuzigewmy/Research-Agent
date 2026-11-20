@@ -34,6 +34,7 @@ type HandlerConfig struct {
 func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 	conversation{store: store, model: config.Model}.register(mux)
+	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model}.register(mux)
 	workflows{store: store, model: config.Model}.register(mux)
 	store.registerMaterials(mux)
@@ -109,6 +110,10 @@ func isLoopbackHost(host string) bool {
 	return strings.EqualFold(host, "localhost") || net.ParseIP(strings.Trim(host, "[]")).IsLoopback()
 }
 
+func validProjectTemplate(id string) bool {
+	return id == "freeform" || projectWorkflows[id] != ""
+}
+
 func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var input createProjectInput
 	if !readJSON(w, r, &input, 8<<10) {
@@ -123,9 +128,7 @@ func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "title must contain 1 to 200 characters and no null characters")
 		return
 	}
-	switch input.TemplateID {
-	case "freeform", "literature_review", "paper", "experiment", "topic", "proposal":
-	default:
+	if !validProjectTemplate(input.TemplateID) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Unknown project template")
 		return
 	}

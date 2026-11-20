@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	projectColumns = `project_id, title, display_name, template_id, status, revision, created_at`
+	projectColumns = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -25,13 +25,15 @@ var errRequestConflict = errors.New("request ID is already used for a different 
 
 // Project is the API representation of a research project.
 type Project struct {
-	ProjectID   string `json:"projectId"`
-	Title       string `json:"title"`
-	DisplayName string `json:"displayName"`
-	TemplateID  string `json:"templateId"`
-	Status      string `json:"status"`
-	Revision    int    `json:"revision"`
-	CreatedAt   string `json:"createdAt"`
+	ProjectID    string `json:"projectId"`
+	Title        string `json:"title"`
+	DisplayName  string `json:"displayName"`
+	TemplateID   string `json:"templateId"`
+	Status       string `json:"status"`
+	Revision     int    `json:"revision"`
+	CreatedAt    string `json:"createdAt"`
+	Goal         string `json:"goal,omitempty"`
+	Deliverables string `json:"deliverables,omitempty"`
 }
 
 type createProjectInput struct {
@@ -102,7 +104,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 26 {
+	if version < 0 || version > 27 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -247,6 +249,14 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if version < 27 {
+		if _, err := tx.Exec(projectDraftSchema); err != nil {
+			return err
+		}
+	}
+	if err := recoverDraftPlans(tx); err != nil {
+		return err
+	}
 	if err := recoverInterruptedTurns(tx); err != nil {
 		return err
 	}
@@ -325,6 +335,7 @@ func (s *Store) listProjects(ctx context.Context, cursor projectCursor, limit in
 
 func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	var project Project
-	err := row.Scan(&project.ProjectID, &project.Title, &project.DisplayName, &project.TemplateID, &project.Status, &project.Revision, &project.CreatedAt)
+	err := row.Scan(&project.ProjectID, &project.Title, &project.DisplayName, &project.TemplateID, &project.Status,
+		&project.Revision, &project.CreatedAt, &project.Goal, &project.Deliverables)
 	return project, err
 }

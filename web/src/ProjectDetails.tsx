@@ -115,6 +115,8 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         {project.displayName && project.displayName !== project.title &&
           <div><dt>研究题目</dt><dd dir="auto">{project.title}</dd></div>}
         <div><dt>项目模板</dt><dd>{templates[project.templateId]}</dd></div>
+        {project.goal && <div><dt>研究目标</dt><dd className="turn-content" dir="auto">{project.goal}</dd></div>}
+        {project.deliverables && <div><dt>预期交付物</dt><dd className="turn-content" dir="auto">{project.deliverables}</dd></div>}
         <div><dt>状态</dt><dd>{project.status === 'ARCHIVED' ? '已归档' : <span className="ready-label">已就绪</span>}</dd></div>
         <div><dt>创建时间</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
         <div><dt>修订</dt><dd>{project.revision}</dd></div>

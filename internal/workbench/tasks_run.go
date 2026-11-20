@@ -160,7 +160,14 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	if err != nil {
 		return taskResult{}, err
 	}
-	input := fmt.Sprintf("项目标题：%q\n项目类型：%q\n任务要求：\n%s", project.Title, project.TemplateID, task.Instruction)
+	input := fmt.Sprintf("项目标题：%q\n项目类型：%q", project.Title, project.TemplateID)
+	if project.Goal != "" {
+		input += fmt.Sprintf("\n研究目标：%q", project.Goal)
+	}
+	if project.Deliverables != "" {
+		input += fmt.Sprintf("\n预期交付物：%q", project.Deliverables)
+	}
+	input += "\n任务要求：\n" + task.Instruction
 	if task.workflowRunID != "" {
 		return s.generateWorkflowResult(ctx, model, project, task, input)
 	}
