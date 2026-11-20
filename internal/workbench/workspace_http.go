@@ -20,6 +20,7 @@ func (s *Store) registerWorkspace(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+path+"/text", s.handleSaveWorkspace)
 	mux.HandleFunc("GET "+path+"/versions", s.handleListWorkspace(true))
 	mux.HandleFunc("GET "+path+"/versions/{versionId}", s.handleWorkspaceVersion)
+	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.svg", s.handleDiagramSVG)
 	mux.HandleFunc("POST "+path+"/versions/{versionId}/restore", s.handleRestoreWorkspace)
 }
 
@@ -42,6 +43,11 @@ func validWorkspaceBase(value string) bool {
 func (s *Store) handleListWorkspace(history bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var name string
+		kind := r.URL.Query().Get("kind")
+		if kind != "" && (history || kind != "diagram") {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的文件类型。")
+			return
+		}
 		if history {
 			name = r.URL.Query().Get("path")
 			if !validWorkspacePath(name) {
@@ -60,7 +66,7 @@ func (s *Store) handleListWorkspace(history bool) http.HandlerFunc {
 			return
 		}
 		const limit = 50
-		items, err := s.listWorkspaceFiles(ctx, projectID, name, cursor, limit+1)
+		items, err := s.listWorkspaceFiles(ctx, projectID, name, kind == "diagram", cursor, limit+1)
 		if err != nil {
 			writeWorkspaceError(w, "list workspace files", err)
 			return
@@ -159,6 +165,8 @@ func writeWorkspaceError(w http.ResponseWriter, operation string, err error) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "该项目、文件或版本不存在。")
 	case errors.Is(err, errWorkspaceConflict):
 		writeError(w, http.StatusConflict, "REVISION_CONFLICT", "文件已有新的版本。请查看最新版后合并改动。")
+	case errors.Is(err, errInvalidDiagram):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_DIAGRAM", "请核对流程图名称、节点位置、标签和连线端点。")
 	default:
 		writeStoreError(w, operation, err)
 	}

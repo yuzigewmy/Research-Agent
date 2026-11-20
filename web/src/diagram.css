@@ -1,0 +1,28 @@
+.diagram-panel { margin-block-start: 1.5rem; padding-block-start: 1.25rem; border-block-start: 1px solid var(--line); }
+.diagram-panel > summary { min-block-size: 2.75rem; font-weight: 650; cursor: pointer; }
+.diagram-panel .workspace-note { overflow-wrap: anywhere; }
+.diagram-panel .workspace-actions > .field { min-inline-size: 0; flex: 1 1 7rem; }
+.diagram-panel .workspace-actions { align-items: end; }
+.diagram-panel .workspace-list > li { min-inline-size: 0; }
+.diagram-editor { min-inline-size: 0; }
+.diagram-editor .workspace-heading h4 { min-inline-size: 0; overflow-wrap: anywhere; }
+.diagram-viewport {
+  min-inline-size: 0;
+  max-block-size: 32rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+.diagram-canvas { display: block; background: var(--surface); }
+.diagram-panel h5 { margin: 0; font-size: 0.9375rem; font-weight: 650; }
+.diagram-node rect { fill: var(--surface); stroke: var(--control-line); stroke-width: 2; }
+.diagram-node[data-selected='true'] rect { fill: var(--selected); stroke: var(--green); }
+.diagram-node[data-editable='true'] rect { cursor: grab; touch-action: none; }
+.diagram-node[data-editable='true']:active { cursor: grabbing; }
+.diagram-node text { fill: var(--ink); font-size: 12px; pointer-events: none; user-select: none; }
+.diagram-arrow { fill: var(--green); }
+.diagram-line { stroke: var(--green); stroke-width: 2; }
+.diagram-edge-list { padding-inline-start: 1.375rem; margin: 0; overflow-wrap: anywhere; }
+.diagram-edge-list > li { padding-block: 0.25rem; }
+.diagram-panel .diagram-status { color: var(--muted); font-size: 0.875rem; }

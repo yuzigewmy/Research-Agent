@@ -50,9 +50,16 @@ function versionPath(projectId: string, versionId: string) {
   return `${filesPath(projectId)}/versions/${encodeURIComponent(versionId)}`
 }
 
-export async function listFiles(projectId: string, signal: AbortSignal, cursor?: string) {
-  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
+export async function listFiles(projectId: string, signal: AbortSignal, cursor?: string, kind?: 'diagram') {
+  const params = new URLSearchParams()
+  if (kind) params.set('kind', kind)
+  if (cursor) params.set('cursor', cursor)
+  const query = params.size ? `?${params}` : ''
   return request(filesPath(projectId) + query, isFilePage, { signal })
+}
+
+export function diagramSvgPath(projectId: string, versionId: string) {
+  return `${versionPath(projectId, versionId)}/diagram.svg`
 }
 
 export async function readText(projectId: string, path: string, signal: AbortSignal) {

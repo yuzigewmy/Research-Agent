@@ -76,7 +76,7 @@ func (s *Store) readWorkspaceDocument(file WorkspaceFile) (WorkspaceDocument, er
 	return WorkspaceDocument{WorkspaceFile: file, Content: string(content)}, err
 }
 
-func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, cursor int64, limit int) ([]WorkspaceFile, error) {
+func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, diagramsOnly bool, cursor int64, limit int) ([]WorkspaceFile, error) {
 	query := `SELECT ` + workspaceFileColumns + ` FROM workspace_versions WHERE project_id = ?`
 	args := []any{projectID}
 	if name == "" {
@@ -85,6 +85,9 @@ func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, 
 	} else {
 		query += ` AND path = ?`
 		args = append(args, name)
+	}
+	if diagramsOnly {
+		query += ` AND path GLOB 'diagrams/?*.flow.json' AND path NOT GLOB 'diagrams/*/*'`
 	}
 	if cursor > 0 {
 		query += ` AND ordinal < ?`
@@ -107,6 +110,9 @@ func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, 
 }
 
 func (s *Store) saveWorkspaceDocument(ctx context.Context, projectID, name, baseSHA256, content string) (WorkspaceDocument, error) {
+	if err := validateDiagramDocument(name, content); err != nil {
+		return WorkspaceDocument{}, err
+	}
 	file := workspaceTextFile(name, content)
 	// The object is written only if the current version can be advanced.
 	file, err := s.publishWorkspaceVersion(ctx, projectID, baseSHA256, file, &content)
@@ -120,6 +126,9 @@ func (s *Store) restoreWorkspaceVersion(ctx context.Context, projectID, versionI
 	}
 	original, err := s.readWorkspaceDocument(file)
 	if err != nil {
+		return WorkspaceDocument{}, err
+	}
+	if err := validateDiagramDocument(file.Path, original.Content); err != nil {
 		return WorkspaceDocument{}, err
 	}
 	file, err = s.publishWorkspaceVersion(ctx, projectID, baseSHA256, file, nil)

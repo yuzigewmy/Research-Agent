@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Conversation } from './Conversation'
+import { DiagramPanel } from './DiagramPanel'
 import { LiteraturePanel } from './LiteraturePanel'
 import { MaterialPanel } from './MaterialPanel'
 import { ProjectAdministration } from './ProjectAdministration'
@@ -148,6 +149,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       <TaskPanel projectId={project.projectId} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} />
+      <DiagramPanel projectId={project.projectId} />
       <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
         onClearReferences={clearReferences} onWorkflowConfirmed={() => setWorkflowRefresh((version) => version + 1)}
         taskSync={taskSync} />
