@@ -2,15 +2,17 @@ import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
+import { WorkflowSkipStep } from './WorkflowSkipStep'
+import type { SkipTarget } from './WorkflowSkipStep'
 import { WorkflowStageAcceptance } from './WorkflowStageAcceptance'
 import type { AcceptanceTarget } from './WorkflowStageAcceptance'
 import {
   acceptWorkflow, cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow,
-  runStatusLabels, saveManuscript, startWorkflow, stepStatusLabels, workflowArtifactPath,
+  runStatusLabels, saveManuscript, skipWorkflow, startWorkflow, stepStatusLabels, workflowArtifactPath,
 } from './workflow'
 import type {
-  AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, StartWorkflowInput, WorkflowRun,
-  WorkflowRunActionInput, WorkflowSnapshot,
+  AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, SkipWorkflowInput, StartWorkflowInput,
+  WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
 import './workflow.css'
 
@@ -24,13 +26,15 @@ type Attempt =
   | { kind: 'cancel'; input: WorkflowRunActionInput }
   | { kind: 'rerun'; input: RerunWorkflowInput }
   | { kind: 'accept'; input: AcceptWorkflowInput }
+  | { kind: 'skip'; input: SkipWorkflowInput }
 
 type CancelTarget = Omit<WorkflowRunActionInput, 'requestId'>
 type RerunTarget = Omit<RerunWorkflowInput, 'requestId'>
 
 function canRerunStep(run: WorkflowRun, index: number) {
   const status = run.steps[index]?.status
-  return !isWorkflowActive(run) && run.status !== 'CANCELLED' && (status === 'SUCCEEDED' || status === 'STALE')
+  return !isWorkflowActive(run) && run.status !== 'CANCELLED'
+    && (status === 'SUCCEEDED' || status === 'STALE' || status === 'SKIPPED')
     && run.steps.slice(0, index).every((step) => step.status === 'SUCCEEDED')
 }
 
@@ -62,6 +66,8 @@ function WorkflowSteps({ projectId, run, rerun }: {
       {run.steps.map((step, index) => {
         const selected = rerun?.selected === step.key
         const eligible = !!rerun && canRerunStep(run, index)
+        const skipped = step.status === 'SKIPPED'
+        const runLabel = skipped ? '运行此步骤' : '重跑此步骤'
         const canDownload = step.status === 'SUCCEEDED' && (!!rerun || !!step.artifactId)
         const downloadLabel = rerun ? '下载当前成果' : '下载该轮成果'
         const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
@@ -79,23 +85,23 @@ function WorkflowSteps({ projectId, run, rerun }: {
               href={workflowArtifactPath(projectId, run.runId, step.key, step.artifactId)}
               aria-label={`${downloadLabel}：${step.title}`} download>{downloadLabel}</a>}
             {rerun && eligible && <button className="button outline" type="button" disabled={rerun.disabled}
-              aria-label={`重跑此步骤：${step.title}`} aria-expanded={selected}
+              aria-label={`${runLabel}：${step.title}`} aria-expanded={selected}
               aria-controls={selected ? confirmationId : undefined} onClick={(event) => {
                 if (selected) rerun.onCancel()
                 else {
                   selectedButton.current = event.currentTarget
                   rerun.onSelect({ runId: run.runId, expectedRevision: run.revision, stepKey: step.key })
                 }
-              }}>重跑此步骤</button>}
+              }}>{runLabel}</button>}
           </div>}
           {rerun && selected && <div className="workflow-rerun-confirm" id={confirmationId} role="group" aria-labelledby={`${confirmationId}-help`}>
             <p className="workflow-note" id={`${confirmationId}-help`}>
-              仅重跑「{step.title}」。旧成果仍可从历史下载，后续已生成的成果会标为待重算。
+              {skipped ? `仅运行「${step.title}」。` : `仅重跑「${step.title}」。旧成果仍可从历史下载，后续已生成的成果会标为待重算。`}
             </p>
             <div className="workflow-actions">
               <button className="button primary" type="button" disabled={!eligible || (rerun.disabled && !rerun.pending)}
                 aria-disabled={rerun.pending} onClick={rerun.onConfirm}>
-                {rerun.pending ? '正在提交…' : rerun.retry ? '重试重跑' : '确认重跑'}
+                {rerun.pending ? '正在提交…' : `${rerun.retry ? '重试' : '确认'}${skipped ? '运行' : '重跑'}`}
               </button>
               <button className="button outline" type="button" disabled={rerun.pending} onClick={() => {
                 rerun.onCancel()
@@ -183,8 +189,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [pending, setPending] = useState<Attempt['kind'] | null>(null)
   const run = snapshot?.run ?? null
   const acceptStep = run?.steps.find((step) => step.key === run.acceptStepKey)
+  const skipStep = run?.steps.find((step) => step.key === run.skipStepKey)
   const manuscript = run?.steps.find((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED')
   const cancelled = run?.status === 'CANCELLED'
+  const completedWithSkip = run?.status === 'COMPLETED' && run.steps.some((step) => step.status === 'SKIPPED')
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED' || cancelled)
   const waiting = run?.status === 'WAITING_CHECKPOINT'
   const rangeCompleted = run?.status === 'RANGE_COMPLETED'
@@ -222,6 +230,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     && retry.input.stepKey === selectedRerun.stepKey ? retry : null
   const retryAcceptance = retry?.kind === 'accept' && run?.runId === retry.input.runId
     && run.revision === retry.input.expectedRevision && acceptStep?.key === retry.input.stepKey ? retry : null
+  const retrySkip = retry?.kind === 'skip' && run?.runId === retry.input.runId
+    && run.revision === retry.input.expectedRevision && skipStep?.key === retry.input.stepKey ? retry : null
   const acceptanceError = acceptError && run?.runId === acceptError.runId
     && run.revision === acceptError.expectedRevision && acceptStep?.key === acceptError.stepKey ? acceptError : undefined
   const target = Number(targetPaperCount)
@@ -277,15 +287,20 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     }
   }
 
-  async function submit(kind: Attempt['kind'], acceptance?: AcceptanceTarget) {
+  async function submit(...[kind, stepTarget]:
+    | [Exclude<Attempt['kind'], 'accept' | 'skip'>]
+    | ['accept', AcceptanceTarget]
+    | ['skip', SkipTarget]
+  ) {
     if (submission.current || requestBlocked) return
     if (kind === 'pause') {
       if (!canPause) return
     } else if (kind === 'cancel') {
       if (!selectedCancel) return
-    } else if (kind === 'accept') {
-      if (!acceptance || !run || acceptance.runId !== run.runId || acceptance.expectedRevision !== run.revision
-        || acceptance.stepKey !== acceptStep?.key) return
+    } else if (kind === 'accept' || kind === 'skip') {
+      const step = kind === 'accept' ? acceptStep : skipStep
+      if (!run || stepTarget.runId !== run.runId || stepTarget.expectedRevision !== run.revision
+        || stepTarget.stepKey !== step?.key) return
     } else if (kind === 'rerun') {
       if (rerunDisabled || !selectedRerun || !run) return
       const index = run.steps.findIndex((step) => step.key === selectedRerun.stepKey)
@@ -305,7 +320,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     setFeedback('')
     let attempt: Attempt | null = {
       start: retryStart, continue: retryContinue, pause: retryPause, cancel: retryCancel, rerun: retryRerun,
-      accept: retryAcceptance?.input.sourceVersionId === acceptance?.sourceVersionId ? retryAcceptance : null,
+      accept: kind === 'accept' && retryAcceptance?.input.sourceVersionId === stepTarget.sourceVersionId ? retryAcceptance : null,
+      skip: kind === 'skip' && retrySkip?.input.reason === stepTarget.reason ? retrySkip : null,
     }[kind]
     try {
       if (!attempt) {
@@ -323,8 +339,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           if (!selectedCancel) return
           attempt = { kind, input: { requestId, ...selectedCancel } }
         } else if (kind === 'accept') {
-          if (!acceptance) return
-          attempt = { kind, input: { requestId, ...acceptance } }
+          attempt = { kind, input: { requestId, ...stepTarget } }
+        } else if (kind === 'skip') {
+          attempt = { kind, input: { requestId, ...stepTarget } }
         } else {
           if (!run) return
           const input = { requestId, runId: run.runId, expectedRevision: run.revision }
@@ -341,6 +358,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         case 'cancel': updated = await cancelWorkflow(projectId, attempt.input, signal); break
         case 'rerun': updated = await rerunWorkflow(projectId, attempt.input, signal); break
         case 'accept': updated = await acceptWorkflow(projectId, attempt.input, signal); break
+        case 'skip': updated = await skipWorkflow(projectId, attempt.input, signal); break
       }
       if (controller.signal.aborted) return
       setRetry(null)
@@ -349,6 +367,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       setThroughStep('')
       if (attempt.kind === 'start') setCheckpoints(false)
       if (attempt.kind === 'accept') setFeedback('已将所选稿件验收为步骤成果。')
+      if (attempt.kind === 'skip') setFeedback('已跳过该步骤。')
       setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
       if (control instanceof HTMLButtonElement && document.activeElement === control) heading.current?.focus()
       // A replay may return an earlier revision. Read the latest state before accepting another action.
@@ -360,7 +379,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         setRerunTarget(null)
         setCancelTarget(null)
         setFeedback('工作流状态已更新，请查看最新进度。')
-        if ((kind === 'cancel' || kind === 'accept') && document.activeElement === control) heading.current?.focus()
+        if ((kind === 'cancel' || kind === 'accept' || kind === 'skip') && document.activeElement === control) heading.current?.focus()
         refresh()
       } else {
         const message = errorMessage(error)
@@ -384,7 +403,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       <div className="workflow-heading">
         <h4 id={headingId} ref={heading} tabIndex={-1}>{title}</h4>
         <p className="workflow-run-status" role="status" data-status={run?.status}>
-          {run ? runStatusLabels[run.status] : snapshot && '尚未启动'}
+          {completedWithSkip ? '本轮已完成' : run ? runStatusLabels[run.status] : snapshot && '尚未启动'}
         </p>
       </div>
       {refreshing && !snapshot && (
@@ -418,6 +437,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         stepTitle={acceptStep.title} disabled={requestBlocked} pending={pending === 'accept'}
         retryVersionId={retryAcceptance?.input.sourceVersionId} submissionError={acceptanceError}
         onConfirm={(target) => void submit('accept', target)} />}
+      {run && skipStep && <WorkflowSkipStep key={JSON.stringify([projectId, run.runId, run.revision, skipStep.key, reload])}
+        target={{ runId: run.runId, expectedRevision: run.revision, stepKey: skipStep.key }} stepTitle={skipStep.title}
+        disabled={requestBlocked} pending={pending === 'skip'} retryReason={retrySkip?.input.reason}
+        onConfirm={(target) => void submit('skip', target)} />}
       {waiting && <p className="workflow-note">{isPaper ? '确认论文大纲后生成正文。'
         : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}

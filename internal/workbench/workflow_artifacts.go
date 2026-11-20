@@ -26,7 +26,8 @@ func workflowArtifactStep(ctx context.Context, db workspaceQuery, projectID, run
 	}
 	for i, stage := range workflowStages[workflow] {
 		if stage.key == key {
-			return i, strings.TrimSuffix(workflow, "-v1") + "-" + key + ".md", nil
+			family, _, _ := strings.Cut(workflow, "-v")
+			return i, family + "-" + key + ".md", nil
 		}
 	}
 	return 0, "", sql.ErrNoRows

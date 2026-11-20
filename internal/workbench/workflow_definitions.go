@@ -24,23 +24,30 @@ var paperOutlinePrompt string
 var paperDraftPrompt string
 
 const (
-	experimentWorkflow = "experiment-v1"
-	reviewWorkflow     = "literature-v1"
-	paperWorkflow      = "paper-v1"
+	experimentWorkflowV1 = "experiment-v1"
+	experimentWorkflow   = "experiment-v2"
+	reviewWorkflow       = "literature-v1"
+	paperWorkflow        = "paper-v1"
 )
 
 type workflowStage struct {
 	key, title, prompt string
 	checkpoint         bool
 	acceptMarkdown     bool
+	optional           bool
+}
+
+func experimentStages(optionalChecklist bool) []workflowStage {
+	return []workflowStage{
+		{key: "scope", title: "界定研究范围", prompt: experimentScopePrompt, acceptMarkdown: true},
+		{key: "plan", title: "编制实验计划", prompt: experimentPlanPrompt, checkpoint: true, acceptMarkdown: true},
+		{key: "checklist", title: "生成验收清单", prompt: experimentChecklistPrompt, acceptMarkdown: true, optional: optionalChecklist},
+	}
 }
 
 var workflowStages = map[string][]workflowStage{
-	experimentWorkflow: {
-		{key: "scope", title: "界定研究范围", prompt: experimentScopePrompt, acceptMarkdown: true},
-		{key: "plan", title: "编制实验计划", prompt: experimentPlanPrompt, checkpoint: true, acceptMarkdown: true},
-		{key: "checklist", title: "生成验收清单", prompt: experimentChecklistPrompt, acceptMarkdown: true},
-	},
+	experimentWorkflowV1: experimentStages(false),
+	experimentWorkflow:   experimentStages(true),
 	reviewWorkflow: {
 		{key: "sources", title: "固定已核验来源"},
 		{key: "themes", title: "整理主题与证据", prompt: reviewThemesPrompt, checkpoint: true, acceptMarkdown: true},

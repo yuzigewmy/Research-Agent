@@ -13,6 +13,7 @@ const (
 	workflowStart          = "start"
 	workflowContinue       = "continue"
 	workflowRerun          = "rerun"
+	workflowSkip           = "skip"
 	workflowPause          = "pause"
 	workflowCancel         = "cancel"
 	workflowPausing        = "PAUSING"
@@ -101,6 +102,7 @@ type WorkflowRun struct {
 	Scope            WorkflowScope  `json:"scope"`
 	Steps            []WorkflowStep `json:"steps"`
 	AcceptStepKey    string         `json:"acceptStepKey,omitempty"`
+	SkipStepKey      string         `json:"skipStepKey,omitempty"`
 	step             int
 	rangeStart       int
 	rangeEnd         int
@@ -124,6 +126,7 @@ type workflowRequest struct {
 	Checkpoints      bool          `json:"checkpoints"`
 	ThroughStep      string        `json:"throughStep"`
 	StepKey          string        `json:"stepKey"`
+	Reason           string        `json:"reason"`
 	TargetPaperCount int           `json:"targetPaperCount"`
 	Paper            *paperOptions `json:"paper"`
 }
@@ -139,12 +142,14 @@ func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowR
 
 func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
-	err := tx.QueryRowContext(ctx, `SELECT run_id, workflow_key, revision, status, checkpoints, created_at, step_no,
-		target_paper_count, json_array_length(evidence_json), COALESCE(json_extract(options_json, '$.language'), ''),
-		range_start, range_end FROM workflow_runs
-		WHERE project_id = ? AND (? = '' OR run_id = ?) ORDER BY ordinal DESC LIMIT 1`, projectID, runID, runID).
+	var skipReason string
+	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
+		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
+		w.range_start, w.range_end, COALESCE(r.skip_reason, '')
+		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
+		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step,
-			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd)
+			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -200,7 +205,12 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 			}
 		}
 	}
+	if skipReason != "" {
+		step := &run.Steps[run.step]
+		step.Status, step.Message = workflowStepSkipped, skipReason
+	}
 	run.AcceptStepKey = acceptableWorkflowStep(run, stages)
+	run.SkipStepKey = skippableWorkflowStep(run, stages)
 	return run, rows.Err()
 }
 
@@ -228,14 +238,14 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		return WorkflowRun{}, false, err
 	}
 
-	var runID, recordedAction, recordedEnd, recordedStep string
+	var runID, recordedAction, recordedEnd, recordedStep, recordedReason string
 	var revision int
-	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key FROM workflow_requests
+	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key, skip_reason FROM workflow_requests
 		WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).
-		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep)
+		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep, &recordedReason)
 	if err == nil {
 		if recordedAction != action || revision != req.ExpectedRevision || recordedEnd != req.ThroughStep ||
-			recordedStep != req.StepKey || (action != workflowStart && runID != req.RunID) {
+			recordedStep != req.StepKey || recordedReason != req.Reason || (action != workflowStart && runID != req.RunID) {
 			return WorkflowRun{}, false, errRequestConflict
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
@@ -258,19 +268,22 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if !errors.Is(err, sql.ErrNoRows) {
 		return WorkflowRun{}, false, err
 	}
-	end, err := workflowEndIndex(workflowStages[key], req.ThroughStep)
-	if err != nil {
-		return WorkflowRun{}, false, err
-	}
 	current, err := readWorkflow(ctx, tx, projectID, "")
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return WorkflowRun{}, false, err
 	}
-	if action != workflowStart && (current.RunID != req.RunID || current.Revision != req.ExpectedRevision) {
-		return WorkflowRun{}, false, errTaskRevision
+	if action != workflowStart {
+		if current.RunID != req.RunID || current.Revision != req.ExpectedRevision {
+			return WorkflowRun{}, false, errTaskRevision
+		}
+		key = current.WorkflowKey
 	}
-	stopping := action == workflowPause || action == workflowCancel
-	if stopping && req.ThroughStep != "" {
+	end, err := workflowEndIndex(workflowStages[key], req.ThroughStep)
+	if err != nil {
+		return WorkflowRun{}, false, err
+	}
+	queuesWork := action == workflowStart || action == workflowContinue || action == workflowRerun
+	if !queuesWork && req.ThroughStep != "" {
 		return WorkflowRun{}, false, errWorkflowRange
 	}
 	switch action {
@@ -299,6 +312,10 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, err
 		}
 		current.step, current.rangeStart, current.rangeEnd = step, step, step
+	case workflowSkip:
+		if current.SkipStepKey == "" || current.SkipStepKey != req.StepKey {
+			return WorkflowRun{}, false, errWorkflowState
+		}
 	case workflowContinue:
 		switch current.Status {
 		case workflowRangeCompleted:
@@ -314,7 +331,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, errWorkflowState
 		}
 	}
-	if !stopping && !modelReady {
+	if queuesWork && !modelReady {
 		return WorkflowRun{}, false, errModelUnavailable
 	}
 
@@ -362,6 +379,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			}
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, revision = revision + 1 WHERE run_id = ?`, runStatus, current.RunID)
+	case workflowSkip:
+		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'COMPLETED', revision = revision + 1,
+			range_start = step_no, range_end = step_no, skipped_request_id = ? WHERE run_id = ?`, req.RequestID, current.RunID)
 	case workflowRerun:
 		// Retain prior attempts for downloads, but remove them from dependency resolution.
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET workflow_superseded = 1
@@ -371,19 +391,21 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		fallthrough
 	case workflowContinue:
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'QUEUED', revision = revision + 1,
-			step_no = ?, range_start = ?, range_end = ? WHERE run_id = ?`, current.step, current.rangeStart, current.rangeEnd, current.RunID)
+			step_no = ?, range_start = ?, range_end = ?, skipped_request_id = NULL WHERE run_id = ?`,
+			current.step, current.rangeStart, current.rangeEnd, current.RunID)
 	}
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	if !stopping {
+	if queuesWork {
 		if err := enqueueWorkflowStep(ctx, tx, projectID, current.RunID, current.step, workflowStages[current.WorkflowKey][current.step]); err != nil {
 			return WorkflowRun{}, false, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_requests
-		(project_id, request_id, run_id, action, expected_revision, through_step, step_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision, req.ThroughStep, req.StepKey); err != nil {
+		(project_id, request_id, run_id, action, expected_revision, through_step, step_key, skip_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision,
+		req.ThroughStep, req.StepKey, req.Reason); err != nil {
 		return WorkflowRun{}, false, err
 	}
 	run, err := readWorkflow(ctx, tx, projectID, current.RunID)
@@ -398,7 +420,9 @@ func rerunnableStep(steps []WorkflowStep, key string) (int, error) {
 		if step.Key != key {
 			continue
 		}
-		if step.Status != taskSucceeded && step.Status != workflowStepStale {
+		switch step.Status {
+		case taskSucceeded, workflowStepStale, workflowStepSkipped:
+		default:
 			return 0, errWorkflowState
 		}
 		for _, preceding := range steps[:i] {

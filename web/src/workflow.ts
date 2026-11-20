@@ -22,6 +22,7 @@ export const stepStatusLabels = {
   CANCELLING: '正在停止',
   CANCELLED: '已停止',
   SUCCEEDED: '已完成',
+  SKIPPED: '已跳过',
   STALE: '待重算',
   FAILED: '失败',
   INTERRUPTED: '已中断',
@@ -77,6 +78,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   sourceCount?: number
   language?: 'zh' | 'en'
   acceptStepKey?: string
+  skipStepKey?: string
   acceptedArtifactId?: string
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
@@ -113,6 +115,11 @@ export interface RerunWorkflowInput extends WorkflowRunActionInput {
 export interface AcceptWorkflowInput extends WorkflowRunActionInput {
   stepKey: string
   sourceVersionId: string
+}
+
+export interface SkipWorkflowInput extends WorkflowRunActionInput {
+  stepKey: string
+  reason: string
 }
 
 export function isWorkflowActive(run: WorkflowRun | null) {
@@ -189,6 +196,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.acceptedArtifactId === undefined || isPathId(run.acceptedArtifactId))
     && Array.isArray(run.steps) && run.steps.every(isStep)
     && (run.acceptStepKey === undefined || run.steps.some((step) => step.key === run.acceptStepKey))
+    && (run.skipStepKey === undefined || run.steps.some((step) => step.key === run.skipStepKey))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 
@@ -248,6 +256,10 @@ export function rerunWorkflow(projectId: string, input: RerunWorkflowInput, sign
 
 export function acceptWorkflow(projectId: string, input: AcceptWorkflowInput, signal: AbortSignal) {
   return postRun(`${workflowPath(projectId)}/accept`, input, signal)
+}
+
+export function skipWorkflow(projectId: string, input: SkipWorkflowInput, signal: AbortSignal) {
+  return postRun(`${workflowPath(projectId)}/skip`, input, signal)
 }
 
 function workflowStepPath(projectId: string, runId: string, key: string) {

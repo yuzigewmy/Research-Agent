@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"research-agent/internal/inference"
 )
@@ -22,6 +24,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path+"/cancel", api.change(workflowCancel))
 	mux.HandleFunc("POST "+path+"/rerun", api.change(workflowRerun))
 	mux.HandleFunc("POST "+path+"/accept", api.accept)
+	mux.HandleFunc("POST "+path+"/skip", api.change(workflowSkip))
 	mux.HandleFunc("GET "+path+"/runs", api.listRuns)
 	mux.HandleFunc("GET "+path+"/runs/{runId}", api.readRun)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
@@ -75,6 +78,14 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择要重跑的步骤。")
 			return
 		}
+		if action == workflowSkip {
+			input.Reason = strings.TrimSpace(input.Reason)
+			if !validRequestID(input.StepKey) || input.ThroughStep != "" || input.Reason == "" ||
+				utf8.RuneCountInString(input.Reason) > 300 || strings.ContainsRune(input.Reason, 0) {
+				writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择要跳过的步骤，并填写 300 个字符以内的理由。")
+				return
+			}
+		}
 		projectID := r.PathValue("id")
 		run, applied, err := api.store.applyWorkflow(r.Context(), projectID, action, input, api.model != nil)
 		switch {
@@ -98,8 +109,11 @@ func (api workflows) change(action string) http.HandlerFunc {
 			if (action == workflowPause && run.Status == workflowPausing) || (action == workflowCancel && run.Status == taskCancelling) {
 				api.store.stopTaskRun(projectID, run.stepTaskID)
 			}
-			if action != workflowPause && action != workflowCancel && run.Status == taskQueued && api.model != nil {
-				api.store.kickTaskQueue(projectID, api.model)
+			if run.Status == taskQueued && api.model != nil {
+				switch action {
+				case workflowStart, workflowContinue, workflowRerun:
+					api.store.kickTaskQueue(projectID, api.model)
+				}
 			}
 			status := http.StatusOK
 			if applied {
