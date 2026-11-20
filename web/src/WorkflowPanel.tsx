@@ -2,11 +2,11 @@ import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import {
-  continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow, runStatusLabels, saveManuscript,
-  startWorkflow, stepStatusLabels, workflowArtifactPath,
+  cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow, runStatusLabels,
+  saveManuscript, startWorkflow, stepStatusLabels, workflowArtifactPath,
 } from './workflow'
 import type {
-  ContinueWorkflowInput, PauseWorkflowInput, RerunWorkflowInput, StartWorkflowInput, WorkflowRun, WorkflowSnapshot,
+  ContinueWorkflowInput, RerunWorkflowInput, StartWorkflowInput, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
 import './workflow.css'
 
@@ -16,14 +16,16 @@ const requestTimeout = 10_000
 type Attempt =
   | { kind: 'start'; input: StartWorkflowInput }
   | { kind: 'continue'; input: ContinueWorkflowInput }
-  | { kind: 'pause'; input: PauseWorkflowInput }
+  | { kind: 'pause'; input: WorkflowRunActionInput }
+  | { kind: 'cancel'; input: WorkflowRunActionInput }
   | { kind: 'rerun'; input: RerunWorkflowInput }
 
+type CancelTarget = Omit<WorkflowRunActionInput, 'requestId'>
 type RerunTarget = Omit<RerunWorkflowInput, 'requestId'>
 
 function canRerunStep(run: WorkflowRun, index: number) {
   const status = run.steps[index]?.status
-  return !isWorkflowActive(run) && (status === 'SUCCEEDED' || status === 'STALE')
+  return !isWorkflowActive(run) && run.status !== 'CANCELLED' && (status === 'SUCCEEDED' || status === 'STALE')
     && run.steps.slice(0, index).every((step) => step.status === 'SUCCEEDED')
 }
 
@@ -151,6 +153,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     : isReview ? '整理主题后，等待我确认再继续' : '生成实验计划后，等待我确认再继续'
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
+  const cancelButton = useRef<HTMLButtonElement>(null)
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
   const [checkpoints, setCheckpoints] = useState(false)
@@ -165,16 +168,22 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [feedback, setFeedback] = useState('')
   const [retry, setRetry] = useState<Attempt | null>(null)
   const [rerunTarget, setRerunTarget] = useState<RerunTarget | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null)
   const [pending, setPending] = useState<Attempt['kind'] | null>(null)
   const run = snapshot?.run ?? null
   const manuscript = run?.steps.find((step) => step.key === 'manuscript' && step.status === 'SUCCEEDED')
-  const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED')
+  const cancelled = run?.status === 'CANCELLED'
+  const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED' || cancelled)
   const waiting = run?.status === 'WAITING_CHECKPOINT'
   const rangeCompleted = run?.status === 'RANGE_COMPLETED'
   const pausing = run?.status === 'PAUSING'
   const paused = run?.status === 'PAUSED'
   const canContinue = rangeCompleted || waiting || paused || run?.status === 'FAILED' || run?.status === 'INTERRUPTED'
   const canPause = run?.status === 'QUEUED' || run?.status === 'RUNNING'
+  const canCancel = canPause || canContinue
+  const selectedCancel = canCancel && cancelTarget && run?.runId === cancelTarget.runId ? cancelTarget : null
+  const confirmingCancel = selectedCancel !== null
+  const cancelConfirmationId = `${headingId}-cancel-confirmation`
   const steps = snapshot?.steps ?? []
   const nextStep = rangeCompleted ? run.steps.find((step) => step.status !== 'SUCCEEDED') : undefined
   const rangeStartIndex = canStart ? 0 : steps.findIndex((step) => step.key === nextStep?.key)
@@ -187,6 +196,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     && retry.input.expectedRevision === run.revision && (retry.input.throughStep ?? '') === endStep ? retry : null
   const retryPause = retry?.kind === 'pause' && retry.input.runId === run?.runId
     && retry.input.expectedRevision === run.revision ? retry : null
+  const retryCancel = retry?.kind === 'cancel' && selectedCancel
+    && retry.input.runId === selectedCancel.runId && retry.input.expectedRevision === selectedCancel.expectedRevision ? retry : null
   const scopeStart = run?.steps.find((step) => step.key === run.scope.startStep)
   const scopeEnd = run?.steps.find((step) => step.key === run.scope.endStep)
   const modelUnavailable = snapshot?.modelConfigured === false
@@ -240,10 +251,22 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     setReload((value) => value + 1)
   }
 
+  function toggleCancelConfirmation() {
+    if (!run || !canCancel || requestBlocked || submission.current) return
+    if (confirmingCancel) {
+      setCancelTarget(null)
+    } else {
+      setRerunTarget(null)
+      setCancelTarget({ runId: run.runId, expectedRevision: run.revision })
+    }
+  }
+
   async function submit(kind: Attempt['kind']) {
     if (submission.current || requestBlocked) return
     if (kind === 'pause') {
       if (!canPause) return
+    } else if (kind === 'cancel') {
+      if (!selectedCancel) return
     } else if (kind === 'rerun') {
       if (rerunDisabled || !selectedRerun || !run) return
       const index = run.steps.findIndex((step) => step.key === selectedRerun.stepKey)
@@ -261,7 +284,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
     setActionError('')
     setFeedback('')
     let attempt: Attempt | null = {
-      start: retryStart, continue: retryContinue, pause: retryPause, rerun: retryRerun,
+      start: retryStart, continue: retryContinue, pause: retryPause, cancel: retryCancel, rerun: retryRerun,
     }[kind]
     try {
       if (!attempt) {
@@ -275,6 +298,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         } else if (kind === 'rerun') {
           if (!selectedRerun) return
           attempt = { kind, input: { requestId, ...selectedRerun } }
+        } else if (kind === 'cancel') {
+          if (!selectedCancel) return
+          attempt = { kind, input: { requestId, ...selectedCancel } }
         } else {
           if (!run) return
           const input = { requestId, runId: run.runId, expectedRevision: run.revision }
@@ -288,11 +314,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         case 'start': updated = await startWorkflow(projectId, attempt.input, signal); break
         case 'continue': updated = await continueWorkflow(projectId, attempt.input, signal); break
         case 'pause': updated = await pauseWorkflow(projectId, attempt.input, signal); break
+        case 'cancel': updated = await cancelWorkflow(projectId, attempt.input, signal); break
         case 'rerun': updated = await rerunWorkflow(projectId, attempt.input, signal); break
       }
       if (controller.signal.aborted) return
       setRetry(null)
       setRerunTarget(null)
+      setCancelTarget(null)
       setThroughStep('')
       if (attempt.kind === 'start') setCheckpoints(false)
       setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
@@ -304,7 +332,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       if (error instanceof ProjectApiError && (error.status === 409 || error.code === 'REVISION_CONFLICT')) {
         setRetry(null)
         setRerunTarget(null)
+        setCancelTarget(null)
         setFeedback('工作流状态已更新，请查看最新进度。')
+        if (kind === 'cancel' && document.activeElement === control) heading.current?.focus()
         refresh()
       } else {
         setActionError(errorMessage(error))
@@ -346,7 +376,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         disabled: rerunDisabled,
         pending: pending === 'rerun',
         retry: retryRerun !== null,
-        onSelect: setRerunTarget,
+        onSelect: (target) => {
+          setCancelTarget(null)
+          setRerunTarget(target)
+        },
         onConfirm: () => void submit('rerun'),
         onCancel: () => setRerunTarget(null),
       }} />}
@@ -356,6 +389,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}
       {paused && <p className="workflow-note">继续时从第一个未完成的步骤开始。已完成的成果仍可下载。</p>}
+      {cancelled && <p className="workflow-note">已完成的成果仍可下载。</p>}
       {readError && <p className="form-error" role="alert">{readError}</p>}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {feedback && <p className="workflow-note" role="status">{feedback}</p>}
@@ -436,12 +470,35 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
                 {pending === 'pause' ? '正在提交暂停…' : retryPause ? '重试暂停' : '暂停工作流'}
               </button>
             )}
+            {canCancel && (
+              <button className="button outline" type="button" ref={cancelButton} disabled={requestBlocked}
+                aria-expanded={confirmingCancel} aria-controls={confirmingCancel ? cancelConfirmationId : undefined}
+                onClick={toggleCancelConfirmation}>取消本轮</button>
+            )}
             {(readError || modelUnavailable) && (
               <button className="button outline" type="button" disabled={refreshing || pending !== null} onClick={refresh}>
                 {refreshing ? '正在刷新…' : '刷新工作流状态'}
               </button>
             )}
           </div>
+          {confirmingCancel && (
+            <div className="workflow-cancel-confirm" id={cancelConfirmationId} role="group" aria-labelledby={`${cancelConfirmationId}-help`}>
+              <p className="workflow-note" id={`${cancelConfirmationId}-help`}>
+                此操作只结束本轮。正在执行的步骤会停止，已完成的成果仍可下载。
+              </p>
+              <div className="workflow-actions">
+                <button className="button outline workflow-cancel-action" type="button"
+                  disabled={requestBlocked && pending !== 'cancel'} aria-disabled={pending === 'cancel'}
+                  onClick={() => void submit('cancel')}>
+                  {pending === 'cancel' ? '正在提交取消…' : retryCancel ? '重试取消本轮' : '确认取消本轮'}
+                </button>
+                <button className="button outline" type="button" disabled={pending !== null} onClick={() => {
+                  setCancelTarget(null)
+                  cancelButton.current?.focus()
+                }}>返回</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </section>

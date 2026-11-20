@@ -19,6 +19,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path, api.change(workflowStart))
 	mux.HandleFunc("POST "+path+"/continue", api.change(workflowContinue))
 	mux.HandleFunc("POST "+path+"/pause", api.change(workflowPause))
+	mux.HandleFunc("POST "+path+"/cancel", api.change(workflowCancel))
 	mux.HandleFunc("POST "+path+"/rerun", api.change(workflowRerun))
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts", api.artifacts)
@@ -91,10 +92,10 @@ func (api workflows) change(action string) http.HandlerFunc {
 		case err != nil:
 			writeTaskError(w, "change workflow run", err)
 		default:
-			if action == workflowPause && run.Status == workflowPausing {
+			if (action == workflowPause && run.Status == workflowPausing) || (action == workflowCancel && run.Status == taskCancelling) {
 				api.store.stopTaskRun(projectID, run.stepTaskID)
 			}
-			if action != workflowPause && run.Status == taskQueued && api.model != nil {
+			if action != workflowPause && action != workflowCancel && run.Status == taskQueued && api.model != nil {
 				api.store.kickTaskQueue(projectID, api.model)
 			}
 			status := http.StatusOK

@@ -6,6 +6,8 @@ export const runStatusLabels = {
   RUNNING: '运行中',
   PAUSING: '正在暂停',
   PAUSED: '已暂停',
+  CANCELLING: '正在取消本轮',
+  CANCELLED: '本轮已取消',
   WAITING_CHECKPOINT: '等待确认',
   RANGE_COMPLETED: '本次范围已完成',
   COMPLETED: '全部步骤已完成',
@@ -76,22 +78,23 @@ export interface StartWorkflowInput {
   throughStep?: string
 }
 
-export interface PauseWorkflowInput {
+export interface WorkflowRunActionInput {
   requestId: string
   runId: string
   expectedRevision: number
 }
 
-export interface ContinueWorkflowInput extends PauseWorkflowInput {
+export interface ContinueWorkflowInput extends WorkflowRunActionInput {
   throughStep?: string
 }
 
-export interface RerunWorkflowInput extends PauseWorkflowInput {
+export interface RerunWorkflowInput extends WorkflowRunActionInput {
   stepKey: string
 }
 
 export function isWorkflowActive(run: WorkflowRun | null) {
-  return run?.status === 'QUEUED' || run?.status === 'RUNNING' || run?.status === 'PAUSING'
+  const status = run?.status
+  return status === 'QUEUED' || status === 'RUNNING' || status === 'PAUSING' || status === 'CANCELLING'
 }
 
 function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
@@ -159,7 +162,7 @@ export function getWorkflow(projectId: string, signal: AbortSignal) {
   return request(workflowPath(projectId), isSnapshot, { cache: 'no-store', signal })
 }
 
-function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | PauseWorkflowInput | RerunWorkflowInput, signal: AbortSignal) {
+function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | WorkflowRunActionInput | RerunWorkflowInput, signal: AbortSignal) {
   return request(path, isRun, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -176,8 +179,12 @@ export function continueWorkflow(projectId: string, input: ContinueWorkflowInput
   return postRun(`${workflowPath(projectId)}/continue`, input, signal)
 }
 
-export function pauseWorkflow(projectId: string, input: PauseWorkflowInput, signal: AbortSignal) {
+export function pauseWorkflow(projectId: string, input: WorkflowRunActionInput, signal: AbortSignal) {
   return postRun(`${workflowPath(projectId)}/pause`, input, signal)
+}
+
+export function cancelWorkflow(projectId: string, input: WorkflowRunActionInput, signal: AbortSignal) {
+  return postRun(`${workflowPath(projectId)}/cancel`, input, signal)
 }
 
 export function rerunWorkflow(projectId: string, input: RerunWorkflowInput, signal: AbortSignal) {

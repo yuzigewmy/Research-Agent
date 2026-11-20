@@ -14,6 +14,7 @@ const (
 	workflowContinue       = "continue"
 	workflowRerun          = "rerun"
 	workflowPause          = "pause"
+	workflowCancel         = "cancel"
 	workflowPausing        = "PAUSING"
 	workflowPaused         = "PAUSED"
 	workflowDone           = "COMPLETED"
@@ -258,22 +259,29 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if action != workflowStart && (current.RunID != req.RunID || current.Revision != req.ExpectedRevision) {
 		return WorkflowRun{}, false, errTaskRevision
 	}
+	stopping := action == workflowPause || action == workflowCancel
+	if stopping && req.ThroughStep != "" {
+		return WorkflowRun{}, false, errWorkflowRange
+	}
 	switch action {
 	case workflowStart:
-		if current.RunID != "" && current.Status != workflowDone {
+		if current.RunID != "" && current.Status != workflowDone && current.Status != taskCancelled {
 			return WorkflowRun{}, false, errWorkflowState
 		}
 		current = WorkflowRun{RunID: rand.Text(), WorkflowKey: key, rangeEnd: end}
 	case workflowPause:
-		if req.ThroughStep != "" {
-			return WorkflowRun{}, false, errWorkflowRange
-		}
 		if current.Status != taskQueued && current.Status != taskRunning {
+			return WorkflowRun{}, false, errWorkflowState
+		}
+	case workflowCancel:
+		switch current.Status {
+		case taskQueued, taskRunning, workflowPaused, workflowWaiting, workflowRangeCompleted, taskFailed, taskInterrupted:
+		default:
 			return WorkflowRun{}, false, errWorkflowState
 		}
 	case workflowRerun:
 		switch current.Status {
-		case taskQueued, taskRunning, workflowPausing:
+		case taskQueued, taskRunning, workflowPausing, taskCancelling, taskCancelled:
 			return WorkflowRun{}, false, errWorkflowState
 		}
 		step, err := rerunnableStep(current.Steps, req.StepKey)
@@ -296,7 +304,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			return WorkflowRun{}, false, errWorkflowState
 		}
 	}
-	if action != workflowPause && !modelReady {
+	if !stopping && !modelReady {
 		return WorkflowRun{}, false, errModelUnavailable
 	}
 
@@ -325,14 +333,23 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json, range_end)
 			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)`, current.RunID, projectID, req.Checkpoints,
 			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd)
-	case workflowPause:
-		runStatus, stepStatus := workflowPaused, taskCancelled
-		if current.Status == taskRunning {
-			runStatus, stepStatus = workflowPausing, taskCancelling
+	case workflowPause, workflowCancel:
+		runStatus := taskCancelled
+		if action == workflowPause {
+			runStatus = workflowPaused
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = ?, revision = revision + 1
-			WHERE project_id = ? AND task_id = ?`, stepStatus, projectID, current.stepTaskID); err != nil {
-			return WorkflowRun{}, false, err
+		if current.Status == taskQueued || current.Status == taskRunning {
+			stepStatus := taskCancelled
+			if current.Status == taskRunning {
+				stepStatus, runStatus = taskCancelling, taskCancelling
+				if action == workflowPause {
+					runStatus = workflowPausing
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = ?, revision = revision + 1
+				WHERE project_id = ? AND task_id = ?`, stepStatus, projectID, current.stepTaskID); err != nil {
+				return WorkflowRun{}, false, err
+			}
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, revision = revision + 1 WHERE run_id = ?`, runStatus, current.RunID)
 	case workflowRerun:
@@ -349,7 +366,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	if action != workflowPause {
+	if !stopping {
 		if err := enqueueWorkflowStep(ctx, tx, projectID, current.RunID, current.step, workflowStages[current.WorkflowKey][current.step]); err != nil {
 			return WorkflowRun{}, false, err
 		}
@@ -429,11 +446,9 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 			step++
 		}
 	}
-	if status == taskCancelled {
-		status = workflowPaused
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, step_no = ?, revision = revision + 1 WHERE run_id = ?`,
-		status, step, task.workflowRunID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET
+		status = CASE WHEN ? = 'CANCELLED' AND status = 'PAUSING' THEN 'PAUSED' ELSE ? END,
+		step_no = ?, revision = revision + 1 WHERE run_id = ?`, status, status, step, task.workflowRunID); err != nil {
 		return err
 	}
 	if status == taskQueued {
@@ -444,7 +459,7 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 
 func recoverInterruptedWorkflows(tx *sql.Tx) error {
 	_, err := tx.Exec(`UPDATE workflow_runs SET revision = revision + 1,
-		status = CASE WHEN status = 'PAUSING' THEN 'PAUSED' ELSE 'INTERRUPTED' END
-		WHERE status IN ('RUNNING', 'PAUSING')`)
+		status = CASE status WHEN 'PAUSING' THEN 'PAUSED' WHEN 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END
+		WHERE status IN ('RUNNING', 'PAUSING', 'CANCELLING')`)
 	return err
 }
