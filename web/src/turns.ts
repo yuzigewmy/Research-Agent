@@ -1,10 +1,10 @@
 import type { Material } from './materials'
-import { isTurnMode, request } from './projects'
+import { isTurnMode, ProjectApiError, request } from './projects'
 import type { TurnMode } from './projects'
 
 export type { TurnMode } from './projects'
 
-const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED'] as const
+const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED', 'STOPPED'] as const
 export const turnReferenceLimit = 4
 const turnTaskResultLimit = 4
 export type TurnStatus = typeof statuses[number]
@@ -108,4 +108,10 @@ export function sendTurn(projectId: string, input: TurnInput, signal: AbortSigna
     body: JSON.stringify(input),
     signal,
   })
+}
+
+export async function stopTurn(projectId: string, turnId: string, signal: AbortSignal) {
+  if (!turnId || turnId === '.' || turnId === '..') throw new ProjectApiError('对话链接无效。', 400)
+  return request(`${turnsPath(projectId)}/${encodeURIComponent(turnId)}/stop`, (value): value is Turn =>
+    isTurn(value) && value.turnId === turnId && value.status !== 'RUNNING', { method: 'POST', signal })
 }

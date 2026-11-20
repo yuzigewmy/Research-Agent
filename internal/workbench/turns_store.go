@@ -167,7 +167,11 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 }
 
 func (s *Store) getTurn(ctx context.Context, projectID, turnID string) (Turn, error) {
-	return scanTurn(s.db.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND turn_id = ?`, projectID, turnID))
+	return readTurn(ctx, s.db, projectID, turnID)
+}
+
+func readTurn(ctx context.Context, db workspaceQuery, projectID, turnID string) (Turn, error) {
+	return scanTurn(db.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND turn_id = ?`, projectID, turnID))
 }
 
 func (s *Store) listTurns(ctx context.Context, projectID string, before int64, limit int) ([]Turn, error) {
@@ -195,30 +199,37 @@ func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent)
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := recordTurnEvent(ctx, tx, turnID, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
-	if e.Kind == "done" && e.Status == "COMPLETED" && e.proposalInstruction != "" {
-		e.ProposedTaskID, err = insertTurnProposal(ctx, tx, turnID, e.proposalInstruction)
+func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e TurnEvent) (int64, error) {
+	completed := e.Kind == "done" && e.Status == "COMPLETED"
+	if completed && e.proposalInstruction != "" {
+		taskID, err := insertTurnProposal(ctx, tx, turnID, e.proposalInstruction)
 		if err != nil {
-			return err
+			return 0, err
 		}
+		e.ProposedTaskID = taskID
 	}
 	var seq int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO turn_events(turn_id, kind, text, status, message, proposed_task_id)
 		VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`, turnID, e.Kind, e.Text, e.Status, e.Message, e.ProposedTaskID).Scan(&seq); err != nil {
-		return err
+		return 0, err
 	}
-	var storedID string
 	if err := tx.QueryRowContext(ctx, `UPDATE turns SET answer = answer || ?,
 		status = COALESCE(NULLIF(?, ''), status), message = ?, event_seq = ?, proposed_task_id = ?
-		WHERE turn_id = ? AND status = 'RUNNING' RETURNING turn_id`, e.Text, e.Status, e.Message, seq, e.ProposedTaskID, turnID).Scan(&storedID); err != nil {
-		return err
+		WHERE turn_id = ? AND status = 'RUNNING' RETURNING event_seq`, e.Text, e.Status, e.Message, seq, e.ProposedTaskID, turnID).Scan(&seq); err != nil {
+		return 0, err
 	}
-	if e.Kind == "done" && e.Status == "COMPLETED" {
+	if completed {
 		if err := syncTurnTaskResults(ctx, tx, turnID); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return tx.Commit()
+	return seq, nil
 }
 
 const streamBatch = 128

@@ -52,6 +52,7 @@ type projectCursor struct {
 type Store struct {
 	db         *sql.DB
 	tasks      taskWorkers
+	turns      turnWorkers
 	objectsDir string
 }
 
@@ -85,11 +86,12 @@ func Open(dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
-	return &Store{db: db, objectsDir: objectsDir}, nil
+	return &Store{db: db, objectsDir: objectsDir, turns: turnWorkers{active: make(map[string]context.CancelFunc)}}, nil
 }
 
-// Close stops research task workers and releases the database connection.
+// Close stops replies and research tasks before releasing the database connection.
 func (s *Store) Close() error {
+	s.turns.close()
 	s.tasks.close()
 	return s.db.Close()
 }

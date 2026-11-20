@@ -6,10 +6,21 @@ import { errorMessage, isTurnMode, turnModeLabels } from './projects'
 import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
-import { isProposedTaskId, listTurns, sendTurn, turnsPath } from './turns'
+import { isProposedTaskId, listTurns, sendTurn, stopTurn, turnsPath } from './turns'
 import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
 
-type StreamTarget = { id: string; after: number }
+type StopState = { turnId: string; kind: 'pending' } | { turnId: string; kind: 'error'; message: string }
+
+function latestTurn(current: Turn | undefined, snapshot: Turn) {
+  // On a tie, the full snapshot can supply text missing from the local event stream.
+  return current && current.afterSeq > snapshot.afterSeq ? current : snapshot
+}
+
+function mergeTurns(current: Turn[], snapshots: Turn[]) {
+  const byId = new Map(current.map((turn) => [turn.turnId, turn]))
+  for (const snapshot of snapshots) byId.set(snapshot.turnId, latestTurn(byId.get(snapshot.turnId), snapshot))
+  return [...byId.values()]
+}
 
 function readAttempt(key: string): TurnInput | null {
   try {
@@ -42,6 +53,8 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
   const submission = useRef<AbortController | null>(null)
+  const earlierRequest = useRef<AbortController | null>(null)
+  const stopRequests = useRef(new Map<string, AbortController>())
   const [turns, setTurns] = useState<Turn[]>([])
   const [cursor, setCursor] = useState<string>()
   const [configured, setConfigured] = useState(false)
@@ -53,19 +66,15 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [connectionLost, setConnectionLost] = useState(false)
-  const [stream, setStream] = useState<StreamTarget | null>(null)
+  const [stopState, setStopState] = useState<StopState>()
   const [reload, setReload] = useState(0)
+  const runningTurn = turns.find((turn) => turn.status === 'RUNNING')
+  const streamId = loading ? undefined : runningTurn?.turnId
   const referenceIds = references.map(({ materialId }) => materialId)
   const matchingAttempt = attempt?.text === draft && sameReferenceIds(attempt.referenceIds, referenceIds) ? attempt : null
   const retryMode = matchingAttempt ? matchingAttempt.mode ?? 'CHAT' : undefined
   const inheritedMode = retryMode ?? defaultTurnMode
   const mode = modeOverride ?? inheritedMode
-
-  function accept(turn: Turn) {
-    setTurns((items) => [...items.filter((item) => item.turnId !== turn.turnId), turn])
-    setConnectionLost(false)
-    setStream(turn.status === 'RUNNING' ? { id: turn.turnId, after: turn.afterSeq } : null)
-  }
 
   function finishAttempt(input: TurnInput) {
     setAttempt(null)
@@ -85,12 +94,11 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     listTurns(projectId, controller.signal).then((page) => {
       if (controller.signal.aborted) return
       reconcileAttempt(page.items)
-      const running = page.items.find((turn) => turn.status === 'RUNNING')
-      setTurns(page.items.reverse())
+      setTurns((items) => [...page.items].reverse().map((snapshot) =>
+        latestTurn(items.find((turn) => turn.turnId === snapshot.turnId), snapshot)))
       setCursor(page.nextCursor)
       setConfigured(page.modelConfigured)
       setConnectionLost(false)
-      setStream(running ? { id: running.turnId, after: running.afterSeq } : null)
     }).catch((err: unknown) => {
       if (!controller.signal.aborted) setError(errorMessage(err))
     }).finally(() => {
@@ -99,16 +107,24 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     return () => controller.abort()
   }, [projectId, reload])
 
-  useEffect(() => () => submission.current?.abort(), [])
+  useEffect(() => {
+    const requests = stopRequests.current
+    return () => {
+      submission.current?.abort()
+      earlierRequest.current?.abort()
+      for (const controller of requests.values()) controller.abort()
+    }
+  }, [])
+
+  const streamCursor = useEffectEvent((id: string) => turns.find((turn) => turn.turnId === id)?.afterSeq ?? 0)
 
   useEffect(() => {
-    if (!stream) return
-    const source = new EventSource(`${turnsPath(projectId)}/${encodeURIComponent(stream.id)}/stream?after=${stream.after}`)
+    if (!streamId) return
+    const source = new EventSource(`${turnsPath(projectId)}/${encodeURIComponent(streamId)}/stream?after=${streamCursor(streamId)}`)
     source.onopen = () => setConnectionLost(false)
     source.onerror = () => {
       setConnectionLost(true)
       if (source.readyState === EventSource.CLOSED) {
-        setStream(null)
         setLoading(true)
         setReload((revision) => revision + 1)
       }
@@ -116,24 +132,29 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     source.onmessage = (message) => {
       const event = JSON.parse(message.data) as TurnEvent
       setTurns((items) => items.map((turn) => {
-        if (turn.turnId !== stream.id || event.seq <= turn.afterSeq) return turn
+        if (turn.turnId !== streamId || turn.status !== 'RUNNING' || event.seq <= turn.afterSeq) return turn
         if (event.kind === 'delta') return { ...turn, answer: turn.answer + event.text, afterSeq: event.seq }
         const proposedTaskId = event.status === 'COMPLETED' && isProposedTaskId(event.proposedTaskId)
           ? event.proposedTaskId : undefined
         return { ...turn, status: event.status, message: event.message, afterSeq: event.seq, proposedTaskId }
       }))
       if (event.kind === 'done') {
+        source.onerror = null
         source.close()
-        setStream(null)
         setConnectionLost(false)
       }
     }
-    return () => source.close()
-  }, [projectId, stream])
+    return () => {
+      source.onopen = null
+      source.onerror = null
+      source.onmessage = null
+      source.close()
+    }
+  }, [projectId, streamId])
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (loading || submission.current || stream || !configured || !draft.trim()) return
+    if (loading || submission.current || runningTurn || !configured || !draft.trim()) return
     if (new TextEncoder().encode(draft).length > 16_384) {
       setError('这条消息超过 16 KiB，请拆成几条发送。')
       return
@@ -151,7 +172,8 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       const turn = await sendTurn(projectId, input, controller.signal)
       if (controller.signal.aborted) return
       finishAttempt(input)
-      accept(turn)
+      setTurns((items) => mergeTurns(items, [turn]))
+      setConnectionLost(false)
     } catch (err) {
       if (!controller.signal.aborted) setError(errorMessage(err))
     } finally {
@@ -160,18 +182,46 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     }
   }
 
+  async function stop(turnId: string) {
+    if (loading || runningTurn?.turnId !== turnId || stopRequests.current.has(turnId)) return
+    const controller = new AbortController()
+    stopRequests.current.set(turnId, controller)
+    setStopState({ turnId, kind: 'pending' })
+    try {
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+      const turn = await stopTurn(projectId, turnId, signal)
+      if (controller.signal.aborted) return
+      setTurns((items) => mergeTurns(items, [turn]))
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setStopState((current) => current?.turnId === turnId
+          ? { turnId, kind: 'error', message: errorMessage(err) } : current)
+      }
+    } finally {
+      stopRequests.current.delete(turnId)
+      if (!controller.signal.aborted) {
+        setStopState((current) => current?.turnId === turnId && current.kind === 'pending' ? undefined : current)
+      }
+    }
+  }
+
   async function earlier() {
+    if (!cursor || earlierRequest.current) return
+    const controller = new AbortController()
+    earlierRequest.current = controller
     setError('')
     setLoadingEarlier(true)
     try {
-      const page = await listTurns(projectId, AbortSignal.timeout(10_000), cursor)
-      const older = page.items.reverse()
-      setTurns((items) => [...older, ...items])
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+      const page = await listTurns(projectId, signal, cursor)
+      if (controller.signal.aborted) return
+      setTurns((items) => mergeTurns([...page.items].reverse(), items))
       setCursor(page.nextCursor)
     } catch (err) {
-      setError(errorMessage(err))
+      if (!controller.signal.aborted) setError(errorMessage(err))
     } finally {
-      setLoadingEarlier(false)
+      earlierRequest.current = null
+      if (!controller.signal.aborted) setLoadingEarlier(false)
     }
   }
 
@@ -195,7 +245,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       {cursor && <button className="button outline" type="button" disabled={loadingEarlier} onClick={() => void earlier()}>
         {loadingEarlier ? '正在读取…' : '更早的对话'}
       </button>}
-      <ol className="turns" aria-label="对话记录" aria-live="polite" aria-busy={stream !== null}>
+      <ol className="turns" aria-label="对话记录" aria-live="polite" aria-busy={!!runningTurn}>
         {turns.map((turn) => (
           <li key={turn.turnId} className="turn" id={conversationTurnAnchor(turn.turnId)} tabIndex={-1}>
             <p className="turn-role">你</p>
@@ -226,8 +276,22 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
             </div>}
             <p className="turn-role">研究助手</p>
             {turn.answer && <p className="turn-content" dir="auto">{turn.answer}</p>}
-            {turn.status === 'RUNNING' && <p className="turn-status" role="status">{connectionLost ? '连接中断，正在续接…' : '正在回复…'}</p>}
-            {turn.message && <p className="turn-status">{turn.message}</p>}
+            {turn.status === 'RUNNING' && <>
+              <p className="turn-status" role="status">{connectionLost ? '连接中断，正在续接…' : '正在回复…'}</p>
+              <div className="form-actions">
+                <button className="button outline" type="button"
+                  disabled={loading || (stopState?.turnId === turn.turnId && stopState.kind === 'pending')}
+                  onClick={() => void stop(turn.turnId)}>
+                  {stopState?.turnId === turn.turnId && stopState.kind === 'pending' ? '正在停止…' : '停止回复'}
+                </button>
+              </div>
+              {stopState?.turnId === turn.turnId && stopState.kind === 'error' && (
+                <p className="form-error" role="alert">{stopState.message}</p>
+              )}
+            </>}
+            {turn.status === 'STOPPED'
+              ? <p className="turn-status" role="status">{turn.message || '已停止回复。已生成的内容已保留。'}</p>
+              : turn.message && <p className="turn-status">{turn.message}</p>}
             {turn.status === 'COMPLETED' && <ConversationTasks key={turn.proposedTaskId ?? turn.turnId}
               projectId={projectId} turnId={turn.turnId} text={turn.text}
               proposedTaskId={turn.proposedTaskId} sync={taskSync} />}
@@ -269,7 +333,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
             </p>
           </div>
           <div className="form-actions">
-            <button className="button primary" type="submit" disabled={loading || sending || stream !== null || !draft.trim()}>发送</button>
+            <button className="button primary" type="submit" disabled={loading || sending || !!runningTurn || !draft.trim()}>发送</button>
           </div>
         </form>
       )}

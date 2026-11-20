@@ -29,8 +29,10 @@ func (c conversation) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path, c.list)
 	mux.HandleFunc("POST "+path, c.send)
 	mux.HandleFunc("GET "+path+"/{turnId}/stream", c.stream)
+	mux.HandleFunc("POST "+path+"/{turnId}/stop", c.stop)
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
 	mux.HandleFunc(path+"/{turnId}/stream", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc(path+"/{turnId}/stop", methodNotAllowed("POST"))
 }
 
 func (c conversation) send(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +52,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择仅问答或建议任务后确认。")
 		return
 	}
-	turn, project, created, err := c.store.beginTurn(r.Context(), r.PathValue("id"), input, c.model != nil)
+	turn, created, err := c.startReply(r.Context(), r.PathValue("id"), input)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "项目不存在。")
@@ -65,35 +67,39 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeStoreError(w, "begin turn", err)
 	case created:
-		go c.reply(project, turn)
 		writeJSON(w, http.StatusAccepted, turn)
 	default:
 		writeJSON(w, http.StatusOK, turn)
 	}
 }
 
-func (c conversation) reply(project Project, turn Turn) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	instruction, err := c.generate(ctx, project, turn)
+func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
+	instruction, generateErr := c.generate(ctx, project, turn)
 	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposalInstruction: instruction}
-	if err != nil {
-		log.Printf("conversation %s: %v", turn.TurnID, err)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		event.Status = "INTERRUPTED"
+		event.Message = "服务关闭中断了此轮回复。可以重新发送。"
+	} else if generateErr != nil {
 		event.Status = "FAILED"
 		switch {
-		case errors.Is(err, errMaterialNotText):
+		case errors.Is(generateErr, errMaterialNotText):
 			event.Message = "无法读取引用资料的正文。请在资料预览中核对后重新发送。"
-		case errors.Is(err, errInvalidTaskProposal):
+		case errors.Is(generateErr, errInvalidTaskProposal):
 			event.Message = "任务建议缺少有效的说明。可重新发送消息。"
 		default:
 			event.Message = "回复未完成。请检查模型连接，或重新发送。"
 		}
 	}
-	// Completion still needs to be recorded if the generation deadline expired.
-	saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	// A stopped turn already has a terminal event. The conditional write also
+	// prevents late provider output from creating a proposal or syncing results.
+	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
 	if err := c.store.appendTurnEvent(saveCtx, turn.TurnID, event); err != nil {
-		log.Printf("finish conversation %s: %v", turn.TurnID, err)
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("finish conversation %s: %v", turn.TurnID, err)
+		}
+	} else if event.Status == "FAILED" {
+		log.Printf("conversation %s: %v", turn.TurnID, generateErr)
 	}
 }
 
