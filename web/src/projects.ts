@@ -1,6 +1,7 @@
 export const templates = {
   freeform: '自由研究',
   topic: '研究选题',
+  proposal: '开题报告',
   literature_review: '文献综述',
   paper: '论文写作',
   experiment: '实验计划',

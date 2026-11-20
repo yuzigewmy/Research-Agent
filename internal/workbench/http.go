@@ -124,7 +124,7 @@ func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch input.TemplateID {
-	case "freeform", "literature_review", "paper", "experiment", "topic":
+	case "freeform", "literature_review", "paper", "experiment", "topic", "proposal":
 	default:
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Unknown project template")
 		return

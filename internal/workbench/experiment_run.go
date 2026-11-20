@@ -48,6 +48,7 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	stage := stages[task.workflowStep]
 	var sources []reviewSource
 	first := 0
+	usesLiterature := key == reviewWorkflow || key == paperWorkflow || key == proposalWorkflow
 	if key == paperWorkflow {
 		if stage.key == "structure" {
 			_, manuscript, err := s.workflowArtifact(ctx, projectID, task.workflowRunID, "manuscript")
@@ -58,7 +59,7 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 		}
 		input += "\n\n本轮写作设置（JSON）：\n" + options
 	}
-	if key == reviewWorkflow || key == paperWorkflow {
+	if usesLiterature {
 		if err := json.Unmarshal([]byte(evidence), &sources); err != nil {
 			return taskResult{}, err
 		}
@@ -66,16 +67,26 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 			return taskResult{markdown: reviewSourcesMarkdown(sources)}, nil
 		}
 		input += "\n\n本轮固定的文献元数据（JSON）：\n" + evidence
-		if key == reviewWorkflow {
+		if key != paperWorkflow {
 			first = 1
 		}
+	}
+	if key == proposalWorkflow {
+		if stage.key == "check" {
+			var goals proposalTargets
+			if err := json.Unmarshal([]byte(options), &goals); err != nil {
+				return taskResult{}, err
+			}
+			return s.checkProposal(ctx, projectID, task.workflowRunID, goals, sources)
+		}
+		input += "\n\n本轮开题设置（JSON）：\n" + options
 	}
 	previous, err := s.workflowContext(ctx, task, stages, first)
 	if err != nil {
 		return taskResult{}, err
 	}
 	markdown, err := streamTaskMarkdown(ctx, model, stage.prompt, input+previous)
-	if err == nil && (key == reviewWorkflow || key == paperWorkflow) {
+	if err == nil && usesLiterature {
 		if invalid := checkWorkflowCitations(markdown, sources, key == reviewWorkflow); invalid != nil {
 			return taskResult{}, workflowOutputError{invalid}
 		}

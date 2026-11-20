@@ -110,6 +110,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择有效的写作语言，大纲上限为 16 KiB。")
 		case errors.Is(err, errTopicOptions):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "研究选题的补充要求上限为 4 KiB。")
+		case errors.Is(err, errProposalOptions):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对学位设置和月份。正文目标为 500 至 30000 字，文献目标为 1 至 80 条，补充要求上限为 4 KiB。")
 		case errors.Is(err, errTopicCandidate):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择本轮的入围题目。")
 		case err != nil:

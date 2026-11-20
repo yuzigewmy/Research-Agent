@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import type { TemplateId } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
+import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
 import type { SkipTarget } from './WorkflowSkipStep'
@@ -171,14 +172,27 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const isReview = templateId === 'literature_review'
   const isPaper = templateId === 'paper'
   const isTopic = templateId === 'topic'
+  const isProposal = templateId === 'proposal'
   const title = {
-    experiment: '实验工作流', literature_review: '文献综述工作流', paper: '论文写作工作流', topic: '研究选题工作流',
+    experiment: '实验工作流',
+    literature_review: '文献综述工作流',
+    paper: '论文写作工作流',
+    topic: '研究选题工作流',
+    proposal: '开题报告工作流',
   }[templateId]
   const checkpointLabel = {
     experiment: '生成实验计划后，等待我确认再继续',
     literature_review: '整理主题后，等待我确认再继续',
     paper: '生成大纲后，等待我确认再继续',
     topic: '入围后由我确认选题',
+    proposal: '完成开题规划后由我确认',
+  }[templateId]
+  const checkpointHint = {
+    experiment: '确认实验计划后生成验收清单。',
+    literature_review: '确认主题规划后撰写综述。',
+    paper: '确认论文大纲后生成正文。',
+    topic: '确认后继续本轮选题。',
+    proposal: '确认开题规划后继续撰写',
   }[templateId]
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
@@ -190,6 +204,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
   const [paperOutline, setPaperOutline] = useState('')
   const [topicRequirements, setTopicRequirements] = useState('')
+  const [proposalDraft, setProposalDraft] = useState(initialProposalDraft)
   const [throughStep, setThroughStep] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
@@ -257,6 +272,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
   const requirements = topicRequirements.trim()
   const invalidRequirements = isTopic && (new TextEncoder().encode(requirements).length > topicRequirementsLimit
     || requirements.includes('\0'))
+  const proposal = isProposal ? prepareProposal(proposalDraft) : undefined
+  const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false
   const currentRun = useEffectEvent(() => run)
 
   useEffect(() => {
@@ -331,7 +348,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       if (rerunDisabled || !selectedRerun || !run) return
       const index = run.steps.findIndex((step) => step.key === selectedRerun.stepKey)
       if (!canRerunStep(run, index)) return
-    } else if (actionDisabled || (kind === 'start' ? !canStart || !validTarget || invalidRequirements : !canContinue)) return
+    } else if (actionDisabled || (kind === 'start' ? !canStart || invalidStart : !canContinue)) return
     const outline = paperOutline
     if (kind === 'start' && isPaper && new TextEncoder().encode(outline).length > 16_384) {
       setActionError('大纲超过 16 KiB，请缩短后提交。')
@@ -358,6 +375,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
             requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
             paper: isPaper ? { language: paperLanguage, outline } : undefined,
             topic: isTopic ? { requirements: requirements || undefined } : undefined,
+            proposal: proposal?.options,
             throughStep: endStep || undefined,
           } }
         } else if (kind === 'rerun') {
@@ -451,6 +469,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       </p>}
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
+      {run && <WorkflowProposalSummary run={run} />}
       {run && <WorkflowSteps projectId={projectId} run={run} rerun={{
         selected: selectedRerun?.stepKey,
         disabled: rerunDisabled,
@@ -480,8 +499,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
         target={{ runId: run.runId, expectedRevision: run.revision, stepKey: skipStep.key }} stepTitle={skipStep.title}
         disabled={requestBlocked} pending={pending === 'skip'} retryReason={retrySkip?.input.reason}
         onConfirm={(target) => void submit('skip', target)} />}
-      {waiting && <p className="workflow-note">{isPaper ? '确认论文大纲后生成正文。'
-        : isReview ? '确认主题规划后撰写综述。' : '确认实验计划后生成验收清单。'}</p>}
+      {waiting && <p className="workflow-note">{checkpointHint}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}
       {paused && <p className="workflow-note">继续时从第一个未完成的步骤开始。已完成的成果仍可下载。</p>}
       {cancelled && <p className="workflow-note">已完成的成果仍可下载。</p>}
@@ -491,6 +509,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       {modelUnavailable && <p className="workflow-note">请配置研究模型，然后刷新工作流状态。</p>}
       {(canStart || canCancel || readError || modelUnavailable) && (
         <div className="workflow-controls">
+          {canStart && proposal && <WorkflowProposalOptions draft={proposalDraft} errors={proposal.errors}
+            disabled={actionDisabled || retryStart !== null} onChange={setProposalDraft} />}
           {canStart && isTopic && <div className="field workflow-topic-requirements">
             <label htmlFor={`${headingId}-topic-requirements`}>选题要求</label>
             <textarea id={`${headingId}-topic-requirements`} rows={3} value={topicRequirements}
@@ -559,7 +579,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           <div className="workflow-actions">
             {canStart && (
               <button className="button primary" type="button"
-                disabled={!validTarget || invalidRequirements || (actionDisabled && pending !== 'start')}
+                disabled={invalidStart || (actionDisabled && pending !== 'start')}
                 aria-disabled={pending === 'start'} onClick={() => void submit('start')}>
                 {pending === 'start' ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>
@@ -610,6 +630,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId}
         renderSteps={(historicalRun) => <>
           <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
+          <WorkflowProposalSummary run={historicalRun} />
           <WorkflowSteps projectId={projectId} run={historicalRun} />
         </>} />
     </section>

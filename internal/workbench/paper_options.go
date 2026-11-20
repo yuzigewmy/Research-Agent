@@ -20,6 +20,29 @@ type paperOptions struct {
 	Outline  string `json:"outline,omitempty"`
 }
 
+func workflowStartSettings(key, action string, req workflowRequest) (string, int, error) {
+	if key == proposalWorkflow && action == workflowStart {
+		if req.Paper != nil || req.Topic != nil {
+			return "", 0, errProposalOptions
+		}
+		options, err := normalizeProposalOptions(req.Proposal)
+		if err != nil {
+			return "", 0, err
+		}
+		body, err := json.Marshal(options)
+		return string(body), options.TargetSources, err
+	}
+	if req.Proposal != nil {
+		return "", 0, errProposalOptions
+	}
+	target, err := reviewTarget(key, action, req.TargetPaperCount)
+	if err != nil {
+		return "", 0, err
+	}
+	options, err := workflowOptions(key, action, req.Paper, req.Topic)
+	return options, target, err
+}
+
 func workflowOptions(key, action string, input *paperOptions, topic *topicOptions) (string, error) {
 	if topic != nil {
 		if key != topicWorkflow || action != workflowStart || input != nil {

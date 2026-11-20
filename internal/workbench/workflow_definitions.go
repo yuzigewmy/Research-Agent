@@ -32,12 +32,22 @@ var topicShortlistPrompt string
 //go:embed prompts/topic_contract.md
 var topicContractPrompt string
 
+//go:embed prompts/proposal_outline.md
+var proposalOutlinePrompt string
+
+//go:embed prompts/proposal_manuscript.md
+var proposalManuscriptPrompt string
+
+//go:embed prompts/proposal_defense.md
+var proposalDefensePrompt string
+
 const (
 	experimentWorkflowV1 = "experiment-v1"
 	experimentWorkflow   = "experiment-v2"
 	reviewWorkflow       = "literature-v1"
 	paperWorkflow        = "paper-v1"
 	topicWorkflow        = "topic-v1"
+	proposalWorkflow     = "proposal-v1"
 )
 
 type workflowStage struct {
@@ -74,6 +84,13 @@ var workflowStages = map[string][]workflowStage{
 		{key: "shortlist", title: "评估并筛选构想", prompt: topicShortlistPrompt},
 		{key: "contract", title: "编写研究方案", prompt: topicContractPrompt, acceptMarkdown: true},
 	},
+	proposalWorkflow: {
+		{key: "sources", title: "固定本轮文献"},
+		{key: "outline", title: "编制开题规划", prompt: proposalOutlinePrompt, checkpoint: true, acceptMarkdown: true},
+		{key: "manuscript", title: "撰写开题报告", prompt: proposalManuscriptPrompt, acceptMarkdown: true},
+		{key: "defense", title: "准备开题答辩", prompt: proposalDefensePrompt, acceptMarkdown: true},
+		{key: "check", title: "核对开题交付"},
+	},
 }
 
 var projectWorkflows = map[string]string{
@@ -81,4 +98,5 @@ var projectWorkflows = map[string]string{
 	"literature_review": reviewWorkflow,
 	"paper":             paperWorkflow,
 	"topic":             topicWorkflow,
+	"proposal":          proposalWorkflow,
 }

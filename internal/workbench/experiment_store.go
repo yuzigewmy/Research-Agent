@@ -90,25 +90,27 @@ type WorkflowScope struct {
 }
 
 type WorkflowRun struct {
-	RunID            string         `json:"runId"`
-	WorkflowKey      string         `json:"workflowKey"`
-	Revision         int            `json:"revision"`
-	Status           string         `json:"status"`
-	Checkpoints      bool           `json:"checkpoints"`
-	CreatedAt        string         `json:"createdAt"`
-	TargetPaperCount int            `json:"targetPaperCount,omitempty"`
-	SourceCount      int            `json:"sourceCount,omitempty"`
-	Language         string         `json:"language,omitempty"`
-	Scope            WorkflowScope  `json:"scope"`
-	Steps            []WorkflowStep `json:"steps"`
-	AcceptStepKey    string         `json:"acceptStepKey,omitempty"`
-	SkipStepKey      string         `json:"skipStepKey,omitempty"`
-	TopicChoice      *topicChoice   `json:"topicChoice,omitempty"`
+	RunID            string           `json:"runId"`
+	WorkflowKey      string           `json:"workflowKey"`
+	Revision         int              `json:"revision"`
+	Status           string           `json:"status"`
+	Checkpoints      bool             `json:"checkpoints"`
+	CreatedAt        string           `json:"createdAt"`
+	TargetPaperCount int              `json:"targetPaperCount,omitempty"`
+	SourceCount      int              `json:"sourceCount,omitempty"`
+	Language         string           `json:"language,omitempty"`
+	Scope            WorkflowScope    `json:"scope"`
+	Steps            []WorkflowStep   `json:"steps"`
+	AcceptStepKey    string           `json:"acceptStepKey,omitempty"`
+	SkipStepKey      string           `json:"skipStepKey,omitempty"`
+	TopicChoice      *topicChoice     `json:"topicChoice,omitempty"`
+	Proposal         *proposalTargets `json:"proposal,omitempty"`
 	step             int
 	rangeStart       int
 	rangeEnd         int
 	stepTaskID       string
 	selectedTopic    int
+	optionsJSON      string
 }
 
 type WorkflowStep struct {
@@ -122,17 +124,18 @@ type WorkflowStep struct {
 }
 
 type workflowRequest struct {
-	RequestID        string        `json:"requestId"`
-	RunID            string        `json:"runId"`
-	ExpectedRevision int           `json:"expectedRevision"`
-	Checkpoints      bool          `json:"checkpoints"`
-	ThroughStep      string        `json:"throughStep"`
-	StepKey          string        `json:"stepKey"`
-	Reason           string        `json:"reason"`
-	CandidateNumber  int           `json:"candidateNumber"`
-	TargetPaperCount int           `json:"targetPaperCount"`
-	Paper            *paperOptions `json:"paper"`
-	Topic            *topicOptions `json:"topic"`
+	RequestID        string           `json:"requestId"`
+	RunID            string           `json:"runId"`
+	ExpectedRevision int              `json:"expectedRevision"`
+	Checkpoints      bool             `json:"checkpoints"`
+	ThroughStep      string           `json:"throughStep"`
+	StepKey          string           `json:"stepKey"`
+	Reason           string           `json:"reason"`
+	CandidateNumber  int              `json:"candidateNumber"`
+	TargetPaperCount int              `json:"targetPaperCount"`
+	Paper            *paperOptions    `json:"paper"`
+	Topic            *topicOptions    `json:"topic"`
+	Proposal         *proposalOptions `json:"proposal"`
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -149,13 +152,19 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	var skipReason string
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
-		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number
+		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step,
-			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic)
+			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic, &run.optionsJSON)
 	if err != nil {
 		return WorkflowRun{}, err
+	}
+	if run.WorkflowKey == proposalWorkflow {
+		run.Proposal = new(proposalTargets)
+		if err := json.Unmarshal([]byte(run.optionsJSON), run.Proposal); err != nil {
+			return WorkflowRun{}, err
+		}
 	}
 	stages := workflowStages[run.WorkflowKey]
 	last := run.rangeEnd
@@ -241,11 +250,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if key == "" {
 		return WorkflowRun{}, false, errWorkflowState
 	}
-	target, err := reviewTarget(key, action, req.TargetPaperCount)
-	if err != nil {
-		return WorkflowRun{}, false, err
-	}
-	options, err := workflowOptions(key, action, req.Paper, req.Topic)
+	options, target, err := workflowStartSettings(key, action, req)
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
@@ -266,14 +271,8 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			if req.Checkpoints != run.Checkpoints || target != run.TargetPaperCount {
 				return WorkflowRun{}, false, errRequestConflict
 			}
-			if run.WorkflowKey == paperWorkflow || run.WorkflowKey == topicWorkflow {
-				var saved string
-				if err := tx.QueryRowContext(ctx, `SELECT options_json FROM workflow_runs WHERE run_id = ?`, runID).Scan(&saved); err != nil {
-					return WorkflowRun{}, false, err
-				}
-				if saved != options {
-					return WorkflowRun{}, false, errRequestConflict
-				}
+			if options != run.optionsJSON {
+				return WorkflowRun{}, false, errRequestConflict
 			}
 		}
 		return run, false, err
@@ -368,9 +367,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	switch action {
 	case workflowStart:
 		evidence := "[]"
-		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow {
+		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || key == proposalWorkflow {
 			limit := target
-			if key != reviewWorkflow {
+			if limit == 0 {
 				limit = defaultReviewTarget
 			}
 			sources, err := freezeLiteratureSources(ctx, tx, projectID, limit)

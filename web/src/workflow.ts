@@ -89,6 +89,22 @@ export interface WorkflowTopicChoiceData {
   selectedNumber?: number
 }
 
+export interface ProposalTargets {
+  degree: 'bachelor' | 'master' | 'doctor'
+  degreeType: 'academic' | 'professional'
+  targetCharacters: number
+  targetSources: number
+}
+
+export interface ProposalOptions extends Partial<ProposalTargets> {
+  discipline?: string
+  method?: string
+  projectSource?: string
+  proposalMonth?: string
+  defenseMonth?: string
+  requirements?: string
+}
+
 export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
@@ -100,6 +116,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   skipStepKey?: string
   acceptedArtifactId?: string
   topicChoice?: WorkflowTopicChoiceData
+  proposal?: ProposalTargets
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -116,6 +133,7 @@ export interface StartWorkflowInput {
   targetPaperCount?: number
   paper?: { language: 'zh' | 'en'; outline?: string }
   topic?: { requirements?: string }
+  proposal?: ProposalOptions
   throughStep?: string
 }
 
@@ -230,6 +248,16 @@ function isTopicChoice(value: unknown): value is WorkflowTopicChoiceData {
     && (choice.selectedNumber === undefined || choice.candidates.some(({ number }) => number === choice.selectedNumber))
 }
 
+function isProposalTargets(value: unknown): value is ProposalTargets {
+  const targets = value as Partial<ProposalTargets> | null
+  return !!targets && (targets.degree === 'bachelor' || targets.degree === 'master' || targets.degree === 'doctor')
+    && (targets.degreeType === 'academic' || targets.degreeType === 'professional')
+    && typeof targets.targetCharacters === 'number' && Number.isInteger(targets.targetCharacters)
+    && targets.targetCharacters >= 500 && targets.targetCharacters <= 30_000
+    && typeof targets.targetSources === 'number' && Number.isInteger(targets.targetSources)
+    && targets.targetSources >= 1 && targets.targetSources <= 80
+}
+
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
@@ -242,6 +270,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.acceptStepKey === undefined || run.steps.some((step) => step.key === run.acceptStepKey))
     && (run.skipStepKey === undefined || run.steps.some((step) => step.key === run.skipStepKey))
     && (run.topicChoice === undefined || isTopicChoice(run.topicChoice))
+    && (run.proposal === undefined || isProposalTargets(run.proposal))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 
