@@ -56,6 +56,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
   const referenceKey = `research.references.${projectId}`
   const [references, setReferences] = useState(() => readReferences(referenceKey))
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
+  const [workflowRefresh, setWorkflowRefresh] = useState(0)
   const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
 
   const onTaskChanged = useCallback((task: Task) => {
@@ -131,13 +132,13 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
         || project.templateId === 'topic' || project.templateId === 'proposal') && <LiteraturePanel projectId={project.projectId} />}
       {project.templateId !== 'freeform' &&
-        <WorkflowPanel projectId={project.projectId} templateId={project.templateId} onManuscriptSaved={(path) => {
-          setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])
-        }} />}
+        <WorkflowPanel projectId={project.projectId} templateId={project.templateId} refreshVersion={workflowRefresh}
+          onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
       <TaskPanel projectId={project.projectId} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths} />
       <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
-        onClearReferences={clearReferences} taskSync={taskSync} />
+        onClearReferences={clearReferences} onWorkflowConfirmed={() => setWorkflowRefresh((version) => version + 1)}
+        taskSync={taskSync} />
     </div>
   )
 }

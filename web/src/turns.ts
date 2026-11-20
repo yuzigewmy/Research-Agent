@@ -23,10 +23,21 @@ export interface TurnInput {
   mode?: TurnMode
 }
 
+export interface WorkflowProposal {
+  action: 'start' | 'continue'
+  scope: { startStep: string; endStep: string }
+  steps: { key: string; title: string }[]
+  instruction: string
+  checkpoints: boolean
+  status: 'PROPOSED' | 'CONFIRMED' | 'CANCELLED'
+  runId?: string
+}
+
 export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode'> {
   references?: TurnReference[]
   taskResults?: TurnTaskResult[]
   proposedTaskId?: string
+  workflowProposal?: WorkflowProposal
   turnId: string
   answer: string
   status: TurnStatus
@@ -43,10 +54,33 @@ export interface TurnPage {
 
 export type TurnEvent =
   | { seq: number; kind: 'delta'; text: string }
-  | { seq: number; kind: 'done'; status: Exclude<TurnStatus, 'RUNNING'>; message?: string; proposedTaskId?: string }
+  | {
+    seq: number
+    kind: 'done'
+    status: Exclude<TurnStatus, 'RUNNING'>
+    message?: string
+    proposedTaskId?: string
+    workflowProposal?: WorkflowProposal
+  }
 
 export function isProposedTaskId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
+}
+
+export function isWorkflowProposal(value: unknown): value is WorkflowProposal {
+  if (!value || typeof value !== 'object') return false
+  const { action, scope, steps, instruction, checkpoints, status, runId } = value as Partial<WorkflowProposal>
+  if ((action !== 'start' && action !== 'continue')
+    || (status !== 'PROPOSED' && status !== 'CONFIRMED' && status !== 'CANCELLED')
+    || typeof instruction !== 'string' || typeof checkpoints !== 'boolean'
+    || (runId !== undefined && !isProposedTaskId(runId))
+    || !scope || typeof scope.startStep !== 'string' || typeof scope.endStep !== 'string'
+    || !Array.isArray(steps) || !steps.every((step) => step && typeof step.key === 'string' && step.key.length > 0
+      && typeof step.title === 'string')) return false
+  if (new Set(steps.map((step) => step.key)).size !== steps.length) return false
+  const first = steps.findIndex((step) => step.key === scope.startStep)
+  const last = steps.findIndex((step) => step.key === scope.endStep)
+  return first >= 0 && last >= first
 }
 
 function isTurnReference(value: unknown): value is TurnReference {
@@ -84,6 +118,8 @@ function isTurn(value: unknown): value is Turn {
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
     && (turn.mode === undefined || isTurnMode(turn.mode))
     && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
+    && (turn.workflowProposal === undefined || (turn.status === 'COMPLETED' && turn.proposedTaskId === undefined
+      && isWorkflowProposal(turn.workflowProposal)))
 }
 
 function isTurnPage(value: unknown): value is TurnPage {
@@ -110,8 +146,17 @@ export function sendTurn(projectId: string, input: TurnInput, signal: AbortSigna
   })
 }
 
+function turnPath(projectId: string, turnId: string) {
+  if (!isProposedTaskId(turnId)) throw new ProjectApiError('对话链接无效。', 400)
+  return `${turnsPath(projectId)}/${encodeURIComponent(turnId)}`
+}
+
 export async function stopTurn(projectId: string, turnId: string, signal: AbortSignal) {
-  if (!turnId || turnId === '.' || turnId === '..') throw new ProjectApiError('对话链接无效。', 400)
-  return request(`${turnsPath(projectId)}/${encodeURIComponent(turnId)}/stop`, (value): value is Turn =>
+  return request(`${turnPath(projectId, turnId)}/stop`, (value): value is Turn =>
     isTurn(value) && value.turnId === turnId && value.status !== 'RUNNING', { method: 'POST', signal })
+}
+
+export async function changeWorkflowProposal(projectId: string, turnId: string, action: 'confirm' | 'cancel', signal: AbortSignal) {
+  return request(`${turnPath(projectId, turnId)}/workflow-proposal/${action}`, (value): value is WorkflowProposal =>
+    isWorkflowProposal(value) && value.status !== 'PROPOSED', { method: 'POST', signal })
 }

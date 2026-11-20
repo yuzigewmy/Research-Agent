@@ -11,7 +11,7 @@ import (
 )
 
 const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at,
-	references_json, task_results_json, mode, proposed_task_id`
+	references_json, task_results_json, mode, proposed_task_id, workflow_proposal_json`
 
 var (
 	errTurnBusy         = errors.New("project already has a running turn")
@@ -19,29 +19,31 @@ var (
 )
 
 type Turn struct {
-	ordinal        int64
-	TurnID         string           `json:"turnId"`
-	RequestID      string           `json:"requestId"`
-	Text           string           `json:"text"`
-	Answer         string           `json:"answer"`
-	Status         string           `json:"status"`
-	Message        string           `json:"message,omitempty"`
-	AfterSeq       int64            `json:"afterSeq"`
-	CreatedAt      string           `json:"createdAt"`
-	References     []TurnReference  `json:"references,omitempty"`
-	TaskResults    []turnTaskResult `json:"taskResults,omitempty"`
-	Mode           string           `json:"mode"`
-	ProposedTaskID string           `json:"proposedTaskId,omitempty"`
+	ordinal          int64
+	TurnID           string                `json:"turnId"`
+	RequestID        string                `json:"requestId"`
+	Text             string                `json:"text"`
+	Answer           string                `json:"answer"`
+	Status           string                `json:"status"`
+	Message          string                `json:"message,omitempty"`
+	AfterSeq         int64                 `json:"afterSeq"`
+	CreatedAt        string                `json:"createdAt"`
+	References       []TurnReference       `json:"references,omitempty"`
+	TaskResults      []turnTaskResult      `json:"taskResults,omitempty"`
+	Mode             string                `json:"mode"`
+	ProposedTaskID   string                `json:"proposedTaskId,omitempty"`
+	WorkflowProposal *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 }
 
 type TurnEvent struct {
-	Seq                 int64  `json:"seq"`
-	Kind                string `json:"kind"`
-	Text                string `json:"text,omitempty"`
-	Status              string `json:"status,omitempty"`
-	Message             string `json:"message,omitempty"`
-	ProposedTaskID      string `json:"proposedTaskId,omitempty"`
-	proposalInstruction string
+	Seq              int64                 `json:"seq"`
+	Kind             string                `json:"kind"`
+	Text             string                `json:"text,omitempty"`
+	Status           string                `json:"status,omitempty"`
+	Message          string                `json:"message,omitempty"`
+	ProposedTaskID   string                `json:"proposedTaskId,omitempty"`
+	WorkflowProposal *turnWorkflowProposal `json:"workflowProposal,omitempty"`
+	proposal         turnProposal
 }
 
 const turnsSchema = `
@@ -87,15 +89,18 @@ func recoverInterruptedTurns(tx *sql.Tx) error {
 
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var t Turn
-	var references, taskResults []byte
+	var references, taskResults, workflowProposal []byte
 	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message,
-		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID); err != nil {
+		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID, &workflowProposal); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(references, &t.References); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(taskResults, &t.TaskResults); err != nil {
+		return Turn{}, err
+	}
+	if err := json.Unmarshal(workflowProposal, &t.WorkflowProposal); err != nil {
 		return Turn{}, err
 	}
 	return t, nil
@@ -207,21 +212,32 @@ func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent)
 
 func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e TurnEvent) (int64, error) {
 	completed := e.Kind == "done" && e.Status == "COMPLETED"
-	if completed && e.proposalInstruction != "" {
-		taskID, err := insertTurnProposal(ctx, tx, turnID, e.proposalInstruction)
-		if err != nil {
-			return 0, err
+	workflowJSON := "null"
+	if completed {
+		switch {
+		case e.proposal.workflow != nil:
+			body, err := json.Marshal(e.proposal.workflow)
+			if err != nil {
+				return 0, err
+			}
+			workflowJSON = string(body)
+		case e.proposal.instruction != "":
+			taskID, err := insertTurnProposal(ctx, tx, turnID, e.proposal.instruction)
+			if err != nil {
+				return 0, err
+			}
+			e.ProposedTaskID = taskID
 		}
-		e.ProposedTaskID = taskID
 	}
 	var seq int64
-	if err := tx.QueryRowContext(ctx, `INSERT INTO turn_events(turn_id, kind, text, status, message, proposed_task_id)
-		VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`, turnID, e.Kind, e.Text, e.Status, e.Message, e.ProposedTaskID).Scan(&seq); err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO turn_events(turn_id, kind, text, status, message, proposed_task_id, workflow_proposal_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING seq`, turnID, e.Kind, e.Text, e.Status, e.Message, e.ProposedTaskID, workflowJSON).Scan(&seq); err != nil {
 		return 0, err
 	}
 	if err := tx.QueryRowContext(ctx, `UPDATE turns SET answer = answer || ?,
-		status = COALESCE(NULLIF(?, ''), status), message = ?, event_seq = ?, proposed_task_id = ?
-		WHERE turn_id = ? AND status = 'RUNNING' RETURNING event_seq`, e.Text, e.Status, e.Message, seq, e.ProposedTaskID, turnID).Scan(&seq); err != nil {
+		status = COALESCE(NULLIF(?, ''), status), message = ?, event_seq = ?, proposed_task_id = ?, workflow_proposal_json = ?
+		WHERE turn_id = ? AND status = 'RUNNING' RETURNING event_seq`, e.Text, e.Status, e.Message, seq, e.ProposedTaskID,
+		workflowJSON, turnID).Scan(&seq); err != nil {
 		return 0, err
 	}
 	if completed {
@@ -235,7 +251,7 @@ func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e TurnEvent
 const streamBatch = 128
 
 func (s *Store) readTurnEvents(ctx context.Context, turnID string, after int64) ([]TurnEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT seq, kind, text, status, message, proposed_task_id FROM turn_events
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, kind, text, status, message, proposed_task_id, workflow_proposal_json FROM turn_events
 		WHERE turn_id = ? AND seq > ? ORDER BY seq LIMIT ?`, turnID, after, streamBatch)
 	if err != nil {
 		return nil, err
@@ -245,7 +261,11 @@ func (s *Store) readTurnEvents(ctx context.Context, turnID string, after int64) 
 	var items []TurnEvent
 	for rows.Next() {
 		var e TurnEvent
-		if err := rows.Scan(&e.Seq, &e.Kind, &e.Text, &e.Status, &e.Message, &e.ProposedTaskID); err != nil {
+		var proposal []byte
+		if err := rows.Scan(&e.Seq, &e.Kind, &e.Text, &e.Status, &e.Message, &e.ProposedTaskID, &proposal); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(proposal, &e.WorkflowProposal); err != nil {
 			return nil, err
 		}
 		items = append(items, e)

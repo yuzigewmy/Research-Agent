@@ -36,11 +36,19 @@ func (e workflowOutputError) Error() string { return e.err.Error() }
 
 func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, project Project, task Task, input string) (taskResult, error) {
 	projectID := project.ProjectID
-	var key, evidence, options string
+	var key, evidence, options, sourceTurnID string
 	var selectedNumber int
-	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number FROM workflow_runs WHERE run_id = ?`,
-		task.workflowRunID).Scan(&key, &evidence, &options, &selectedNumber); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number,
+		COALESCE(range_source_turn_id, '') FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
+		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID); err != nil {
 		return taskResult{}, err
+	}
+	if sourceTurnID != "" {
+		source, err := s.taskTurnContext(ctx, projectID, sourceTurnID)
+		if err != nil {
+			return taskResult{}, err
+		}
+		input += source
 	}
 	if key == topicWorkflow {
 		return s.generateTopicStep(ctx, model, task, input, evidence, options, selectedNumber)

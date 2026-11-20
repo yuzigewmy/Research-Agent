@@ -42,11 +42,16 @@ func (s *Store) taskTurnContext(ctx context.Context, projectID, turnID string) (
 	if err != nil {
 		return "", err
 	}
+	var workflowInstruction string
+	if turn.WorkflowProposal != nil {
+		workflowInstruction = turn.WorkflowProposal.Instruction
+	}
 	payload, err := json.Marshal(struct {
-		TurnID        string                `json:"turnId"`
-		Request       string                `json:"request"`
-		AnswerExcerpt string                `json:"answerExcerpt"`
-		Materials     []turnMaterialExcerpt `json:"materials,omitempty"`
-	}{turn.TurnID, turn.Text, excerptRunes(turn.Answer, 2000), materials})
+		TurnID              string                `json:"turnId"`
+		Request             string                `json:"request"`
+		AnswerExcerpt       string                `json:"answerExcerpt"`
+		Materials           []turnMaterialExcerpt `json:"materials,omitempty"`
+		WorkflowInstruction string                `json:"workflowInstruction,omitempty"`
+	}{turn.TurnID, turn.Text, excerptRunes(turn.Answer, 2000), materials, workflowInstruction})
 	return "\n\n来源对话及当时引用的材料节选（JSON）\n" + string(payload), err
 }

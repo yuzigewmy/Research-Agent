@@ -1,19 +1,24 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ConversationTasks } from './ConversationTasks'
+import { ConversationWorkflowProposal } from './ConversationWorkflowProposal'
 import { materialDownloadPath } from './materials'
 import { errorMessage, isTurnMode, turnModeLabels } from './projects'
 import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
-import { isProposedTaskId, listTurns, sendTurn, stopTurn, turnsPath } from './turns'
-import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
+import { isProposedTaskId, isWorkflowProposal, listTurns, sendTurn, stopTurn, turnsPath } from './turns'
+import type { Turn, TurnEvent, TurnInput, TurnReference, WorkflowProposal } from './turns'
 
 type StopState = { turnId: string; kind: 'pending' } | { turnId: string; kind: 'error'; message: string }
 
 function latestTurn(current: Turn | undefined, snapshot: Turn) {
   // On a tie, the full snapshot can supply text missing from the local event stream.
-  return current && current.afterSeq > snapshot.afterSeq ? current : snapshot
+  const latest = current && current.afterSeq > snapshot.afterSeq ? current : snapshot
+  // A proposal decision is saved separately from the turn's event sequence.
+  const decided = [current?.workflowProposal, snapshot.workflowProposal]
+    .find((proposal) => proposal && proposal.status !== 'PROPOSED')
+  return decided && latest.workflowProposal?.status === 'PROPOSED' ? { ...latest, workflowProposal: decided } : latest
 }
 
 function mergeTurns(current: Turn[], snapshots: Turn[]) {
@@ -46,10 +51,12 @@ interface ConversationProps {
   defaultTurnMode?: TurnMode
   references: TurnReference[]
   onClearReferences: (ids: string[]) => void
+  onWorkflowConfirmed?: () => void
   taskSync?: TaskPanelSync
 }
 
-export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, onClearReferences, taskSync }: ConversationProps) {
+export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, onClearReferences, onWorkflowConfirmed,
+  taskSync }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
   const submission = useRef<AbortController | null>(null)
@@ -134,9 +141,11 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       setTurns((items) => items.map((turn) => {
         if (turn.turnId !== streamId || turn.status !== 'RUNNING' || event.seq <= turn.afterSeq) return turn
         if (event.kind === 'delta') return { ...turn, answer: turn.answer + event.text, afterSeq: event.seq }
-        const proposedTaskId = event.status === 'COMPLETED' && isProposedTaskId(event.proposedTaskId)
+        const workflowProposal = event.status === 'COMPLETED' && isWorkflowProposal(event.workflowProposal)
+          ? event.workflowProposal : undefined
+        const proposedTaskId = event.status === 'COMPLETED' && !workflowProposal && isProposedTaskId(event.proposedTaskId)
           ? event.proposedTaskId : undefined
-        return { ...turn, status: event.status, message: event.message, afterSeq: event.seq, proposedTaskId }
+        return { ...turn, status: event.status, message: event.message, afterSeq: event.seq, proposedTaskId, workflowProposal }
       }))
       if (event.kind === 'done') {
         source.onerror = null
@@ -230,6 +239,11 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     setDraft(text)
   }
 
+  function updateWorkflowProposal(turnId: string, proposal: WorkflowProposal) {
+    setTurns((items) => items.map((turn) => turn.turnId === turnId ? { ...turn, workflowProposal: proposal } : turn))
+    if (proposal.status === 'CONFIRMED') onWorkflowConfirmed?.()
+  }
+
   function refresh() {
     setError('')
     setLoading(true)
@@ -292,6 +306,10 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
             {turn.status === 'STOPPED'
               ? <p className="turn-status" role="status">{turn.message || '已停止回复。已生成的内容已保留。'}</p>
               : turn.message && <p className="turn-status">{turn.message}</p>}
+            {turn.status === 'COMPLETED' && turn.workflowProposal && (
+              <ConversationWorkflowProposal projectId={projectId} turnId={turn.turnId} proposal={turn.workflowProposal}
+                onChanged={(proposal) => updateWorkflowProposal(turn.turnId, proposal)} />
+            )}
             {turn.status === 'COMPLETED' && <ConversationTasks key={turn.proposedTaskId ?? turn.turnId}
               projectId={projectId} turnId={turn.turnId} text={turn.text}
               proposedTaskId={turn.proposedTaskId} sync={taskSync} />}

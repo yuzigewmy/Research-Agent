@@ -90,27 +90,28 @@ type WorkflowScope struct {
 }
 
 type WorkflowRun struct {
-	RunID            string           `json:"runId"`
-	WorkflowKey      string           `json:"workflowKey"`
-	Revision         int              `json:"revision"`
-	Status           string           `json:"status"`
-	Checkpoints      bool             `json:"checkpoints"`
-	CreatedAt        string           `json:"createdAt"`
-	TargetPaperCount int              `json:"targetPaperCount,omitempty"`
-	SourceCount      int              `json:"sourceCount,omitempty"`
-	Language         string           `json:"language,omitempty"`
-	Scope            WorkflowScope    `json:"scope"`
-	Steps            []WorkflowStep   `json:"steps"`
-	AcceptStepKey    string           `json:"acceptStepKey,omitempty"`
-	SkipStepKey      string           `json:"skipStepKey,omitempty"`
-	TopicChoice      *topicChoice     `json:"topicChoice,omitempty"`
-	Proposal         *proposalTargets `json:"proposal,omitempty"`
-	step             int
-	rangeStart       int
-	rangeEnd         int
-	stepTaskID       string
-	selectedTopic    int
-	optionsJSON      string
+	RunID             string           `json:"runId"`
+	WorkflowKey       string           `json:"workflowKey"`
+	Revision          int              `json:"revision"`
+	Status            string           `json:"status"`
+	Checkpoints       bool             `json:"checkpoints"`
+	CreatedAt         string           `json:"createdAt"`
+	TargetPaperCount  int              `json:"targetPaperCount,omitempty"`
+	SourceCount       int              `json:"sourceCount,omitempty"`
+	Language          string           `json:"language,omitempty"`
+	Scope             WorkflowScope    `json:"scope"`
+	Steps             []WorkflowStep   `json:"steps"`
+	AcceptStepKey     string           `json:"acceptStepKey,omitempty"`
+	SkipStepKey       string           `json:"skipStepKey,omitempty"`
+	TopicChoice       *topicChoice     `json:"topicChoice,omitempty"`
+	Proposal          *proposalTargets `json:"proposal,omitempty"`
+	step              int
+	rangeStart        int
+	rangeEnd          int
+	stepTaskID        string
+	selectedTopic     int
+	optionsJSON       string
+	rangeSourceTurnID string
 }
 
 type WorkflowStep struct {
@@ -136,6 +137,8 @@ type workflowRequest struct {
 	Paper            *paperOptions    `json:"paper"`
 	Topic            *topicOptions    `json:"topic"`
 	Proposal         *proposalOptions `json:"proposal"`
+	sourceTurnID     string
+	workflowKey      string
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -152,11 +155,12 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	var skipReason string
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
-		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json
+		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json, COALESCE(w.range_source_turn_id, '')
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step,
-			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic, &run.optionsJSON)
+			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic,
+			&run.optionsJSON, &run.rangeSourceTurnID)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -241,7 +245,14 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		return WorkflowRun{}, false, err
 	}
 	defer tx.Rollback()
+	run, applied, err := applyWorkflowInTx(ctx, tx, projectID, action, req, modelReady)
+	if err != nil || !applied {
+		return run, false, err
+	}
+	return run, true, tx.Commit()
+}
 
+func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string, req workflowRequest, modelReady bool) (WorkflowRun, bool, error) {
 	var template string
 	if err := tx.QueryRowContext(ctx, `SELECT template_id FROM projects WHERE project_id = ?`, projectID).Scan(&template); err != nil {
 		return WorkflowRun{}, false, err
@@ -290,6 +301,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 		}
 		key = current.WorkflowKey
 	}
+	if req.workflowKey != "" && req.workflowKey != key {
+		return WorkflowRun{}, false, errWorkflowProposalStale
+	}
 	end, err := workflowEndIndex(workflowStages[key], req.ThroughStep)
 	if err != nil {
 		return WorkflowRun{}, false, err
@@ -332,6 +346,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			}
 		}
 		current.step, current.rangeStart, current.rangeEnd = step, step, step
+		current.rangeSourceTurnID = ""
 	case workflowSelectTopic:
 		if current.Status != workflowWaitingTopic || current.TopicChoice == nil {
 			return WorkflowRun{}, false, errWorkflowState
@@ -352,6 +367,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 				return WorkflowRun{}, false, errWorkflowRange
 			}
 			current.rangeStart, current.rangeEnd = current.step, end
+			current.rangeSourceTurnID = req.sourceTurnID
 		case workflowWaiting, workflowPaused, taskFailed, taskInterrupted:
 			if req.ThroughStep != "" {
 				return WorkflowRun{}, false, errWorkflowRange
@@ -386,9 +402,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			evidence = string(snapshot)
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs
-			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json, range_end)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)`, current.RunID, projectID, req.Checkpoints,
-			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd)
+			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json, range_end, range_source_turn_id)
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`, current.RunID, projectID, req.Checkpoints,
+			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID)
 	case workflowPause, workflowCancel:
 		runStatus := taskCancelled
 		if action == workflowPause {
@@ -424,8 +440,9 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 			status = workflowRangeCompleted
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET status = ?, revision = revision + 1,
-			step_no = ?, range_start = ?, range_end = ?, skipped_request_id = NULL, selected_topic_number = ? WHERE run_id = ?`,
-			status, current.step, current.rangeStart, current.rangeEnd, current.selectedTopic, current.RunID)
+			step_no = ?, range_start = ?, range_end = ?, skipped_request_id = NULL, selected_topic_number = ?,
+			range_source_turn_id = NULLIF(?, '') WHERE run_id = ?`,
+			status, current.step, current.rangeStart, current.rangeEnd, current.selectedTopic, current.rangeSourceTurnID, current.RunID)
 	}
 	if err != nil {
 		return WorkflowRun{}, false, err
@@ -445,7 +462,7 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	return run, true, tx.Commit()
+	return run, true, nil
 }
 
 func rerunnableStep(steps []WorkflowStep, key string) (int, error) {

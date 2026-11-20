@@ -33,6 +33,9 @@ func (c conversation) register(mux *http.ServeMux) {
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
 	mux.HandleFunc(path+"/{turnId}/stream", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{turnId}/stop", methodNotAllowed("POST"))
+	proposal := path + "/{turnId}/workflow-proposal"
+	mux.HandleFunc("POST "+proposal+"/confirm", c.changeWorkflowProposal(true))
+	mux.HandleFunc("POST "+proposal+"/cancel", c.changeWorkflowProposal(false))
 }
 
 func (c conversation) send(w http.ResponseWriter, r *http.Request) {
@@ -74,8 +77,8 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
-	instruction, generateErr := c.generate(ctx, project, turn)
-	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposalInstruction: instruction}
+	proposal, generateErr := c.generate(ctx, project, turn)
+	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposal: proposal}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		event.Status = "INTERRUPTED"
 		event.Message = "服务关闭中断了此轮回复。可以重新发送。"
@@ -103,19 +106,27 @@ func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
 	}
 }
 
-func (c conversation) generate(ctx context.Context, project Project, turn Turn) (string, error) {
+func (c conversation) generate(ctx context.Context, project Project, turn Turn) (turnProposal, error) {
 	previous, err := c.store.listTurns(ctx, project.ProjectID, turn.ordinal, 6)
 	if err != nil {
-		return "", err
+		return turnProposal{}, err
+	}
+	var workflow *workflowProposalRecord
+	if turn.Mode == turnModeConfirm {
+		workflow, err = c.store.workflowProposalOptions(ctx, project)
+		if err != nil {
+			return turnProposal{}, err
+		}
 	}
 	projectData, err := json.Marshal(struct {
-		Title        string `json:"title"`
-		Template     string `json:"template"`
-		Goal         string `json:"goal,omitempty"`
-		Deliverables string `json:"deliverables,omitempty"`
-	}{project.Title, project.TemplateID, project.Goal, project.Deliverables})
+		Title        string                   `json:"title"`
+		Template     string                   `json:"template"`
+		Goal         string                   `json:"goal,omitempty"`
+		Deliverables string                   `json:"deliverables,omitempty"`
+		Workflow     []workflowStepDefinition `json:"runnableWorkflowSteps,omitempty"`
+	}{project.Title, project.TemplateID, project.Goal, project.Deliverables, workflow.runnableSteps()})
 	if err != nil {
-		return "", err
+		return turnProposal{}, err
 	}
 	messages := []inference.Message{{Role: "system", Content: strings.TrimSpace(conversationPrompt)},
 		{Role: "user", Content: "以下 JSON 是当前项目资料。\n" + string(projectData)}}
@@ -127,13 +138,13 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	if len(turn.TaskResults) != 0 {
 		results, err := c.store.turnTaskResultsContext(ctx, project.ProjectID, turn.TaskResults)
 		if err != nil {
-			return "", err
+			return turnProposal{}, err
 		}
 		messages = append(messages, inference.Message{Role: "user", Content: results})
 	}
 	input, err := c.store.turnInput(ctx, turn)
 	if err != nil {
-		return "", err
+		return turnProposal{}, err
 	}
 	messages = append(messages, inference.Message{Role: "user", Content: input})
 	var bytesWritten int
@@ -146,29 +157,37 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	}
 	var arguments json.RawMessage
 	if turn.Mode == turnModeConfirm {
-		arguments, err = c.model.StreamWithTool(ctx, messages, researchTaskTool, emit)
-	} else {
-		err = c.model.Stream(ctx, messages, emit)
-	}
-	if err != nil {
-		return "", err
+		tool, err := proposalTool(workflow)
+		if err != nil {
+			return turnProposal{}, err
+		}
+		arguments, err = c.model.StreamWithTool(ctx, messages, tool, emit)
+		if err != nil {
+			return turnProposal{}, err
+		}
+	} else if err := c.model.Stream(ctx, messages, emit); err != nil {
+		return turnProposal{}, err
 	}
 	if len(arguments) == 0 {
 		if bytesWritten == 0 {
-			return "", errors.New("model returned no text or task proposal")
+			return turnProposal{}, errors.New("model returned no text or task proposal")
 		}
-		return "", nil
+		return turnProposal{}, nil
 	}
-	instruction, err := researchTaskInstruction(arguments)
+	proposal, err := parseTurnProposal(arguments, workflow)
 	if err != nil {
-		return "", err
+		return turnProposal{}, err
 	}
 	if bytesWritten == 0 {
-		if err := emit("请核对助手建议的研究任务。"); err != nil {
-			return "", err
+		message := "请核对助手建议的研究任务。"
+		if proposal.workflow != nil {
+			message = "请核对助手建议的工作流范围。"
+		}
+		if err := emit(message); err != nil {
+			return turnProposal{}, err
 		}
 	}
-	return instruction, nil
+	return proposal, nil
 }
 
 func (c conversation) list(w http.ResponseWriter, r *http.Request) {

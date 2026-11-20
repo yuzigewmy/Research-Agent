@@ -164,10 +164,11 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
   </div>
 }
 
-export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
+export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0 }: {
   projectId: string
   templateId: Exclude<TemplateId, 'freeform'>
   onManuscriptSaved: (path: string) => void
+  refreshVersion?: number
 }) {
   const isReview = templateId === 'literature_review'
   const isPaper = templateId === 'paper'
@@ -300,12 +301,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
       }
     }
 
+    setRefreshing(true)
     void read()
     return () => {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [projectId, reload])
+  }, [projectId, reload, refreshVersion])
 
   useEffect(() => () => submission.current?.abort(), [])
 
