@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
-	"unicode/utf8"
 )
 
 const selectionEditSchema = `
@@ -94,8 +93,7 @@ func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc Wo
 
 func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, finding reviewFindingRef, modelReady bool) (selectionEdit, bool, error) {
 	start, end := req.StartByte, req.EndByte
-	if start < 0 || end <= start || end > len(doc.Content) || end-start > maxSelectionBytes ||
-		!utf8.RuneStart(doc.Content[start]) || (end < len(doc.Content) && !utf8.RuneStart(doc.Content[end])) {
+	if !validSelectionRange(doc.Content, start, end) {
 		return selectionEdit{}, false, errSelectionRange
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

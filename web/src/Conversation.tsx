@@ -7,8 +7,11 @@ import { errorMessage, isTurnMode, turnModeLabels } from './projects'
 import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
-import { isPdfQuotes, isProposedTaskId, isWorkflowProposal, listTurns, sendTurn, stopTurn, turnsPath } from './turns'
-import type { PdfQuote, Turn, TurnEvent, TurnInput, TurnReference, WorkflowProposal } from './turns'
+import {
+  isManuscriptSelectionInput, isPdfQuotes, isProposedTaskId, isWorkflowProposal, listTurns, manuscriptSelectionInput,
+  sameManuscriptSelection, sendTurn, stopTurn, turnsPath,
+} from './turns'
+import type { ManuscriptSelection, ManuscriptSelectionInput, PdfQuote, Turn, TurnEvent, TurnInput, TurnReference, WorkflowProposal } from './turns'
 
 type StopState = { turnId: string; kind: 'pending' } | { turnId: string; kind: 'error'; message: string }
 
@@ -36,9 +39,11 @@ function readAttempt(key: string): TurnInput | null {
       || (input.mode !== undefined && !isTurnMode(input.mode))
       || (input.referenceIds !== undefined && (!Array.isArray(input.referenceIds)
         || !input.referenceIds.every((id) => typeof id === 'string')))
-      || (input.pdfQuotes !== undefined && !isPdfQuotes(input.pdfQuotes, input.referenceIds))) return null
+      || (input.pdfQuotes !== undefined && !isPdfQuotes(input.pdfQuotes, input.referenceIds))
+      || (input.manuscriptSelection !== undefined && !isManuscriptSelectionInput(input.manuscriptSelection))) return null
     return { requestId: input.requestId, text: input.text, referenceIds: input.referenceIds,
-      pdfQuotes: input.pdfQuotes, mode: input.mode ?? 'CHAT' }
+      pdfQuotes: input.pdfQuotes, mode: input.mode ?? 'CHAT', manuscriptSelection: input.manuscriptSelection
+        ? manuscriptSelectionInput(input.manuscriptSelection) : undefined }
   } catch {
     return null
   }
@@ -62,17 +67,34 @@ function PdfReferenceDetails({ page, quote }: { page?: number; quote?: string })
   </>
 }
 
+function ManuscriptQuote({ selection, onRemove }: { selection: ManuscriptSelection; onRemove?: () => void }) {
+  const { path, versionId, sha256, text } = selection
+  return <ul aria-label={onRemove ? '已选稿件选区' : '随消息发送的稿件选区'}>
+    <li>
+      <bdi>{path}</bdi>
+      <span className="turn-status">版本 <bdi>{versionId}</bdi> · SHA-256 <code title={sha256}>{sha256.slice(0, 12)}</code></span>
+      {onRemove && <button className="button outline" type="button" aria-label="移除稿件选区" onClick={onRemove}>移除</button>}
+      <details className="turn-quote">
+        <summary>查看稿件选区</summary>
+        <blockquote className="turn-content" dir="auto">{text}</blockquote>
+      </details>
+    </li>
+  </ul>
+}
+
 interface ConversationProps {
   projectId: string
   defaultTurnMode?: TurnMode
   references: TurnReference[]
   onClearReferences: (matches: (reference: TurnReference) => boolean) => void
+  manuscriptSelection?: ManuscriptSelection
+  onClearManuscriptSelection: (expected: ManuscriptSelectionInput) => void
   onWorkflowConfirmed?: () => void
   taskSync?: TaskPanelSync
 }
 
-export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, onClearReferences, onWorkflowConfirmed,
-  taskSync }: ConversationProps) {
+export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, onClearReferences, manuscriptSelection,
+  onClearManuscriptSelection, onWorkflowConfirmed, taskSync }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
   const submission = useRef<AbortController | null>(null)
@@ -95,7 +117,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const streamId = loading ? undefined : runningTurn?.turnId
   const matchingAttempt = attempt && attempt.text === draft && (attempt.referenceIds?.length ?? 0) === references.length
     && references.every((ref, index) => attempt.referenceIds?.[index] === ref.materialId && matchesSentReference(attempt, ref))
-    ? attempt : null
+    && sameManuscriptSelection(attempt.manuscriptSelection, manuscriptSelection) ? attempt : null
   const retryMode = matchingAttempt ? matchingAttempt.mode ?? 'CHAT' : undefined
   const inheritedMode = retryMode ?? defaultTurnMode
   const mode = modeOverride ?? inheritedMode
@@ -107,10 +129,12 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     setDraft((current) => current === input.text ? '' : current)
     setModeOverride(undefined)
     if (input.referenceIds?.length) onClearReferences((reference) => matchesSentReference(input, reference))
+    if (input.manuscriptSelection) onClearManuscriptSelection(input.manuscriptSelection)
   }
 
   const reconcileAttempt = useEffectEvent((items: Turn[]) => {
-    if (attempt && items.some((turn) => turn.requestId === attempt.requestId)) finishAttempt(attempt)
+    if (attempt && items.some((turn) => turn.requestId === attempt.requestId
+      && sameManuscriptSelection(turn.manuscriptSelection, attempt.manuscriptSelection))) finishAttempt(attempt)
   })
 
   useEffect(() => {
@@ -193,6 +217,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       requestId: crypto.randomUUID(), text: draft, mode,
       referenceIds: references.length ? references.map(({ materialId }) => materialId) : undefined,
       pdfQuotes: Object.keys(pdfQuotes).length ? pdfQuotes : undefined,
+      manuscriptSelection: manuscriptSelection ? manuscriptSelectionInput(manuscriptSelection) : undefined,
     }
     setAttempt(input)
     sessionStorage.setItem(attemptKey, JSON.stringify(input))
@@ -277,7 +302,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">
-      <h4 id="conversation-title">项目对话</h4>
+      <h4 id="conversation-title" tabIndex={-1}>项目对话</h4>
       {loading && <p role="status">正在读取会话…</p>}
       {cursor && <button className="button outline" type="button" disabled={loadingEarlier} onClick={() => void earlier()}>
         {loadingEarlier ? '正在读取…' : '更早的对话'}
@@ -297,6 +322,10 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
                   <PdfReferenceDetails page={page} quote={quote} />
                 </li>)}
               </ul>
+            </div>}
+            {turn.manuscriptSelection && <div className="turn-references">
+              <p className="turn-status">随消息发送的稿件选区</p>
+              <ManuscriptQuote selection={turn.manuscriptSelection} />
             </div>}
             {!!turn.taskResults?.length && <div className="turn-references">
               <p className="turn-status">本轮参考的任务成果</p>
@@ -355,6 +384,11 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
             <PdfReferenceDetails page={page} quote={quote} />
           </li>)}
         </ul>
+      </div>}
+      {manuscriptSelection && <div className="turn-references draft-references" aria-labelledby="draft-manuscript-title">
+        <p id="draft-manuscript-title">已选稿件选区</p>
+        <p className="turn-status">发送消息时，所选稿件文字会发送给研究模型。</p>
+        <ManuscriptQuote selection={manuscriptSelection} onRemove={() => onClearManuscriptSelection(manuscriptSelection)} />
       </div>}
       {configured && (
         <form className="create-form" onSubmit={send} aria-busy={sending}>

@@ -1,16 +1,22 @@
 import type { Material } from './materials'
 import { isTurnMode, ProjectApiError, request } from './projects'
 import type { TurnMode } from './projects'
+import type { SelectionEditRange } from './SelectionEdit'
+import type { FileRecord } from './workspace'
 
 export type { TurnMode } from './projects'
 
 const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED', 'STOPPED'] as const
 export const turnReferenceLimit = 4
 export const pdfQuoteByteLimit = 8 * 1024
+export const manuscriptSelectionByteLimit = 8 * 1024
 const turnTaskResultLimit = 4
+const utf8 = new TextEncoder()
 export type TurnStatus = typeof statuses[number]
 export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'> & { page?: number; quote?: string }
 export type PdfQuote = { sha256: string; page: number; text: string }
+export type ManuscriptSelectionInput = Pick<FileRecord, 'versionId'> & Pick<SelectionEditRange, 'startByte' | 'endByte'>
+export type ManuscriptSelection = ManuscriptSelectionInput & Pick<FileRecord, 'path' | 'sha256'> & Pick<SelectionEditRange, 'text'>
 
 interface TurnTaskResult {
   taskId: string
@@ -23,6 +29,7 @@ export interface TurnInput {
   text: string
   referenceIds?: string[]
   pdfQuotes?: Record<string, PdfQuote>
+  manuscriptSelection?: ManuscriptSelectionInput
   mode?: TurnMode
 }
 
@@ -38,6 +45,7 @@ export interface WorkflowProposal {
 
 export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode'> {
   references?: TurnReference[]
+  manuscriptSelection?: ManuscriptSelection
   taskResults?: TurnTaskResult[]
   proposedTaskId?: string
   workflowProposal?: WorkflowProposal
@@ -86,6 +94,32 @@ export function isWorkflowProposal(value: unknown): value is WorkflowProposal {
   return first >= 0 && last >= first
 }
 
+export function isManuscriptSelectionInput(value: unknown): value is ManuscriptSelectionInput {
+  const selection = value as Partial<ManuscriptSelectionInput> | null
+  if (!selection || !isProposedTaskId(selection.versionId) || typeof selection.startByte !== 'number'
+    || typeof selection.endByte !== 'number' || !Number.isSafeInteger(selection.startByte)
+    || !Number.isSafeInteger(selection.endByte) || selection.startByte < 0) return false
+  const length = selection.endByte - selection.startByte
+  return length > 0 && length <= manuscriptSelectionByteLimit
+}
+
+export function isManuscriptSelection(value: unknown): value is ManuscriptSelection {
+  if (!isManuscriptSelectionInput(value)) return false
+  const { path, sha256, text } = value as Partial<ManuscriptSelection>
+  return typeof path === 'string' && /\.(md|markdown)$/i.test(path)
+    && typeof sha256 === 'string' && /^[a-f\d]{64}$/i.test(sha256)
+    && typeof text === 'string' && /[^\p{White_Space}]/u.test(text) && !text.includes('\0')
+    && utf8.encode(text).length === value.endByte - value.startByte
+}
+
+export function manuscriptSelectionInput({ versionId, startByte, endByte }: ManuscriptSelectionInput): ManuscriptSelectionInput {
+  return { versionId, startByte, endByte }
+}
+
+export function sameManuscriptSelection(left?: ManuscriptSelectionInput, right?: ManuscriptSelectionInput) {
+  return left?.versionId === right?.versionId && left?.startByte === right?.startByte && left?.endByte === right?.endByte
+}
+
 function isPdfExcerpt(page: unknown, text: unknown) {
   return typeof page === 'number' && Number.isInteger(page) && page > 0 && page <= 0x7fff_ffff
     && typeof text === 'string' && !!text.trim() && !text.includes('\0')
@@ -131,6 +165,7 @@ function isTurn(value: unknown): value is Turn {
     && turn.status !== undefined && statuses.includes(turn.status)
     && typeof turn.afterSeq === 'number' && typeof turn.createdAt === 'string'
     && (turn.references === undefined || isTurnReferences(turn.references))
+    && (turn.manuscriptSelection === undefined || isManuscriptSelection(turn.manuscriptSelection))
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
     && (turn.mode === undefined || isTurnMode(turn.mode))
     && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
@@ -154,10 +189,12 @@ export function listTurns(projectId: string, signal: AbortSignal, before?: strin
 }
 
 export function sendTurn(projectId: string, input: TurnInput, signal: AbortSignal) {
-  return request(turnsPath(projectId), isTurn, {
+  return request(turnsPath(projectId), (value): value is Turn => isTurn(value)
+    && value.requestId === input.requestId && sameManuscriptSelection(value.manuscriptSelection, input.manuscriptSelection), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, manuscriptSelection: input.manuscriptSelection
+      ? manuscriptSelectionInput(input.manuscriptSelection) : undefined }),
     signal,
   })
 }

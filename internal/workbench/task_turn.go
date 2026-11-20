@@ -52,6 +52,7 @@ func (s *Store) taskTurnContext(ctx context.Context, projectID, turnID string) (
 		AnswerExcerpt       string                `json:"answerExcerpt"`
 		Materials           []turnMaterialExcerpt `json:"materials,omitempty"`
 		WorkflowInstruction string                `json:"workflowInstruction,omitempty"`
-	}{turn.TurnID, turn.Text, excerptRunes(turn.Answer, 2000), materials, workflowInstruction})
+		ManuscriptSelection *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
+	}{turn.TurnID, turn.Text, excerptRunes(turn.Answer, 2000), materials, workflowInstruction, turn.ManuscriptSelection})
 	return "\n\n来源对话及当时引用的材料节选（JSON）\n" + string(payload), err
 }

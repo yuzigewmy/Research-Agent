@@ -5,6 +5,8 @@ import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
 import { errorMessage, ProjectApiError } from './projects'
+import { isManuscriptSelection, manuscriptSelectionByteLimit, sameManuscriptSelection } from './turns'
+import type { ManuscriptSelection } from './turns'
 import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText } from './workspace'
 import type { Document, FilePage } from './workspace'
 import './workspace.css'
@@ -183,13 +185,19 @@ const progress: Record<Operation, string> = {
   save: '正在保存…', reload: '正在重新加载…', restore: '正在恢复版本…',
 }
 
-type WorkspaceProps = { projectId: string; publishedPaths: string[]; manuscriptIntake?: boolean }
+type WorkspaceProps = {
+  projectId: string
+  publishedPaths: string[]
+  manuscriptIntake?: boolean
+  manuscriptSelection?: ManuscriptSelection
+  onManuscriptSelection: (selection: ManuscriptSelection) => void
+}
 
 export function WorkspacePanel(props: WorkspaceProps) {
   return <ProjectWorkspace key={props.projectId} {...props} />
 }
 
-function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake }: WorkspaceProps) {
+function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscriptSelection, onManuscriptSelection }: WorkspaceProps) {
   const id = useId()
   const load = useCallback((signal: AbortSignal, cursor?: string) => listFiles(projectId, signal, cursor), [projectId])
   const page = useFilePage(load, 'path')
@@ -214,6 +222,12 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake }: Works
   const currentPath = document?.path
   const dirty = document !== undefined && draft !== document.content
   const locked = !!busy || applying
+  const isMarkdown = document !== undefined && markdownExtension.test(document.path)
+  const quoteCandidate = document && isMarkdown && !dirty && selection
+    ? { ...selection, path: document.path, versionId: document.versionId, sha256: document.sha256 }
+    : undefined
+  const selectedQuote = isManuscriptSelection(quoteCandidate) ? quoteCandidate : undefined
+  const alreadyQuoted = !!selectedQuote && sameManuscriptSelection(selectedQuote, manuscriptSelection)
   const paths = [...new Set([...publishedPaths, ...createdPaths, ...page.items.map(({ path }) => path)])]
   const restoreBlocked = conflict ? '请先重新加载当前文件。'
     : dirty ? '请先保存草稿或放弃修改。'
@@ -434,8 +448,17 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake }: Works
         </button>
         <button className="button outline" type="button" aria-expanded={history} aria-controls={`${id}-history`}
           disabled={applying} onClick={() => setHistory((value) => !value)}>版本历史</button>
+        {isMarkdown && <button className="button outline" type="button" aria-describedby={`${id}-quote-hint`}
+          aria-disabled={alreadyQuoted || undefined} disabled={locked || !selectedQuote} onClick={() => {
+            if (!locked && selectedQuote && !alreadyQuoted) onManuscriptSelection(selectedQuote)
+          }}>引用稿件选区</button>}
       </div>
-      {document.content.trim() && markdownExtension.test(document.path) && <>
+      {isMarkdown && <p className="workspace-note" id={`${id}-quote-hint`} role="status">
+        {alreadyQuoted ? <>已将选区加入<a href="#conversation-title">项目对话</a>。</>
+          : dirty ? '请保存稿件后选取要引用的文字。'
+            : `选取非空白文字，最多 ${manuscriptSelectionByteLimit} 个 UTF-8 字节。`}
+      </p>}
+      {isMarkdown && document.content.trim() && <>
         <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
           disabled={locked || dirty || conflict} onApplying={setApplying} onApplied={loadDocument} />
         <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />

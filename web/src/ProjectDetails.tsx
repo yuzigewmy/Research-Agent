@@ -13,8 +13,8 @@ import { WorkspacePanel } from './WorkspacePanel'
 import type { Material } from './materials'
 import { errorMessage, getProject, ProjectApiError, templates } from './projects'
 import type { Project } from './projects'
-import { isTurnReferences, turnReferenceLimit } from './turns'
-import type { TurnReference } from './turns'
+import { isManuscriptSelection, isTurnReferences, sameManuscriptSelection, turnReferenceLimit } from './turns'
+import type { ManuscriptSelection, ManuscriptSelectionInput, TurnReference } from './turns'
 
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' })
 const dateTimeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
@@ -52,11 +52,22 @@ function readReferences(key: string): TurnReference[] {
   }
 }
 
+function readManuscriptSelection(key: string): ManuscriptSelection | undefined {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? 'null')
+    return isManuscriptSelection(saved) ? saved : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function ProjectDetails({ projectId, onUpdated }: { projectId: string; onUpdated: (project: Project) => void }) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
   const [retry, setRetry] = useState(0)
   const referenceKey = `research.references.${projectId}`
+  const manuscriptKey = `research.manuscript-selection.${projectId}`
   const [references, setReferences] = useState(() => readReferences(referenceKey))
+  const [manuscriptSelection, setManuscriptSelection] = useState(() => readManuscriptSelection(manuscriptKey))
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
   const [workflowRefresh, setWorkflowRefresh] = useState(0)
   const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
@@ -76,6 +87,19 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
     if (references.length) sessionStorage.setItem(referenceKey, JSON.stringify(references))
     else sessionStorage.removeItem(referenceKey)
   }, [referenceKey, references])
+
+  useEffect(() => {
+    try {
+      if (manuscriptSelection) sessionStorage.setItem(manuscriptKey, JSON.stringify(manuscriptSelection))
+      else sessionStorage.removeItem(manuscriptKey)
+    } catch {
+      // The current selection remains available when session storage is restricted.
+    }
+  }, [manuscriptKey, manuscriptSelection])
+
+  const clearManuscriptSelection = useCallback((expected: ManuscriptSelectionInput) => {
+    setManuscriptSelection((current) => sameManuscriptSelection(current, expected) ? undefined : current)
+  }, [])
 
   const clearReferences = useCallback((matches: (reference: TurnReference) => boolean) => {
     setReferences((current) => current.filter((reference) => !matches(reference)))
@@ -152,11 +176,12 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
           onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
       <TaskPanel projectId={project.projectId} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
-        manuscriptIntake={project.templateId === 'automatic_review'} />
+        manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelection={manuscriptSelection}
+        onManuscriptSelection={setManuscriptSelection} />
       <DiagramPanel projectId={project.projectId} />
       <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
-        onClearReferences={clearReferences} onWorkflowConfirmed={refreshWorkflow}
-        taskSync={taskSync} />
+        onClearReferences={clearReferences} manuscriptSelection={manuscriptSelection}
+        onClearManuscriptSelection={clearManuscriptSelection} onWorkflowConfirmed={refreshWorkflow} taskSync={taskSync} />
     </div>
   )
 }
