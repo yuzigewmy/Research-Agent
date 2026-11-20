@@ -257,7 +257,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if err := tx.QueryRowContext(ctx, `SELECT template_id FROM projects WHERE project_id = ?`, projectID).Scan(&template); err != nil {
 		return WorkflowRun{}, false, err
 	}
-	key := projectWorkflows[template]
+	key := projectWorkflowKey(template)
 	if key == "" {
 		return WorkflowRun{}, false, errWorkflowState
 	}

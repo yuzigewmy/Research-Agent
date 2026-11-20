@@ -101,11 +101,3 @@ var workflowStages = map[string][]workflowStage{
 	},
 	proposalWorkflow: sectionedProposalStages(),
 }
-
-var projectWorkflows = map[string]string{
-	"experiment":        experimentWorkflow,
-	"literature_review": reviewWorkflow,
-	"paper":             paperWorkflow,
-	"topic":             topicWorkflow,
-	"proposal":          proposalWorkflow,
-}

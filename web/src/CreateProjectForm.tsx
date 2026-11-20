@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { createProject, errorMessage, isTemplateId, templates } from './projects'
+import { ProjectTemplatePicker } from './ProjectTemplatePicker'
+import { createProject, errorMessage } from './projects'
 import type { CreateProject, Project, TemplateId } from './projects'
+import type { ProjectTemplate } from './projectTemplates'
 
 const titleLimit = 200
 
@@ -11,9 +13,13 @@ function newRequestId() {
   ).join('')
 }
 
-export function CreateProjectForm({ onCreated }: { onCreated: (project: Project) => void }) {
+export function CreateProjectForm({ templateItems, onCreated }: {
+  templateItems: ProjectTemplate[]
+  onCreated: (project: Project) => void
+}) {
   const [title, setTitle] = useState('')
-  const [template, setTemplate] = useState<TemplateId>('freeform')
+  const [preferredTemplate, setTemplate] = useState<TemplateId>('freeform')
+  const template = (templateItems.find((item) => item.id === preferredTemplate) ?? templateItems[0])?.id
   const [pending, setPending] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [submitError, setSubmitError] = useState('')
@@ -23,7 +29,7 @@ export function CreateProjectForm({ onCreated }: { onCreated: (project: Project)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (saving.current) return
+    if (saving.current || !template) return
 
     const trimmed = title.trim()
     const length = Array.from(trimmed).length
@@ -79,24 +85,14 @@ export function CreateProjectForm({ onCreated }: { onCreated: (project: Project)
         />
         {titleError && <p className="form-error" id="project-title-error" role="alert">{titleError}</p>}
       </div>
-      <div className="field">
-        <label htmlFor="project-template">项目模板</label>
-        <select
-          id="project-template"
-          name="templateId"
-          value={template}
-          disabled={pending}
-          onChange={(event) => {
-            if (isTemplateId(event.currentTarget.value)) setTemplate(event.currentTarget.value)
-            setSubmitError('')
-          }}
-        >
-          {Object.entries(templates).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-        </select>
-      </div>
+      <ProjectTemplatePicker id="project-template" items={templateItems} value={template} disabled={pending}
+        onChange={(next) => {
+          setTemplate(next)
+          setSubmitError('')
+        }} />
       {submitError && <p className="form-error" role="alert">{submitError}</p>}
       <div className="form-actions">
-        <button type="submit" className="button primary" aria-disabled={pending}>
+        <button type="submit" className="button primary" disabled={!template} aria-disabled={pending || !template}>
           {pending ? '正在创建…' : '创建项目'}
         </button>
       </div>

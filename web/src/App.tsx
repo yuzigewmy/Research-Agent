@@ -4,7 +4,12 @@ import { CreateProjectForm } from './CreateProjectForm'
 import { ProjectDetails } from './ProjectDetails'
 import { ProjectDraftPanel } from './ProjectDraftPanel'
 import { ProjectList, useProjectList } from './ProjectList'
+import { listProjectTemplates } from './projectTemplates'
+import type { ProjectTemplate } from './projectTemplates'
+import { errorMessage } from './projects'
 import type { Project } from './projects'
+
+type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
 function selectedFromUrl() {
   return new URLSearchParams(window.location.search).get('project')
@@ -20,9 +25,25 @@ function projectUrl(projectId: string | null) {
 
 export function App() {
   const [selectedId, setSelectedId] = useState(selectedFromUrl)
+  const [catalog, setCatalog] = useState<Catalog>({ kind: 'loading' })
   const list = useProjectList()
   const heading = useRef<HTMLHeadingElement>(null)
   const focusOnNavigate = useRef(false)
+  const creating = selectedId === null
+  const catalogLoading = catalog.kind === 'loading'
+  const templateItems = catalog.kind === 'ready' ? catalog.items : []
+
+  useEffect(() => {
+    if (!creating || !catalogLoading) return
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+    void listProjectTemplates(signal).then(({ items }) => {
+      if (!controller.signal.aborted) setCatalog({ kind: 'ready', items })
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted) setCatalog({ kind: 'error', message: errorMessage(cause) })
+    })
+    return () => controller.abort()
+  }, [creating, catalogLoading])
 
   useEffect(() => {
     function syncSelection() {
@@ -76,9 +97,14 @@ export function App() {
               </a>
             )}
           </header>
-          <div hidden={selectedId !== null}>
-            <CreateProjectForm onCreated={handleCreated} />
-            <ProjectDraftPanel onCreated={handleCreated} />
+          <div hidden={!creating}>
+            {catalog.kind === 'loading' && <p className="workspace-note" role="status">正在读取模板目录…</p>}
+            {catalog.kind === 'error' && <div className="request-error">
+              <p role="alert">读取模板目录失败。{catalog.message}</p>
+              <button className="button outline" type="button" onClick={() => setCatalog({ kind: 'loading' })}>重试读取模板</button>
+            </div>}
+            <CreateProjectForm templateItems={templateItems} onCreated={handleCreated} />
+            <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
           </div>
           {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} onUpdated={list.refresh} />}
         </section>

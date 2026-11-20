@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ProjectDraftMaterials } from './ProjectDraftMaterials'
+import { ProjectTemplatePicker } from './ProjectTemplatePicker'
+import type { ProjectTemplate } from './projectTemplates'
 import {
   createProjectDraft, finalizeProjectDraft, getProjectDraft, listProjectDrafts, planProjectDraft, saveProjectDraft,
   uploadDraftMaterial,
 } from './projectDrafts'
 import type { DraftRevision, ProjectDraft, ProjectDraftFields } from './projectDrafts'
-import { errorMessage, isTemplateId, ProjectApiError, templates } from './projects'
+import { errorMessage, ProjectApiError } from './projects'
 import type { Project } from './projects'
 
 const encoder = new TextEncoder()
@@ -17,7 +19,7 @@ const textFields = [
 
 type Operation = 'create' | 'read' | 'save' | 'plan' | 'finalize'
 type DraftEdit = { draft: ProjectDraft; fields: ProjectDraftFields }
-type Props = { onCreated: (project: Project) => void }
+type Props = { templateItems: ProjectTemplate[]; onCreated: (project: Project) => void }
 
 function requestSignal(controller: AbortController, timeout = 10_000) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)])
@@ -36,17 +38,17 @@ function mergeDrafts(current: ProjectDraft[], incoming: ProjectDraft[]) {
   return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.draftId.localeCompare(a.draftId))
 }
 
-export function ProjectDraftPanel({ onCreated }: Props) {
+export function ProjectDraftPanel(props: Props) {
   const [opened, setOpened] = useState(false)
   return <details className="workspace-panel" onToggle={(event) => {
     if (event.currentTarget.open) setOpened(true)
   }}>
     <summary className="turn-role">用自然语言建项</summary>
-    {opened && <DraftWorkspace onCreated={onCreated} />}
+    {opened && <DraftWorkspace {...props} />}
   </details>
 }
 
-function DraftWorkspace({ onCreated }: Props) {
+function DraftWorkspace({ templateItems, onCreated }: Props) {
   const id = useId()
   const editorHeading = useRef<HTMLHeadingElement>(null)
   const mutation = useRef<AbortController | null>(null)
@@ -279,15 +281,8 @@ function DraftWorkspace({ onCreated }: Props) {
             onChange={(event) => setEdit({ ...edit, fields: { ...edit.fields, title: event.currentTarget.value } })} />
           {invalidTitle && <p className="form-error">项目题名须在 200 个字符以内且不含空字符。</p>}
         </div>
-        <div className="field">
-          <label htmlFor={`${id}-template`}>项目模板</label>
-          <select id={`${id}-template`} value={edit.fields.templateId} disabled={!editable} onChange={(event) => {
-            const templateId = event.currentTarget.value
-            if (isTemplateId(templateId)) setEdit({ ...edit, fields: { ...edit.fields, templateId } })
-          }}>
-            {Object.entries(templates).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-          </select>
-        </div>
+        <ProjectTemplatePicker id={`${id}-template`} items={templateItems} value={edit.fields.templateId} disabled={!editable}
+          onChange={(templateId) => setEdit({ ...edit, fields: { ...edit.fields, templateId } })} />
         {textFields.map(([key, label]) => {
           const invalid = invalidText(fields?.[key] ?? '')
           return <div className="field" key={key}>

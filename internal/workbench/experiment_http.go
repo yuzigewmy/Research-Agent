@@ -45,7 +45,7 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		Key   string `json:"key"`
 		Title string `json:"title"`
 	}
-	stages := workflowStages[projectWorkflows[project.TemplateID]]
+	stages := workflowStages[projectWorkflowKey(project.TemplateID)]
 	result := struct {
 		Run             *WorkflowRun `json:"run"`
 		Steps           []stepInfo   `json:"steps"`

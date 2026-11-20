@@ -49,6 +49,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 		source = literature.New()
 	}
 	literatureLibrary{store: store, source: source}.register(mux)
+	mux.HandleFunc("GET /api/v1/templates", listProjectTemplates)
+	mux.HandleFunc("/api/v1/templates", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("GET "+projectsPath, store.handleListProjects)
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
@@ -108,10 +110,6 @@ func isLoopbackHost(host string) bool {
 		host = name
 	}
 	return strings.EqualFold(host, "localhost") || net.ParseIP(strings.Trim(host, "[]")).IsLoopback()
-}
-
-func validProjectTemplate(id string) bool {
-	return id == "freeform" || id == "automatic_review" || projectWorkflows[id] != ""
 }
 
 func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {

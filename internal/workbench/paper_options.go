@@ -11,7 +11,10 @@ const paperOptionsSchema = `
 	PRAGMA user_version = 13;
 `
 
-const maxPaperOutlineBytes = 16 << 10
+const (
+	maxPaperOutlineBytes = 16 << 10
+	defaultPaperLanguage = "zh"
+)
 
 var errPaperOptions = errors.New("invalid paper language or outline")
 
@@ -61,11 +64,11 @@ func workflowOptions(key, action string, input *paperOptions, topic *topicOption
 		}
 		return "{}", nil
 	}
-	options := paperOptions{Language: "zh"}
+	options := paperOptions{Language: defaultPaperLanguage}
 	if input != nil {
 		options = *input
 		if options.Language == "" {
-			options.Language = "zh"
+			options.Language = defaultPaperLanguage
 		}
 	}
 	if (options.Language != "zh" && options.Language != "en") ||

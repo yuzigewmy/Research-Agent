@@ -47,7 +47,7 @@ type workflowProposalRecord struct {
 }
 
 func (s *Store) workflowProposalOptions(ctx context.Context, project Project) (*workflowProposalRecord, error) {
-	key := projectWorkflows[project.TemplateID]
+	key := projectWorkflowKey(project.TemplateID)
 	if key == "" {
 		return nil, nil
 	}

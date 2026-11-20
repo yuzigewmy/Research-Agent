@@ -158,12 +158,22 @@ func (api projectDrafts) generatePlan(ctx context.Context, draft projectDraft) (
 	if err != nil {
 		return "", err
 	}
+	type choice struct {
+		ID      string `json:"id"`
+		Label   string `json:"label"`
+		Summary string `json:"summary"`
+	}
+	choices := make([]choice, 0, len(projectTemplates))
+	for _, template := range projectTemplates {
+		choices = append(choices, choice{template.ID, template.Label, template.Summary})
+	}
 	input, err := json.Marshal(struct {
 		Prompt    string                `json:"prompt"`
 		Fields    projectDraftFields    `json:"currentDraft"`
 		Question  string                `json:"previousQuestion,omitempty"`
 		Materials []turnMaterialExcerpt `json:"materials,omitempty"`
-	}{draft.Prompt, draft.projectDraftFields, draft.Question, materials})
+		Templates []choice              `json:"availableTemplates"`
+	}{draft.Prompt, draft.projectDraftFields, draft.Question, materials, choices})
 	if err != nil {
 		return "", err
 	}

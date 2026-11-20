@@ -40,6 +40,19 @@ func TestProjectDraftPlanningAndFinalizationSurviveReopening(t *testing.T) {
 		if !strings.Contains(supplied.String(), prompt) || strings.Contains(supplied.String(), clarification) != (call > 1) {
 			t.Errorf("planning call %d received the wrong saved input", call)
 		}
+		var request struct {
+			AvailableTemplates []struct{ ID string }
+		}
+		if err := json.Unmarshal([]byte(input.Messages[len(input.Messages)-1].Content), &request); err != nil ||
+			len(request.AvailableTemplates) != len(projectTemplates) {
+			t.Errorf("planning call %d did not receive the template catalog", call)
+		} else {
+			for index, choice := range request.AvailableTemplates {
+				if choice.ID != projectTemplates[index].ID {
+					t.Errorf("wrong planning template at position %d: %q", index, choice.ID)
+				}
+			}
+		}
 		output, finish := first, "stop"
 		switch call {
 		case 2:

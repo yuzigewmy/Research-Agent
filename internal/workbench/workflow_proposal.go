@@ -34,23 +34,28 @@ type proposalOptions struct {
 	Requirements  string `json:"requirements,omitempty"`
 }
 
+func defaultProposalTargets() proposalTargets {
+	return proposalTargets{Degree: "master", DegreeType: "academic", TargetCharacters: 5000, TargetSources: 30}
+}
+
 func normalizeProposalOptions(input *proposalOptions) (proposalOptions, error) {
 	var options proposalOptions
 	if input != nil {
 		options = *input
 	}
+	defaults := defaultProposalTargets()
 	if options.Degree == "" {
-		options.Degree = "master"
+		options.Degree = defaults.Degree
 	}
 	if options.DegreeType == "" {
-		options.DegreeType = "academic"
+		options.DegreeType = defaults.DegreeType
 	}
 	var characters, sources int
 	switch options.Degree {
 	case "bachelor":
 		characters, sources = 3000, 15
 	case "master":
-		characters, sources = 5000, 30
+		characters, sources = defaults.TargetCharacters, defaults.TargetSources
 	case "doctor":
 		characters, sources = 15000, 50
 	default:
