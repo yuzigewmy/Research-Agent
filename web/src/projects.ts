@@ -10,6 +10,17 @@ export const templates = {
 export type TemplateId = keyof typeof templates
 export type ProjectStatus = 'READY' | 'ARCHIVED'
 
+export const turnModeLabels = {
+  CHAT: '仅问答',
+  CONFIRM: '建议任务，确认后运行',
+} as const
+
+export type TurnMode = keyof typeof turnModeLabels
+
+export function isTurnMode(value: unknown): value is TurnMode {
+  return typeof value === 'string' && Object.hasOwn(turnModeLabels, value)
+}
+
 export interface Project {
   projectId: string
   title: string
@@ -20,6 +31,7 @@ export interface Project {
   createdAt: string
   goal?: string
   deliverables?: string
+  defaultTurnMode?: TurnMode
 }
 
 export interface ProjectPage {
@@ -38,9 +50,11 @@ export interface ProjectFilters {
   q: string
 }
 
-export type ProjectChanges =
-  | { displayName: string; status?: ProjectStatus }
-  | { displayName?: string; status: ProjectStatus }
+export type ProjectChanges = {
+  displayName?: string
+  status?: ProjectStatus
+  defaultTurnMode?: TurnMode
+} & ({ displayName: string } | { status: ProjectStatus } | { defaultTurnMode: TurnMode })
 
 export type UpdateProject = ProjectChanges & { requestId: string; expectedRevision: number }
 
@@ -72,6 +86,7 @@ export function isProject(value: unknown): value is Project {
     && typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
     && (value.goal === undefined || typeof value.goal === 'string')
     && (value.deliverables === undefined || typeof value.deliverables === 'string')
+    && (value.defaultTurnMode === undefined || isTurnMode(value.defaultTurnMode))
 }
 
 function isProjectPage(value: unknown): value is ProjectPage {

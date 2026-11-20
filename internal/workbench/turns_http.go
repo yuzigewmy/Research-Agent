@@ -46,10 +46,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。")
 		return
 	}
-	if input.Mode == "" {
-		input.Mode = turnModeChat
-	}
-	if input.Mode != turnModeChat && input.Mode != turnModeConfirm {
+	if input.Mode != "" && !validTurnMode(input.Mode) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择仅问答或建议任务后确认。")
 		return
 	}

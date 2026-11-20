@@ -30,6 +30,14 @@ const projectLifecycleSchema = `
 	PRAGMA user_version = 12;
 `
 
+const projectTurnModeSchema = `
+	ALTER TABLE projects ADD COLUMN default_turn_mode TEXT NOT NULL DEFAULT 'CHAT'
+		CHECK (default_turn_mode IN ('CHAT', 'CONFIRM'));
+	ALTER TABLE project_patch_requests ADD COLUMN default_turn_mode TEXT
+		CHECK (default_turn_mode IN ('CHAT', 'CONFIRM'));
+	PRAGMA user_version = 30;
+`
+
 var errProjectRevision = errors.New("project revision changed")
 
 // An omitted field binds as SQL NULL. An explicit empty string remains a value.
@@ -52,6 +60,7 @@ type patchProjectInput struct {
 	ExpectedRevision int               `json:"expectedRevision"`
 	DisplayName      projectPatchField `json:"displayName"`
 	Status           projectPatchField `json:"status"`
+	DefaultTurnMode  projectPatchField `json:"defaultTurnMode"`
 }
 
 func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
@@ -59,8 +68,9 @@ func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &input, 8<<10) {
 		return
 	}
-	if !validRequestID(input.RequestID) || input.ExpectedRevision < 1 || (!input.DisplayName.Valid && !input.Status.Valid) {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号、正整数修订版本，以及显示名或状态。")
+	if !validRequestID(input.RequestID) || input.ExpectedRevision < 1 ||
+		(!input.DisplayName.Valid && !input.Status.Valid && !input.DefaultTurnMode.Valid) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号、正整数修订版本和要修改的项目设置。")
 		return
 	}
 	input.DisplayName.String = strings.TrimSpace(input.DisplayName.String)
@@ -70,6 +80,11 @@ func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Status.Valid && input.Status.String != projectReady && input.Status.String != projectArchived {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "项目状态必须是 READY 或 ARCHIVED。")
+		return
+	}
+
+	if input.DefaultTurnMode.Valid && !validTurnMode(input.DefaultTurnMode.String) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择仅问答或建议任务后确认。")
 		return
 	}
 
@@ -97,10 +112,10 @@ func (s *Store) patchProject(ctx context.Context, id string, input patchProjectI
 
 	// Reserve the receipt inside the write transaction. A failed CAS rolls it back.
 	result, err := tx.ExecContext(ctx, `INSERT INTO project_patch_requests
-		(project_id, request_id, expected_revision, display_name, status)
-		SELECT project_id, ?, ?, ?, ? FROM projects WHERE project_id = ?
+		(project_id, request_id, expected_revision, display_name, status, default_turn_mode)
+		SELECT project_id, ?, ?, ?, ?, ? FROM projects WHERE project_id = ?
 		ON CONFLICT (project_id, request_id) DO NOTHING`,
-		input.RequestID, input.ExpectedRevision, input.DisplayName, input.Status, id)
+		input.RequestID, input.ExpectedRevision, input.DisplayName, input.Status, input.DefaultTurnMode, id)
 	if err != nil {
 		return Project{}, err
 	}
@@ -110,22 +125,24 @@ func (s *Store) patchProject(ctx context.Context, id string, input patchProjectI
 	}
 	if inserted == 0 {
 		var revision int
-		var name, status sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT expected_revision, display_name, status FROM project_patch_requests
-			WHERE project_id = ? AND request_id = ?`, id, input.RequestID).Scan(&revision, &name, &status)
+		var name, status, mode sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT expected_revision, display_name, status, default_turn_mode FROM project_patch_requests
+			WHERE project_id = ? AND request_id = ?`, id, input.RequestID).Scan(&revision, &name, &status, &mode)
 		if err != nil {
 			return Project{}, err
 		}
-		if revision != input.ExpectedRevision || name != input.DisplayName.NullString || status != input.Status.NullString {
+		if revision != input.ExpectedRevision || name != input.DisplayName.NullString || status != input.Status.NullString ||
+			mode != input.DefaultTurnMode.NullString {
 			return Project{}, errRequestConflict
 		}
 		return scanProject(tx.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE project_id = ?`, id))
 	}
 
 	project, err := scanProject(tx.QueryRowContext(ctx, `UPDATE projects
-		SET display_name = COALESCE(?, display_name), status = COALESCE(?, status), revision = revision + 1
+		SET display_name = COALESCE(?, display_name), status = COALESCE(?, status),
+		default_turn_mode = COALESCE(?, default_turn_mode), revision = revision + 1
 		WHERE project_id = ? AND revision = ? RETURNING `+projectColumns,
-		input.DisplayName, input.Status, id, input.ExpectedRevision))
+		input.DisplayName, input.Status, input.DefaultTurnMode, id, input.ExpectedRevision))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, errProjectRevision
 	}

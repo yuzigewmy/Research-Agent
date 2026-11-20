@@ -18,6 +18,10 @@ const (
 	turnModeConfirm = "CONFIRM"
 )
 
+func validTurnMode(mode string) bool {
+	return mode == turnModeChat || mode == turnModeConfirm
+}
+
 const turnProposalSchema = `
 	ALTER TABLE turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'CHAT' CHECK (mode IN ('CHAT', 'CONFIRM'));
 	ALTER TABLE turns ADD COLUMN proposed_task_id TEXT NOT NULL DEFAULT '';

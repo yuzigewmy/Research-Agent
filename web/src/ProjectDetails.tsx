@@ -136,7 +136,8 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         }} />}
       <TaskPanel projectId={project.projectId} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths} />
-      <Conversation projectId={project.projectId} references={references} onClearReferences={clearReferences} taskSync={taskSync} />
+      <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
+        onClearReferences={clearReferences} taskSync={taskSync} />
     </div>
   )
 }

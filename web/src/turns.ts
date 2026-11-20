@@ -1,11 +1,13 @@
 import type { Material } from './materials'
-import { request } from './projects'
+import { isTurnMode, request } from './projects'
+import type { TurnMode } from './projects'
+
+export type { TurnMode } from './projects'
 
 const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED'] as const
 export const turnReferenceLimit = 4
 const turnTaskResultLimit = 4
 export type TurnStatus = typeof statuses[number]
-export type TurnMode = 'CHAT' | 'CONFIRM'
 export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'>
 
 interface TurnTaskResult {
@@ -80,7 +82,7 @@ function isTurn(value: unknown): value is Turn {
     && typeof turn.afterSeq === 'number' && typeof turn.createdAt === 'string'
     && (turn.references === undefined || isTurnReferences(turn.references))
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
-    && (turn.mode === undefined || turn.mode === 'CHAT' || turn.mode === 'CONFIRM')
+    && (turn.mode === undefined || isTurnMode(turn.mode))
     && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
 }
 

@@ -39,11 +39,12 @@ func TestProjectLifecycle(t *testing.T) {
 		}
 	}
 	type observedProject struct {
-		ProjectID   string `json:"projectId"`
-		Title       string `json:"title"`
-		DisplayName string `json:"displayName"`
-		Status      string `json:"status"`
-		Revision    int    `json:"revision"`
+		ProjectID       string `json:"projectId"`
+		Title           string `json:"title"`
+		DisplayName     string `json:"displayName"`
+		Status          string `json:"status"`
+		Revision        int    `json:"revision"`
+		DefaultTurnMode string `json:"defaultTurnMode"`
 	}
 	var renamed, archived, restored, current observedProject
 	var created struct {
@@ -51,12 +52,14 @@ func TestProjectLifecycle(t *testing.T) {
 		DisplayName *string `json:"displayName"`
 	}
 	request(http.MethodPost, projectsPath, `{"requestId":"create","title":"河流基线","templateId":"experiment"}`, http.StatusCreated, &created)
-	if created.DisplayName == nil || *created.DisplayName != "" {
-		t.Fatal("new project must include an empty displayName string")
+	if created.DisplayName == nil || *created.DisplayName != "" || created.DefaultTurnMode != "CHAT" {
+		t.Fatalf("unexpected project defaults: %+v", created)
 	}
 	path := projectsPath + "/" + created.ProjectID
-	request(http.MethodPatch, path, `{"requestId":"rename","expectedRevision":1,"displayName":"  河流_监测  "}`, http.StatusOK, &renamed)
-	if renamed.Title != created.Title || renamed.DisplayName != "河流_监测" || renamed.Status != "READY" || renamed.Revision != 2 {
+	const rename = `{"requestId":"rename","expectedRevision":1,"displayName":"  河流_监测  ","defaultTurnMode":"CONFIRM"}`
+	request(http.MethodPatch, path, rename, http.StatusOK, &renamed)
+	if renamed.Title != created.Title || renamed.DisplayName != "河流_监测" || renamed.Status != "READY" ||
+		renamed.Revision != 2 || renamed.DefaultTurnMode != "CONFIRM" {
 		t.Fatalf("unexpected renamed project: %+v", renamed)
 	}
 
@@ -106,7 +109,11 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 	handler = NewHandler(open(), nil, HandlerConfig{})
 	request(http.MethodPatch, path, archive, http.StatusOK, &current)
-	if current != restored {
-		t.Fatalf("archive replay changed the restored project: %+v", current)
+	if current != restored || current.DefaultTurnMode != "CONFIRM" {
+		t.Fatalf("project settings did not survive reopening: %+v", current)
+	}
+	request(http.MethodPatch, path, strings.Replace(rename, "CONFIRM", "CHAT", 1), http.StatusConflict, &conflict)
+	if conflict.Error.Code != "REQUEST_ID_CONFLICT" {
+		t.Fatalf("wrong mode replay conflict: %+v", conflict.Error)
 	}
 }

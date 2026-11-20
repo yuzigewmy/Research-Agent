@@ -1,18 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ConversationTasks } from './ConversationTasks'
 import { materialDownloadPath } from './materials'
-import { errorMessage } from './projects'
+import { errorMessage, isTurnMode, turnModeLabels } from './projects'
+import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
 import { isProposedTaskId, listTurns, sendTurn, turnsPath } from './turns'
-import type { Turn, TurnEvent, TurnInput, TurnMode, TurnReference } from './turns'
+import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
 
 type StreamTarget = { id: string; after: number }
 
 function readAttempt(key: string): TurnInput | null {
-  const value = sessionStorage.getItem(key)
-  return value ? JSON.parse(value) as TurnInput : null
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? 'null')
+    if (!saved || typeof saved !== 'object') return null
+    const input = saved as Partial<TurnInput>
+    if (typeof input.requestId !== 'string' || typeof input.text !== 'string'
+      || (input.mode !== undefined && !isTurnMode(input.mode))
+      || (input.referenceIds !== undefined && (!Array.isArray(input.referenceIds)
+        || !input.referenceIds.every((id) => typeof id === 'string')))) return null
+    return { requestId: input.requestId, text: input.text, referenceIds: input.referenceIds, mode: input.mode ?? 'CHAT' }
+  } catch {
+    return null
+  }
 }
 
 function sameReferenceIds(first: string[] = [], second: string[]) {
@@ -21,21 +32,22 @@ function sameReferenceIds(first: string[] = [], second: string[]) {
 
 interface ConversationProps {
   projectId: string
+  defaultTurnMode?: TurnMode
   references: TurnReference[]
   onClearReferences: (ids: string[]) => void
   taskSync?: TaskPanelSync
 }
 
-export function Conversation({ projectId, references, onClearReferences, taskSync }: ConversationProps) {
+export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, onClearReferences, taskSync }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
-  const attempt = useRef<TurnInput | null>(null)
   const submission = useRef<AbortController | null>(null)
   const [turns, setTurns] = useState<Turn[]>([])
   const [cursor, setCursor] = useState<string>()
   const [configured, setConfigured] = useState(false)
-  const [draft, setDraft] = useState(() => sessionStorage.getItem(draftKey) ?? readAttempt(attemptKey)?.text ?? '')
-  const [mode, setMode] = useState<TurnMode>(() => readAttempt(attemptKey)?.mode === 'CONFIRM' ? 'CONFIRM' : 'CHAT')
+  const [attempt, setAttempt] = useState(() => readAttempt(attemptKey))
+  const [draft, setDraft] = useState(() => sessionStorage.getItem(draftKey) ?? attempt?.text ?? '')
+  const [modeOverride, setModeOverride] = useState<TurnMode>()
   const [loading, setLoading] = useState(true)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [sending, setSending] = useState(false)
@@ -43,6 +55,11 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
   const [connectionLost, setConnectionLost] = useState(false)
   const [stream, setStream] = useState<StreamTarget | null>(null)
   const [reload, setReload] = useState(0)
+  const referenceIds = references.map(({ materialId }) => materialId)
+  const matchingAttempt = attempt?.text === draft && sameReferenceIds(attempt.referenceIds, referenceIds) ? attempt : null
+  const retryMode = matchingAttempt ? matchingAttempt.mode ?? 'CHAT' : undefined
+  const inheritedMode = retryMode ?? defaultTurnMode
+  const mode = modeOverride ?? inheritedMode
 
   function accept(turn: Turn) {
     setTurns((items) => [...items.filter((item) => item.turnId !== turn.turnId), turn])
@@ -50,22 +67,24 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
     setStream(turn.status === 'RUNNING' ? { id: turn.turnId, after: turn.afterSeq } : null)
   }
 
-  const finishAttempt = useCallback((input: TurnInput) => {
-    attempt.current = null
+  function finishAttempt(input: TurnInput) {
+    setAttempt(null)
     sessionStorage.removeItem(attemptKey)
     if (sessionStorage.getItem(draftKey) === input.text) sessionStorage.removeItem(draftKey)
     setDraft((current) => current === input.text ? '' : current)
-    setMode('CHAT')
+    setModeOverride(undefined)
     if (input.referenceIds?.length) onClearReferences(input.referenceIds)
-  }, [attemptKey, draftKey, onClearReferences])
+  }
+
+  const reconcileAttempt = useEffectEvent((items: Turn[]) => {
+    if (attempt && items.some((turn) => turn.requestId === attempt.requestId)) finishAttempt(attempt)
+  })
 
   useEffect(() => {
     const controller = new AbortController()
-    attempt.current = readAttempt(attemptKey)
     listTurns(projectId, controller.signal).then((page) => {
       if (controller.signal.aborted) return
-      const pending = attempt.current
-      if (pending && page.items.some((turn) => turn.requestId === pending.requestId)) finishAttempt(pending)
+      reconcileAttempt(page.items)
       const running = page.items.find((turn) => turn.status === 'RUNNING')
       setTurns(page.items.reverse())
       setCursor(page.nextCursor)
@@ -78,7 +97,7 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [attemptKey, finishAttempt, projectId, reload])
+  }, [projectId, reload])
 
   useEffect(() => () => submission.current?.abort(), [])
 
@@ -119,13 +138,10 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
       setError('这条消息超过 16 KiB，请拆成几条发送。')
       return
     }
-    const referenceIds = references.map(({ materialId }) => materialId)
-    const previous = attempt.current
-    const input: TurnInput = previous?.text === draft && (previous.mode ?? 'CHAT') === mode
-      && sameReferenceIds(previous.referenceIds, referenceIds)
-      ? previous
+    const input: TurnInput = matchingAttempt && retryMode === mode
+      ? matchingAttempt
       : { requestId: crypto.randomUUID(), text: draft, mode, referenceIds: referenceIds.length ? referenceIds : undefined }
-    attempt.current = input
+    setAttempt(input)
     sessionStorage.setItem(attemptKey, JSON.stringify(input))
     const controller = new AbortController()
     submission.current = controller
@@ -237,10 +253,11 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
         <form className="create-form" onSubmit={send} aria-busy={sending}>
           <div className="field">
             <label htmlFor="turn-mode">本轮协作</label>
-            <select id="turn-mode" value={mode} disabled={loading || sending}
-              onChange={(event) => setMode(event.currentTarget.value === 'CONFIRM' ? 'CONFIRM' : 'CHAT')}>
-              <option value="CHAT">仅问答</option>
-              <option value="CONFIRM">建议任务，确认后运行</option>
+            <select id="turn-mode" value={mode} disabled={loading || sending} onChange={(event) => {
+              const nextMode = event.currentTarget.value
+              if (isTurnMode(nextMode)) setModeOverride(nextMode === inheritedMode ? undefined : nextMode)
+            }}>
+              {Object.entries(turnModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
           <div className="field">

@@ -97,19 +97,23 @@ func TestConversationProposalWaitsForConfirmation(t *testing.T) {
 		return w.Body.String()
 	}
 	type response struct {
-		TurnID, Status, ProposedTaskID string
+		TurnID, Status, ProposedTaskID, Mode string
 	}
-	const ask = `{"requestId":"plan","text":"帮我拟定水温研究计划","mode":"CONFIRM"}`
+	request(http.MethodPatch, "", `{"requestId":"prefer-confirm","expectedRevision":1,"defaultTurnMode":"CONFIRM"}`, http.StatusOK, nil)
+	const askText = "帮我拟定水温研究计划"
+	ask := fmt.Sprintf(`{"requestId":"plan","text":%q}`, askText)
 	var start, completed response
 	request(http.MethodPost, "/turns", ask, http.StatusAccepted, &start)
 	stream := request(http.MethodGet, "/turns/"+start.TurnID+"/stream", "", http.StatusOK, nil)
+	request(http.MethodPatch, "", `{"requestId":"prefer-chat","expectedRevision":2,"defaultTurnMode":"CHAT"}`, http.StatusOK, nil)
 	request(http.MethodPost, "/turns", ask, http.StatusOK, &completed)
-	if completed.Status != "COMPLETED" || completed.ProposedTaskID == "" || !strings.Contains(stream, `"proposedTaskId":"`+completed.ProposedTaskID+`"`) {
-		t.Fatalf("task proposal was missing from the completed turn: %+v, %s", completed, stream)
+	if completed.Mode != "CONFIRM" || completed.Status != "COMPLETED" || completed.ProposedTaskID == "" ||
+		!strings.Contains(stream, `"proposedTaskId":"`+completed.ProposedTaskID+`"`) {
+		t.Fatalf("the completed turn lost its original mode or task proposal: %+v, %s", completed, stream)
 	}
-	request(http.MethodPost, "/turns", strings.Replace(ask, "CONFIRM", "CHAT", 1), http.StatusConflict, nil)
+	request(http.MethodPost, "/turns", fmt.Sprintf(`{"requestId":"plan","text":%q,"mode":"CHAT"}`, askText), http.StatusConflict, nil)
 	var incomplete response
-	request(http.MethodPost, "/turns", strings.Replace(ask, `"plan"`, `"truncated"`, 1), http.StatusAccepted, &incomplete)
+	request(http.MethodPost, "/turns", fmt.Sprintf(`{"requestId":"truncated","text":%q,"mode":"CONFIRM"}`, askText), http.StatusAccepted, &incomplete)
 	if stream := request(http.MethodGet, "/turns/"+incomplete.TurnID+"/stream", "", http.StatusOK, nil); !strings.Contains(stream, `"status":"FAILED"`) || strings.Contains(stream, `"proposedTaskId"`) {
 		t.Fatalf("truncated tool call did not fail cleanly: %s", stream)
 	}

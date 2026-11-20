@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { errorMessage, getProject, ProjectApiError, updateProject } from './projects'
-import type { Project, ProjectChanges, UpdateProject } from './projects'
+import { errorMessage, getProject, isTurnMode, ProjectApiError, turnModeLabels, updateProject } from './projects'
+import type { Project, ProjectChanges, TurnMode, UpdateProject } from './projects'
 import './project-management.css'
 
 interface ProjectAdministrationProps {
@@ -8,11 +8,12 @@ interface ProjectAdministrationProps {
   onUpdated: (project: Project) => void
 }
 
-type Operation = 'save' | 'archive' | 'restore' | 'refresh'
+type Operation = 'save' | 'save-mode' | 'archive' | 'restore' | 'refresh'
 type Feedback = { kind: 'success' | 'error'; message: string } | { kind: 'conflict'; refreshError?: string }
 
 const successMessages: Record<Operation, string> = {
   save: '显示名已保存。',
+  'save-mode': '默认协作方式已保存。',
   archive: '项目已归档。',
   restore: '项目已恢复。',
   refresh: '已加载项目的最新版本。',
@@ -21,6 +22,7 @@ const successMessages: Record<Operation, string> = {
 export function ProjectAdministration({ project, onUpdated }: ProjectAdministrationProps) {
   const id = useId()
   const [draft, setDraft] = useState<string>()
+  const [modeDraft, setModeDraft] = useState<TurnMode>()
   const [pending, setPending] = useState<Operation>()
   const [feedback, setFeedback] = useState<Feedback>()
   const operation = useRef<AbortController | null>(null)
@@ -29,6 +31,9 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
   const refreshButton = useRef<HTMLButtonElement>(null)
   const name = draft ?? project.displayName
   const dirty = name.trim() !== project.displayName
+  const savedMode = project.defaultTurnMode ?? 'CHAT'
+  const mode = modeDraft ?? savedMode
+  const modeDirty = mode !== savedMode
   const hasConflict = feedback?.kind === 'conflict'
   const archived = project.status === 'ARCHIVED'
   const writesBlocked = pending !== undefined || hasConflict
@@ -48,7 +53,8 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
       if (changes) {
         const previous = attempt.current
         const input = previous?.expectedRevision === project.revision &&
-          previous.displayName === changes.displayName && previous.status === changes.status
+          previous.displayName === changes.displayName && previous.status === changes.status &&
+          previous.defaultTurnMode === changes.defaultTurnMode
           ? previous
           : { ...changes, requestId: crypto.randomUUID(), expectedRevision: project.revision }
         attempt.current = input
@@ -59,6 +65,7 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
       if (controller.signal.aborted) return
       attempt.current = undefined
       if (kind === 'save' || !dirty) setDraft(undefined)
+      if (kind === 'save-mode' || !modeDirty || mode === (next.defaultTurnMode ?? 'CHAT')) setModeDraft(undefined)
       if (kind === 'refresh' && document.activeElement === refreshButton.current) nameInput.current?.focus()
       onUpdated(next)
       setFeedback({ kind: 'success', message: successMessages[kind] })
@@ -100,6 +107,25 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
           {dirty && project.displayName && <>当前显示名为 <bdi>{project.displayName}</bdi>。 </>}
           留空时显示研究题目。
         </p>
+      </form>
+      <form className="field" onSubmit={(event) => {
+        event.preventDefault()
+        if (!writesBlocked && modeDirty) void run('save-mode', { defaultTurnMode: mode })
+      }}>
+        <label htmlFor={`${id}-default-mode`}>默认协作方式</label>
+        <select id={`${id}-default-mode`} value={mode} disabled={pending !== undefined} onChange={(event) => {
+          const nextMode = event.currentTarget.value
+          if (isTurnMode(nextMode)) setModeDraft(nextMode === savedMode ? undefined : nextMode)
+          if (!hasConflict) setFeedback(undefined)
+        }}>
+          {Object.entries(turnModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {modeDirty && <p className="project-management-help">当前已保存为「{turnModeLabels[savedMode]}」。</p>}
+        <div className="project-management-actions">
+          <button className="button outline" type="submit" aria-disabled={writesBlocked || !modeDirty}>
+            {pending === 'save-mode' ? '正在保存…' : '保存协作方式'}
+          </button>
+        </div>
       </form>
       <div className="project-management-actions">
         <button className="button outline" type="button" aria-disabled={writesBlocked} onClick={() => {

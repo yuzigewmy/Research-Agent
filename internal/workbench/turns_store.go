@@ -110,7 +110,8 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 
 	turn, err := scanTurn(tx.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND request_id = ?`, projectID, input.RequestID))
 	if err == nil {
-		if turn.Text != input.Text || turn.Mode != input.Mode || !slices.EqualFunc(turn.References, input.ReferenceIDs, func(ref TurnReference, id string) bool {
+		// An omitted mode reuses the original choice on replay, even after settings change.
+		if turn.Text != input.Text || (input.Mode != "" && turn.Mode != input.Mode) || !slices.EqualFunc(turn.References, input.ReferenceIDs, func(ref TurnReference, id string) bool {
 			return ref.MaterialID == id
 		}) {
 			return Turn{}, Project{}, false, errRequestConflict
@@ -150,8 +151,12 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
+	mode := input.Mode
+	if mode == "" {
+		mode = project.DefaultTurnMode
+	}
 	turn = Turn{TurnID: rand.Text(), RequestID: input.RequestID, Text: input.Text, References: references, TaskResults: results,
-		Mode: input.Mode, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+		Mode: mode, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
 	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at, references_json, task_results_json, mode)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
 		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON), turn.Mode).Scan(&turn.ordinal)
