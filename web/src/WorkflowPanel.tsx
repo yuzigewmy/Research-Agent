@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
+import { WorkflowRunHistory } from './WorkflowRunHistory'
 import {
   cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow, runStatusLabels,
   saveManuscript, startWorkflow, stepStatusLabels, workflowArtifactPath,
@@ -40,7 +41,7 @@ function requestSignal(controller: AbortController) {
 function WorkflowSteps({ projectId, run, rerun }: {
   projectId: string
   run: WorkflowRun
-  rerun: {
+  rerun?: {
     selected?: string
     disabled: boolean
     pending: boolean
@@ -55,8 +56,10 @@ function WorkflowSteps({ projectId, run, rerun }: {
   return (
     <ol className="workflow-steps" aria-label="工作流步骤">
       {run.steps.map((step, index) => {
-        const selected = rerun.selected === step.key
-        const eligible = canRerunStep(run, index)
+        const selected = rerun?.selected === step.key
+        const eligible = !!rerun && canRerunStep(run, index)
+        const canDownload = step.status === 'SUCCEEDED' && (!!rerun || !!step.artifactId)
+        const downloadLabel = rerun ? '下载当前成果' : '下载该轮成果'
         const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
         return <li key={step.key}>
           <div className="workflow-step-heading">
@@ -64,11 +67,11 @@ function WorkflowSteps({ projectId, run, rerun }: {
             <span className="workflow-step-status" data-status={step.status}>{stepStatusLabels[step.status]}</span>
           </div>
           {step.message && <p className="workflow-note workflow-step-message" dir="auto">{step.message}</p>}
-          {(step.status === 'SUCCEEDED' || eligible) && <div className="workflow-actions">
-            {step.status === 'SUCCEEDED' && <a className="workflow-download"
+          {(canDownload || eligible) && <div className="workflow-actions">
+            {canDownload && <a className="workflow-download"
               href={workflowArtifactPath(projectId, run.runId, step.key, step.artifactId)}
-              aria-label={`下载当前成果：${step.title}`} download>下载当前成果</a>}
-            {eligible && <button className="button outline" type="button" disabled={rerun.disabled}
+              aria-label={`${downloadLabel}：${step.title}`} download>{downloadLabel}</a>}
+            {rerun && eligible && <button className="button outline" type="button" disabled={rerun.disabled}
               aria-label={`重跑此步骤：${step.title}`} aria-expanded={selected}
               aria-controls={selected ? confirmationId : undefined} onClick={(event) => {
                 if (selected) rerun.onCancel()
@@ -78,7 +81,7 @@ function WorkflowSteps({ projectId, run, rerun }: {
                 }
               }}>重跑此步骤</button>}
           </div>}
-          {selected && <div className="workflow-rerun-confirm" id={confirmationId} role="group" aria-labelledby={`${confirmationId}-help`}>
+          {rerun && selected && <div className="workflow-rerun-confirm" id={confirmationId} role="group" aria-labelledby={`${confirmationId}-help`}>
             <p className="workflow-note" id={`${confirmationId}-help`}>
               仅重跑「{step.title}」。旧成果仍可从历史下载，后续已生成的成果会标为待重算。
             </p>
@@ -501,6 +504,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved }: {
           )}
         </div>
       )}
+      <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId}
+        renderSteps={(historicalRun) => <WorkflowSteps projectId={projectId} run={historicalRun} />} />
     </section>
   )
 }

@@ -50,13 +50,21 @@ export interface WorkflowArtifactPage {
   nextCursor?: string
 }
 
-export interface WorkflowRun {
+interface WorkflowRunSummary {
   runId: string
+  status: keyof typeof runStatusLabels
+  createdAt: string
+}
+
+export interface WorkflowRunPage {
+  items: WorkflowRunSummary[]
+  nextCursor?: string
+}
+
+export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
-  status: keyof typeof runStatusLabels
   checkpoints: boolean
-  createdAt: string
   targetPaperCount?: number
   sourceCount?: number
   language?: 'zh' | 'en'
@@ -135,16 +143,27 @@ function isScope(value: unknown, steps: WorkflowStep[]) {
   return start >= 0 && end >= start
 }
 
+function isRunSummary(value: unknown): value is WorkflowRunSummary {
+  const run = value as Partial<WorkflowRunSummary> | null
+  return !!run && isPathId(run.runId)
+    && typeof run.status === 'string' && Object.hasOwn(runStatusLabels, run.status)
+    && typeof run.createdAt === 'string' && Number.isFinite(Date.parse(run.createdAt))
+}
+
+function isRunPage(value: unknown): value is WorkflowRunPage {
+  const page = value as Partial<WorkflowRunPage> | null
+  return !!page && Array.isArray(page.items) && page.items.every(isRunSummary)
+    && (page.nextCursor === undefined || typeof page.nextCursor === 'string')
+}
+
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
-  return !!run && isPathId(run.runId)
-    && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
-    && typeof run.status === 'string' && Object.hasOwn(runStatusLabels, run.status)
-    && typeof run.checkpoints === 'boolean' && typeof run.createdAt === 'string'
+  return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
+    && typeof run.checkpoints === 'boolean'
     && (run.sourceCount === undefined || Number.isSafeInteger(run.sourceCount))
     && (run.targetPaperCount === undefined || Number.isSafeInteger(run.targetPaperCount))
     && (run.language === undefined || run.language === 'zh' || run.language === 'en')
-    && Array.isArray(run.steps) && run.steps.every(isStep) && isScope(run.scope, run.steps)
+    && Array.isArray(run.steps) && run.steps.every(isStep) && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 
 function isSnapshot(value: unknown): value is WorkflowSnapshot {
@@ -160,6 +179,16 @@ function workflowPath(projectId: string) {
 
 export function getWorkflow(projectId: string, signal: AbortSignal) {
   return request(workflowPath(projectId), isSnapshot, { cache: 'no-store', signal })
+}
+
+export function listWorkflowRuns(projectId: string, signal: AbortSignal, cursor?: string) {
+  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
+  return request(`${workflowPath(projectId)}/runs${query}`, isRunPage, { cache: 'no-store', signal })
+}
+
+export function getWorkflowRun(projectId: string, runId: string, signal: AbortSignal) {
+  return request(`${workflowPath(projectId)}/runs/${encodeURIComponent(runId)}`,
+    (value): value is WorkflowRun => isRun(value) && value.runId === runId, { cache: 'no-store', signal })
 }
 
 function postRun(path: string, input: StartWorkflowInput | ContinueWorkflowInput | WorkflowRunActionInput | RerunWorkflowInput, signal: AbortSignal) {

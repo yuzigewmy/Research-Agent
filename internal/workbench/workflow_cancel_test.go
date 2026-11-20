@@ -128,4 +128,30 @@ func TestWorkflowCancelStopsCurrentStepAndPreservesCompletedArtifact(t *testing.
 	if restored := lookup(); restored.RunID != third.RunID || restored.Status != taskCancelled || restored.Steps[0].Status != taskCancelled {
 		t.Fatalf("recovery lost the cancellation: %+v", restored)
 	}
+
+	page := func(suffix string) (string, string) {
+		t.Helper()
+		var history struct {
+			Items      []struct{ RunID, Status, CreatedAt string }
+			NextCursor string
+		}
+		body := send(http.MethodGet, suffix, "", http.StatusOK)
+		if err := json.Unmarshal(body, &history); err != nil || len(history.Items) != 1 ||
+			history.Items[0].Status != taskCancelled || history.Items[0].CreatedAt == "" {
+			t.Fatalf("unexpected history page: %s", body)
+		}
+		return history.Items[0].RunID, history.NextCursor
+	}
+	if listed, cursor := page("/runs?limit=1"); listed != run.RunID || cursor == "" {
+		t.Fatalf("wrong newest historical run or cursor: %q, %q", listed, cursor)
+	} else if listed, next := page("/runs?limit=1&cursor=" + cursor); listed != queued.RunID || next != "" {
+		t.Fatalf("wrong final historical run or cursor: %q, %q", listed, next)
+	}
+	var historical WorkflowRun
+	body := send(http.MethodGet, "/runs/"+run.RunID, "", http.StatusOK)
+	if err := json.Unmarshal(body, &historical); err != nil || historical.RunID != run.RunID ||
+		historical.Steps[0].ArtifactID != first.TaskID || historical.Steps[1].Status != taskCancelled {
+		t.Fatalf("unexpected historical run: %s", body)
+	}
+	send(http.MethodGet, "/runs/missing-run", "", http.StatusNotFound)
 }

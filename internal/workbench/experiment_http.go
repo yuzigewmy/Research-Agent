@@ -21,6 +21,8 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path+"/pause", api.change(workflowPause))
 	mux.HandleFunc("POST "+path+"/cancel", api.change(workflowCancel))
 	mux.HandleFunc("POST "+path+"/rerun", api.change(workflowRerun))
+	mux.HandleFunc("GET "+path+"/runs", api.listRuns)
+	mux.HandleFunc("GET "+path+"/runs/{runId}", api.readRun)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts", api.artifacts)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}", api.artifact)
