@@ -4,7 +4,7 @@ import { ConversationTasks } from './ConversationTasks'
 import { materialDownloadPath } from './materials'
 import { errorMessage } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
-import { conversationTurnAnchor } from './tasks'
+import { conversationTurnAnchor, taskArtifactPath } from './tasks'
 import { listTurns, sendTurn, turnsPath } from './turns'
 import type { Turn, TurnEvent, TurnInput, TurnReference } from './turns'
 
@@ -165,6 +165,8 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
     setReload((revision) => revision + 1)
   }
 
+  const visibleTurnIds = new Set(turns.map(({ turnId }) => turnId))
+
   return (
     <section className="conversation" aria-labelledby="conversation-title">
       <h4 id="conversation-title">项目对话</h4>
@@ -185,6 +187,20 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
                     aria-label={`下载原件：${name}`}><bdi>{name}</bdi></a>
                   <code className="turn-status" title={sha256}>{sha256.slice(0, 8)}</code>
                 </li>)}
+              </ul>
+            </div>}
+            {!!turn.taskResults?.length && <div className="turn-references">
+              <p className="turn-status">本轮参考的任务成果</p>
+              <ul aria-label="本轮参考的任务成果">
+                {turn.taskResults.map(({ taskId, sourceTurnId, instruction }) => (
+                  <li key={taskId}>
+                    <bdi className="turn-status">{instruction}</bdi>
+                    <a href={taskArtifactPath(projectId, taskId)} download>下载 Markdown</a>
+                    {visibleTurnIds.has(sourceTurnId) && (
+                      <a href={`#${encodeURIComponent(conversationTurnAnchor(sourceTurnId))}`}>回到原消息</a>
+                    )}
+                  </li>
+                ))}
               </ul>
             </div>}
             <p className="turn-role">研究助手</p>
@@ -216,7 +232,10 @@ export function Conversation({ projectId, references, onClearReferences, taskSyn
           <div className="field">
             <label htmlFor="turn-message">消息</label>
             <textarea id="turn-message" rows={3} maxLength={16_384} value={draft} readOnly={sending}
-              onChange={(event) => updateDraft(event.currentTarget.value)} />
+              aria-describedby="turn-task-results-hint" onChange={(event) => updateDraft(event.currentTarget.value)} />
+            <p className="turn-status" id="turn-task-results-hint">
+              发送消息时，本项目已完成且尚未同步的关联任务成果节选（最多 4 项）会随本轮发送给研究模型。
+            </p>
           </div>
           <div className="form-actions">
             <button className="button primary" type="submit" disabled={loading || sending || stream !== null || !draft.trim()}>发送</button>

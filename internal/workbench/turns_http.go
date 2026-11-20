@@ -107,6 +107,13 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 			messages = append(messages, inference.Message{Role: "user", Content: previous[i].Text}, inference.Message{Role: "assistant", Content: previous[i].Answer})
 		}
 	}
+	if len(turn.TaskResults) != 0 {
+		results, err := c.store.turnTaskResultsContext(ctx, project.ProjectID, turn.TaskResults)
+		if err != nil {
+			return err
+		}
+		messages = append(messages, inference.Message{Role: "user", Content: results})
+	}
 	input, err := c.store.turnInput(turn)
 	if err != nil {
 		return err

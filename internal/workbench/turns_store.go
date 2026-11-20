@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at, references_json`
+const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at, references_json, task_results_json`
 
 var (
 	errTurnBusy         = errors.New("project already has a running turn")
@@ -18,16 +18,17 @@ var (
 )
 
 type Turn struct {
-	ordinal    int64
-	TurnID     string          `json:"turnId"`
-	RequestID  string          `json:"requestId"`
-	Text       string          `json:"text"`
-	Answer     string          `json:"answer"`
-	Status     string          `json:"status"`
-	Message    string          `json:"message,omitempty"`
-	AfterSeq   int64           `json:"afterSeq"`
-	CreatedAt  string          `json:"createdAt"`
-	References []TurnReference `json:"references,omitempty"`
+	ordinal     int64
+	TurnID      string           `json:"turnId"`
+	RequestID   string           `json:"requestId"`
+	Text        string           `json:"text"`
+	Answer      string           `json:"answer"`
+	Status      string           `json:"status"`
+	Message     string           `json:"message,omitempty"`
+	AfterSeq    int64            `json:"afterSeq"`
+	CreatedAt   string           `json:"createdAt"`
+	References  []TurnReference  `json:"references,omitempty"`
+	TaskResults []turnTaskResult `json:"taskResults,omitempty"`
 }
 
 type TurnEvent struct {
@@ -81,11 +82,15 @@ func recoverInterruptedTurns(tx *sql.Tx) error {
 
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var t Turn
-	var references []byte
-	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message, &t.AfterSeq, &t.CreatedAt, &references); err != nil {
+	var references, taskResults []byte
+	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message,
+		&t.AfterSeq, &t.CreatedAt, &references, &taskResults); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(references, &t.References); err != nil {
+		return Turn{}, err
+	}
+	if err := json.Unmarshal(taskResults, &t.TaskResults); err != nil {
 		return Turn{}, err
 	}
 	return t, nil
@@ -132,9 +137,19 @@ func (s *Store) beginTurn(ctx context.Context, projectID, requestID, text string
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
-	turn = Turn{TurnID: rand.Text(), RequestID: requestID, Text: text, References: references, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
-	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at, references_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, requestID, turn.Text, turn.Status, turn.CreatedAt, string(referenceJSON)).Scan(&turn.ordinal)
+	results, err := pendingTurnTaskResults(ctx, tx, projectID)
+	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
+	resultsJSON, err := json.Marshal(results)
+	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
+	turn = Turn{TurnID: rand.Text(), RequestID: requestID, Text: text, References: references, TaskResults: results,
+		Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at, references_json, task_results_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, requestID, turn.Text,
+		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON)).Scan(&turn.ordinal)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
@@ -181,6 +196,11 @@ func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent)
 		status = COALESCE(NULLIF(?, ''), status), message = ?, event_seq = ?
 		WHERE turn_id = ? AND status = 'RUNNING' RETURNING turn_id`, e.Text, e.Status, e.Message, seq, turnID).Scan(&storedID); err != nil {
 		return err
+	}
+	if e.Kind == "done" && e.Status == "COMPLETED" {
+		if err := syncTurnTaskResults(ctx, tx, turnID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

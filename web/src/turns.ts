@@ -3,8 +3,15 @@ import { request } from './projects'
 
 const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED'] as const
 export const turnReferenceLimit = 4
+const turnTaskResultLimit = 4
 export type TurnStatus = typeof statuses[number]
 export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'>
+
+interface TurnTaskResult {
+  taskId: string
+  sourceTurnId: string
+  instruction: string
+}
 
 export interface TurnInput {
   requestId: string
@@ -14,6 +21,7 @@ export interface TurnInput {
 
 export interface Turn extends Pick<TurnInput, 'requestId' | 'text'> {
   references?: TurnReference[]
+  taskResults?: TurnTaskResult[]
   turnId: string
   answer: string
   status: TurnStatus
@@ -44,6 +52,19 @@ export function isTurnReferences(value: unknown): value is TurnReference[] {
     && new Set(value.map((reference) => reference.materialId)).size === value.length
 }
 
+function isTurnTaskResult(value: unknown): value is TurnTaskResult {
+  const result = value as Partial<TurnTaskResult> | null
+  return !!result && typeof result.taskId === 'string' && !!result.taskId
+    && result.taskId !== '.' && result.taskId !== '..'
+    && typeof result.sourceTurnId === 'string' && !!result.sourceTurnId
+    && typeof result.instruction === 'string'
+}
+
+function isTurnTaskResults(value: unknown): value is TurnTaskResult[] {
+  return Array.isArray(value) && value.length <= turnTaskResultLimit && value.every(isTurnTaskResult)
+    && new Set(value.map((result) => result.taskId)).size === value.length
+}
+
 function isTurn(value: unknown): value is Turn {
   const turn = value as Partial<Turn> | null
   return !!turn && typeof turn.turnId === 'string' && typeof turn.requestId === 'string'
@@ -51,6 +72,7 @@ function isTurn(value: unknown): value is Turn {
     && turn.status !== undefined && statuses.includes(turn.status)
     && typeof turn.afterSeq === 'number' && typeof turn.createdAt === 'string'
     && (turn.references === undefined || isTurnReferences(turn.references))
+    && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
 }
 
 function isTurnPage(value: unknown): value is TurnPage {
