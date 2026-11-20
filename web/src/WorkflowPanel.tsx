@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import type { TemplateId } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
+import { initialCourseDraft, prepareCourse, WorkflowCourseOptions, WorkflowCourseSummary } from './WorkflowCourseOptions'
 import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
@@ -173,6 +174,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const isReview = templateId === 'literature_review'
   const isPaper = templateId === 'paper'
   const isTopic = templateId === 'topic'
+  const courseTemplate = templateId === 'course_paper' || templateId === 'course_report' ? templateId : null
   const isProposal = templateId === 'proposal'
   const title = {
     experiment: '实验工作流',
@@ -180,6 +182,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     paper: '论文写作工作流',
     topic: '研究选题工作流',
     proposal: '开题报告工作流',
+    course_paper: '课程论文工作流',
+    course_report: '课程报告工作流',
   }[templateId]
   const checkpointLabel = {
     experiment: '生成实验计划后，等待我确认再继续',
@@ -187,6 +191,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     paper: '生成大纲后，等待我确认再继续',
     topic: '入围后由我确认选题',
     proposal: '完成开题规划后由我确认',
+    course_paper: '完成课程写作规划后由我确认',
+    course_report: '完成课程写作规划后由我确认',
   }[templateId]
   const checkpointHint = {
     experiment: '确认实验计划后生成验收清单。',
@@ -194,6 +200,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     paper: '确认论文大纲后生成正文。',
     topic: '确认后继续本轮选题。',
     proposal: '确认开题规划后继续撰写',
+    course_paper: '确认课程写作规划后开始分节撰写。',
+    course_report: '确认课程写作规划后开始分节撰写。',
   }[templateId]
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
@@ -206,6 +214,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const [paperOutline, setPaperOutline] = useState('')
   const [topicRequirements, setTopicRequirements] = useState('')
   const [proposalDraft, setProposalDraft] = useState(initialProposalDraft)
+  const [courseDraft, setCourseDraft] = useState(() => initialCourseDraft(courseTemplate))
   const [throughStep, setThroughStep] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
@@ -273,7 +282,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const invalidRequirements = isTopic && (new TextEncoder().encode(requirements).length > topicRequirementsLimit
     || requirements.includes('\0'))
   const proposal = isProposal ? prepareProposal(proposalDraft) : undefined
-  const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false
+  const course = courseTemplate ? prepareCourse(courseTemplate, courseDraft) : undefined
+  const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false || course?.valid === false
   const currentRun = useEffectEvent(() => run)
 
   useEffect(() => {
@@ -377,6 +387,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             paper: isPaper ? { language: paperLanguage, outline } : undefined,
             topic: isTopic ? { requirements: requirements || undefined } : undefined,
             proposal: proposal?.options,
+            course: course?.options,
             throughStep: endStep || undefined,
           } }
         } else if (kind === 'rerun') {
@@ -415,7 +426,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       setRerunTarget(null)
       setCancelTarget(null)
       setThroughStep('')
-      if (attempt.kind === 'start') setCheckpoints(false)
+      if (attempt.kind === 'start') {
+        setCheckpoints(false)
+        if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
+      }
       if (attempt.kind === 'accept') setFeedback('已将所选稿件验收为步骤成果。')
       if (attempt.kind === 'skip') setFeedback('已跳过该步骤。')
       if (attempt.kind === 'select-topic') setFeedback('选题已确认。')
@@ -471,6 +485,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
       {run && <WorkflowProposalSummary run={run} />}
+      {run && <WorkflowCourseSummary run={run} />}
       {run?.workflowKey === 'proposal-v2' && <p className="workflow-note">正文各节分别保存。本轮可从未完成的一节继续。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} rerun={{
         selected: selectedRerun?.stepKey,
@@ -511,6 +526,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {modelUnavailable && <p className="workflow-note">请配置研究模型，然后刷新工作流状态。</p>}
       {(canStart || canCancel || readError || modelUnavailable) && (
         <div className="workflow-controls">
+          {canStart && courseTemplate && course && <WorkflowCourseOptions projectId={projectId} templateId={courseTemplate}
+            draft={courseDraft} errors={course.errors} disabled={actionDisabled || retryStart !== null} onChange={setCourseDraft} />}
           {canStart && proposal && <WorkflowProposalOptions draft={proposalDraft} errors={proposal.errors}
             disabled={actionDisabled || retryStart !== null} onChange={setProposalDraft} />}
           {canStart && isTopic && <div className="field workflow-topic-requirements">
@@ -549,7 +566,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           </>}
           {firstStep && lastStep && <div className="field">
             <label htmlFor={`${headingId}-through-step`}>本次终点（可选）</label>
-            <select id={`${headingId}-through-step`} value={endStep} disabled={actionDisabled}
+            <select id={`${headingId}-through-step`} value={endStep} disabled={actionDisabled || (!!courseTemplate && !!retryStart)}
               aria-describedby={`${headingId}-range-help`} onChange={(event) => {
                 setThroughStep(event.currentTarget.value)
                 setRetry(null)
@@ -578,11 +595,15 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           {canPause && <p className="workflow-note" id={`${headingId}-pause-help`}>
             暂停会停止当前步骤，继续时将重新执行该步骤。
           </p>}
+          {canStart && courseTemplate && <p id={`${headingId}-course-model`} className="workflow-note">
+            启动后，补充要求、所选资料的文字节选和本轮文献元数据会发送给研究模型。
+          </p>}
           <div className="workflow-actions">
             {canStart && (
               <button className="button primary" type="button"
                 disabled={invalidStart || (actionDisabled && pending !== 'start')}
-                aria-disabled={pending === 'start'} onClick={() => void submit('start')}>
+                aria-disabled={pending === 'start'} aria-describedby={courseTemplate ? `${headingId}-course-model` : undefined}
+                onClick={() => void submit('start')}>
                 {pending === 'start' ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>
             )}
@@ -633,6 +654,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         renderSteps={(historicalRun) => <>
           <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
           <WorkflowProposalSummary run={historicalRun} />
+          <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSteps projectId={projectId} run={historicalRun} />
         </>} />
     </section>

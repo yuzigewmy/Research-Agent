@@ -105,6 +105,66 @@ export interface ProposalOptions extends Partial<ProposalTargets> {
   requirements?: string
 }
 
+export const courseDisciplineLabels = {
+  auto: '自动判断',
+  computing: '计算机与信息技术',
+  humanities: '人文与社会科学',
+  business: '经济与管理',
+  engineering: '工程与技术',
+} as const
+
+export const courseMethodLabels = {
+  auto: '自动判断',
+  experiment: '实验研究',
+  modeling: '建模',
+  simulation: '仿真',
+  clinical: '临床研究',
+  regression: '回归分析',
+  survey: '问卷调查',
+  qualitative: '质性研究',
+  textual: '文本分析',
+  mixed: '混合方法',
+} as const
+
+export const courseReportTypeLabels = {
+  auto: '自动判断',
+  project: '项目报告',
+  experiment: '实验报告',
+  survey: '调研报告',
+  literature: '文献报告',
+} as const
+
+export const courseCharacterMin = 1_000
+export const courseCharacterMax = 30_000
+export const courseRequirementsLimit = 4 * 1024
+export const courseMaterialLimit = 4
+
+export interface CourseProfile {
+  language: 'zh'
+  targetCharacters: number
+  discipline: keyof typeof courseDisciplineLabels
+  method?: keyof typeof courseMethodLabels
+  reportType?: keyof typeof courseReportTypeLabels
+}
+
+export type CourseOptions = Partial<Omit<CourseProfile, 'language'>> & {
+  requirements?: string
+  materialIds?: string[]
+}
+
+interface CourseMaterial {
+  materialId: string
+  name: string
+  sha256: string
+  format?: 'word'
+}
+
+export interface CourseSettings extends CourseProfile {
+  requirements?: string
+  materialIds?: string[]
+  materials?: CourseMaterial[]
+}
+
 export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
@@ -117,6 +177,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   acceptedArtifactId?: string
   topicChoice?: WorkflowTopicChoiceData
   proposal?: ProposalTargets
+  course?: CourseSettings
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -134,6 +195,7 @@ export interface StartWorkflowInput {
   paper?: { language: 'zh' | 'en'; outline?: string }
   topic?: { requirements?: string }
   proposal?: ProposalOptions
+  course?: CourseOptions
   throughStep?: string
 }
 
@@ -258,6 +320,35 @@ function isProposalTargets(value: unknown): value is ProposalTargets {
     && targets.targetSources >= 1 && targets.targetSources <= 80
 }
 
+function hasLabel(labels: Record<string, string>, key: unknown) {
+  return typeof key === 'string' && Object.hasOwn(labels, key)
+}
+
+export function isCourseProfile(value: unknown): value is CourseProfile {
+  const profile = value as Partial<CourseProfile> | null
+  return !!profile && profile.language === 'zh'
+    && typeof profile.targetCharacters === 'number' && Number.isInteger(profile.targetCharacters)
+    && profile.targetCharacters >= courseCharacterMin && profile.targetCharacters <= courseCharacterMax
+    && hasLabel(courseDisciplineLabels, profile.discipline)
+    && (profile.method === undefined || hasLabel(courseMethodLabels, profile.method))
+    && (profile.reportType === undefined || hasLabel(courseReportTypeLabels, profile.reportType))
+}
+
+function isCourseMaterial(value: unknown): value is CourseMaterial {
+  const material = value as Partial<CourseMaterial> | null
+  return !!material && isPathId(material.materialId) && typeof material.name === 'string' && material.name.length > 0
+    && typeof material.sha256 === 'string' && /^[a-f\d]{64}$/i.test(material.sha256)
+    && (material.format === undefined || material.format === 'word')
+}
+
+function isCourseSettings(value: unknown): value is CourseSettings {
+  if (!isCourseProfile(value)) return false
+  const { requirements, materialIds, materials } = value as CourseSettings
+  return (requirements === undefined || typeof requirements === 'string')
+    && (materialIds === undefined || (Array.isArray(materialIds) && materialIds.every(isPathId)))
+    && (materials === undefined || (Array.isArray(materials) && materials.every(isCourseMaterial)))
+}
+
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
@@ -271,6 +362,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.skipStepKey === undefined || run.steps.some((step) => step.key === run.skipStepKey))
     && (run.topicChoice === undefined || isTopicChoice(run.topicChoice))
     && (run.proposal === undefined || isProposalTargets(run.proposal))
+    && (run.course === undefined || isCourseSettings(run.course))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 

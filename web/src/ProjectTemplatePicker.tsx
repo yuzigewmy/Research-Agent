@@ -1,6 +1,7 @@
 import { isTemplateId, templates } from './projects'
 import type { TemplateId } from './projects'
 import type { ProjectTemplate, TemplateDefaults } from './projectTemplates'
+import { courseDisciplineLabels, courseMethodLabels, courseReportTypeLabels } from './workflow'
 import './workflow.css'
 
 interface TemplatePickerProps {
@@ -27,6 +28,12 @@ function defaultSettings(defaults: TemplateDefaults) {
       ['目标正文字数', `${targetCharacters} 字`],
       ['目标文献数', `${targetSources} 条`],
     )
+  }
+  if (defaults.course) {
+    const { targetCharacters, discipline, method, reportType } = defaults.course
+    fields.push(['稿件语言', '中文'], ['目标正文字数', `${targetCharacters} 字`], ['学科方向', courseDisciplineLabels[discipline]])
+    if (method) fields.push(['研究方法', courseMethodLabels[method]])
+    if (reportType) fields.push(['报告类型', courseReportTypeLabels[reportType]])
   }
   if (defaults.maxRounds !== undefined) fields.push(['最多审稿轮次', `${defaults.maxRounds} 轮`])
   if (defaults.targetScore !== undefined) fields.push(['目标分数', `${defaults.targetScore} 分`])

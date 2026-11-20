@@ -33,6 +33,7 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 				Language         string
 				TargetPaperCount int
 				Proposal         *proposalTargets
+				Course           *courseSettings
 				MaxRounds        int
 				TargetScore      int
 			}
@@ -60,7 +61,8 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 			}
 		}
 	}
-	if want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review"}; !slices.Equal(ids, want) {
+	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report"}
+	if !slices.Equal(ids, want) {
 		t.Fatalf("unexpected available templates: %v", ids)
 	}
 	items := catalog.Items
@@ -70,5 +72,10 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 		items[5].Revision != experimentWorkflow || !items[5].Steps[2].Optional || items[6].Kind != "review" ||
 		items[6].Defaults.MaxRounds != defaultReviewRounds || items[6].Defaults.TargetScore != defaultReviewScore {
 		t.Fatal("template defaults or checkpoints differ from the saved workflows")
+	}
+	paper, report := items[7].Defaults.Course, items[8].Defaults.Course
+	if paper == nil || paper.TargetCharacters != 8000 || paper.Language != "zh" || paper.Method != "auto" ||
+		report == nil || report.TargetCharacters != 10000 || report.Language != "zh" || report.ReportType != "auto" {
+		t.Fatalf("wrong coursework defaults: paper=%+v report=%+v", paper, report)
 	}
 }

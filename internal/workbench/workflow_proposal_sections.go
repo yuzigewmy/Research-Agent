@@ -72,11 +72,15 @@ func (s *Store) sectionedProposalResult(ctx context.Context, model *inference.Cl
 	if err != nil {
 		return taskResult{}, err
 	}
+	return checkedWorkflowSection(markdown, section.title, sources)
+}
+
+func checkedWorkflowSection(markdown, title string, sources []reviewSource) (taskResult, error) {
 	if err := checkWorkflowCitations(markdown, sources, false); err != nil {
 		return taskResult{}, workflowOutputError{err}
 	}
 	body := strings.TrimSpace(markdown)
-	body = strings.TrimSpace(strings.TrimPrefix(body, "## "+section.title+"\n"))
+	body = strings.TrimSpace(strings.TrimPrefix(body, "## "+title+"\n"))
 	if body == "" {
 		return taskResult{}, workflowOutputError{errors.New("此节缺少正文。")}
 	}
@@ -85,19 +89,22 @@ func (s *Store) sectionedProposalResult(ctx context.Context, model *inference.Cl
 			return taskResult{}, workflowOutputError{errors.New("此节正文中的小标题须从三级开始。")}
 		}
 	}
-	return taskResult{markdown: "## " + section.title + "\n\n" + body + "\n"}, nil
+	return taskResult{markdown: "## " + title + "\n\n" + body + "\n"}, nil
 }
 
 func (s *Store) currentProposalSections(ctx context.Context, projectID, runID string, before int) ([]string, error) {
-	end := min(before, firstProposalSection+len(proposalSections))
+	return s.workflowSectionBodies(ctx, projectID, runID, firstProposalSection, min(before, firstProposalSection+len(proposalSections)))
+}
+
+func (s *Store) workflowSectionBodies(ctx context.Context, projectID, runID string, first, end int) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT markdown FROM tasks WHERE project_id = ? AND workflow_run_id = ?
 		AND workflow_step >= ? AND workflow_step < ? AND status = 'SUCCEEDED' AND workflow_superseded = 0 ORDER BY workflow_step`,
-		projectID, runID, firstProposalSection, end)
+		projectID, runID, first, end)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	sections := make([]string, 0, end-firstProposalSection)
+	sections := make([]string, 0, end-first)
 	for rows.Next() {
 		var markdown string
 		if err := rows.Scan(&markdown); err != nil {
@@ -108,7 +115,7 @@ func (s *Store) currentProposalSections(ctx context.Context, projectID, runID st
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(sections) != end-firstProposalSection {
+	if len(sections) != end-first {
 		return nil, sql.ErrNoRows
 	}
 	return sections, nil
@@ -121,10 +128,15 @@ func (s *Store) assembleProposal(ctx context.Context, project Project, task Task
 	}
 	var manuscript strings.Builder
 	fmt.Fprintf(&manuscript, "# %s：开题报告\n\n", strings.Join(strings.Fields(project.Title), " "))
+	manuscript.WriteString(strings.Join(sections, "\n"))
+	manuscript.WriteByte('\n')
+	appendCitedWorkflowReferences(&manuscript, sections, sources)
+	return taskResult{markdown: manuscript.String()}, nil
+}
+
+func appendCitedWorkflowReferences(manuscript *strings.Builder, sections []string, sources []reviewSource) {
 	cited := make(map[string]bool)
 	for _, markdown := range sections {
-		manuscript.WriteString(markdown)
-		manuscript.WriteByte('\n')
 		for _, line := range proposalLines(markdown) {
 			for _, match := range reviewCitation.FindAllStringSubmatch(line, -1) {
 				cited[match[1]] = true
@@ -137,8 +149,7 @@ func (s *Store) assembleProposal(ctx context.Context, project Project, task Task
 	}
 	for _, source := range sources {
 		if cited[source.Key] {
-			fmt.Fprintf(&manuscript, "- [@%s] %s。DOI `%s`\n", source.Key, strings.Join(strings.Fields(source.Title), " "), source.DOI)
+			fmt.Fprintf(manuscript, "- [@%s] %s。DOI `%s`\n", source.Key, strings.Join(strings.Fields(source.Title), " "), source.DOI)
 		}
 	}
-	return taskResult{markdown: manuscript.String()}, nil
 }

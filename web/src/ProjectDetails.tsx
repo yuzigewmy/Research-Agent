@@ -140,7 +140,8 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)} />
       <SurveyPanel projectId={project.projectId} />
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
-        || project.templateId === 'topic' || project.templateId === 'proposal') && <LiteraturePanel projectId={project.projectId} />}
+        || project.templateId === 'topic' || project.templateId === 'proposal'
+        || project.templateId === 'course_paper' || project.templateId === 'course_report') && <LiteraturePanel projectId={project.projectId} />}
       {project.templateId !== 'freeform' && project.templateId !== 'automatic_review' &&
         <WorkflowPanel projectId={project.projectId} templateId={project.templateId} refreshVersion={workflowRefresh}
           onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}

@@ -105,6 +105,7 @@ type WorkflowRun struct {
 	SkipStepKey       string           `json:"skipStepKey,omitempty"`
 	TopicChoice       *topicChoice     `json:"topicChoice,omitempty"`
 	Proposal          *proposalTargets `json:"proposal,omitempty"`
+	Course            *courseSettings  `json:"course,omitempty"`
 	step              int
 	rangeStart        int
 	rangeEnd          int
@@ -137,6 +138,7 @@ type workflowRequest struct {
 	Paper            *paperOptions    `json:"paper"`
 	Topic            *topicOptions    `json:"topic"`
 	Proposal         *proposalOptions `json:"proposal"`
+	Course           *courseOptions   `json:"course"`
 	sourceTurnID     string
 	workflowKey      string
 }
@@ -164,9 +166,15 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	if err != nil {
 		return WorkflowRun{}, err
 	}
-	if isProposalWorkflow(run.WorkflowKey) {
+	switch {
+	case isProposalWorkflow(run.WorkflowKey):
 		run.Proposal = new(proposalTargets)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Proposal); err != nil {
+			return WorkflowRun{}, err
+		}
+	case isCourseWorkflow(run.WorkflowKey):
+		run.Course = new(courseSettings)
+		if err := json.Unmarshal([]byte(run.optionsJSON), run.Course); err != nil {
 			return WorkflowRun{}, err
 		}
 	}
@@ -261,7 +269,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if key == "" {
 		return WorkflowRun{}, false, errWorkflowState
 	}
-	options, target, err := workflowStartSettings(key, action, req)
+	options, target, err := workflowStartSettings(ctx, tx, projectID, key, action, req)
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
@@ -383,7 +391,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	switch action {
 	case workflowStart:
 		evidence := "[]"
-		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || isProposalWorkflow(key) {
+		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || isProposalWorkflow(key) || isCourseWorkflow(key) {
 			limit := target
 			if limit == 0 {
 				limit = defaultReviewTarget

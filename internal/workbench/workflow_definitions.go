@@ -99,5 +99,7 @@ var workflowStages = map[string][]workflowStage{
 		{key: "defense", title: "准备开题答辩", prompt: proposalDefensePrompt, acceptMarkdown: true},
 		{key: "check", title: "核对开题交付"},
 	},
-	proposalWorkflow: sectionedProposalStages(),
+	proposalWorkflow:     sectionedProposalStages(),
+	coursePaperWorkflow:  courseStages(coursePaperWorkflow),
+	courseReportWorkflow: courseStages(courseReportWorkflow),
 }

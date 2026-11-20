@@ -26,6 +26,7 @@ type projectTemplateDefaults struct {
 	Language         string           `json:"language,omitempty"`
 	TargetPaperCount int              `json:"targetPaperCount,omitempty"`
 	Proposal         *proposalTargets `json:"proposal,omitempty"`
+	Course           *courseSettings  `json:"course,omitempty"`
 	MaxRounds        int              `json:"maxRounds,omitempty"`
 	TargetScore      int              `json:"targetScore,omitempty"`
 }
@@ -55,6 +56,12 @@ var projectTemplates = []projectTemplate{
 		Summary:      "审查已保存的 Markdown 稿件，按授权修订副本并复审。",
 		Deliverables: []string{"逐轮评分和意见", "各轮审稿稿件", "多轮审稿报告"},
 		Defaults:     projectTemplateDefaults{MaxRounds: defaultReviewRounds, TargetScore: defaultReviewScore}},
+	{ID: "course_paper", Label: "课程论文", Revision: coursePaperWorkflow, Kind: "workflow",
+		Summary:      "围绕课程论题组织研究方法、证据与分析，按章节撰写中文论文。",
+		Deliverables: []string{"写作规划", "分节稿件与汇编稿", "交付核对报告", "可编辑 Word（启用导出组件后）"}},
+	{ID: "course_report", Label: "课程报告", Revision: courseReportWorkflow, Kind: "workflow",
+		Summary:      "先梳理材料中的事实，再按课程任务撰写实施过程、观察结果和反思。",
+		Deliverables: []string{"材料核对单", "写作规划", "分节稿件与汇编稿", "交付核对报告", "可编辑 Word（启用导出组件后）"}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {
@@ -86,9 +93,13 @@ func listProjectTemplates(w http.ResponseWriter, _ *http.Request) {
 		if template.Kind == "workflow" {
 			template.Defaults.Checkpoints = new(bool)
 		}
-		if template.ID == "proposal" {
+		switch {
+		case template.ID == "proposal":
 			defaults := defaultProposalTargets()
 			template.Defaults.Proposal = &defaults
+		case isCourseWorkflow(template.Revision):
+			defaults := defaultCourseSettings(template.Revision)
+			template.Defaults.Course = &defaults
 		}
 		for index, stage := range stages {
 			step := projectTemplateStep{workflowStepDefinition: workflowStepDefinition{Key: stage.key, Title: stage.title},

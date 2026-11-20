@@ -1,6 +1,8 @@
 package workbench
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -23,7 +25,17 @@ type paperOptions struct {
 	Outline  string `json:"outline,omitempty"`
 }
 
-func workflowStartSettings(key, action string, req workflowRequest) (string, int, error) {
+func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, action string, req workflowRequest) (string, int, error) {
+	if isCourseWorkflow(key) && action == workflowStart {
+		if req.Paper != nil || req.Topic != nil || req.Proposal != nil || req.TargetPaperCount != 0 {
+			return "", 0, errCourseOptions
+		}
+		options, err := freezeCourseSettings(ctx, tx, projectID, key, req.Course)
+		return options, 0, err
+	}
+	if req.Course != nil {
+		return "", 0, errCourseOptions
+	}
 	if isProposalWorkflow(key) && action == workflowStart {
 		if req.Paper != nil || req.Topic != nil {
 			return "", 0, errProposalOptions
