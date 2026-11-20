@@ -5,6 +5,7 @@ export const templates = {
   literature_review: '文献综述',
   paper: '论文写作',
   experiment: '实验计划',
+  automatic_review: '多轮审稿',
 } as const
 
 export type TemplateId = keyof typeof templates

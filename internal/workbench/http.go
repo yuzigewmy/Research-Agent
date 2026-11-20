@@ -111,7 +111,7 @@ func isLoopbackHost(host string) bool {
 }
 
 func validProjectTemplate(id string) bool {
-	return id == "freeform" || projectWorkflows[id] != ""
+	return id == "freeform" || id == "automatic_review" || projectWorkflows[id] != ""
 }
 
 func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {

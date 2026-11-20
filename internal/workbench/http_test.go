@@ -83,4 +83,11 @@ func TestProjectCreationSurvivesReopening(t *testing.T) {
 	if replayed != created || fetched != created || len(page.Items) != 1 || page.Items[0] != created {
 		t.Fatalf("unexpected state after reopening: replay=%+v fetched=%+v items=%+v", replayed, fetched, page.Items)
 	}
+
+	var review Project
+	request(http.MethodPost, collection, `{"requestId":"review","title":"River manuscript","templateId":"automatic_review"}`, http.StatusCreated, &review)
+	request(http.MethodGet, collection+"/"+review.ProjectID, "", http.StatusOK, &fetched)
+	if review.TemplateID != "automatic_review" || fetched != review {
+		t.Fatalf("unexpected automatic review project: created=%+v fetched=%+v", review, fetched)
+	}
 }

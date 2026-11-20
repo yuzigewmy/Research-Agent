@@ -131,11 +131,12 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       <SurveyPanel projectId={project.projectId} />
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
         || project.templateId === 'topic' || project.templateId === 'proposal') && <LiteraturePanel projectId={project.projectId} />}
-      {project.templateId !== 'freeform' &&
+      {project.templateId !== 'freeform' && project.templateId !== 'automatic_review' &&
         <WorkflowPanel projectId={project.projectId} templateId={project.templateId} refreshVersion={workflowRefresh}
           onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
       <TaskPanel projectId={project.projectId} sync={taskSync} />
-      <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths} />
+      <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
+        manuscriptIntake={project.templateId === 'automatic_review'} />
       <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
         onClearReferences={clearReferences} onWorkflowConfirmed={() => setWorkflowRefresh((version) => version + 1)}
         taskSync={taskSync} />

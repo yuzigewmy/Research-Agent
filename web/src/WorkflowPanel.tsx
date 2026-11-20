@@ -166,7 +166,7 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
 
 export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0 }: {
   projectId: string
-  templateId: Exclude<TemplateId, 'freeform'>
+  templateId: Exclude<TemplateId, 'freeform' | 'automatic_review'>
   onManuscriptSaved: (path: string) => void
   refreshVersion?: number
 }) {

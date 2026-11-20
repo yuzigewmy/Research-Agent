@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { ComponentProps, FormEvent } from 'react'
+import type { ChangeEvent, ComponentProps, FormEvent } from 'react'
 import { ManuscriptReview } from './ManuscriptReview'
 import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
@@ -11,6 +11,21 @@ import './workspace.css'
 
 const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
 const encoder = new TextEncoder()
+const markdownExtension = /\.(md|markdown)$/i
+const manuscriptSizeLimit = 64 * 1024
+
+async function readManuscript(file: File) {
+  let content: string
+  try {
+    // Keep a UTF-8 BOM as part of the original text and reject invalid bytes.
+    content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer())
+  } catch {
+    throw new ProjectApiError('无法读取稿件，请选择 UTF-8 编码的 Markdown 文件。', 400)
+  }
+  if (!content.trim()) throw new ProjectApiError('稿件为空，请选择有内容的 Markdown 文件。', 400)
+  if (content.includes('\0')) throw new ProjectApiError('稿件包含空字符，请检查文件内容。', 400)
+  return content
+}
 
 // The textarea uses LF even when a saved line ending occupies two code units.
 function savedOffset(source: string, offset: number) {
@@ -111,7 +126,7 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
     {document.content
       ? <pre className="workspace-text" tabIndex={0} aria-label="版本内容" dir="auto">{document.content}</pre>
       : <p className="workspace-note">此版本为空文件。</p>}
-    {!isCurrent && document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
+    {!isCurrent && document.content.trim() && markdownExtension.test(document.path) && <>
       <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
       <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256}
         revisionActions={revisionActions} initialFinding={initialFinding} />
@@ -159,21 +174,22 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore, select
   </div>
 }
 
-type Destination = { kind: 'open' | 'create'; path: string }
+type Destination = { kind: 'open' | 'create'; path: string } | { kind: 'import'; path: string; file: File }
 type Operation = Destination['kind'] | 'save' | 'reload' | 'restore'
 
+const destinationLabel = { open: '打开', create: '创建', import: '导入' }
 const progress: Record<Operation, string> = {
-  open: '正在打开文件…', create: '正在创建文件…', save: '正在保存…',
-  reload: '正在重新加载…', restore: '正在恢复版本…',
+  open: '正在打开文件…', create: '正在创建文件…', import: '正在导入稿件…',
+  save: '正在保存…', reload: '正在重新加载…', restore: '正在恢复版本…',
 }
 
-type WorkspaceProps = { projectId: string; publishedPaths: string[] }
+type WorkspaceProps = { projectId: string; publishedPaths: string[]; manuscriptIntake?: boolean }
 
 export function WorkspacePanel(props: WorkspaceProps) {
   return <ProjectWorkspace key={props.projectId} {...props} />
 }
 
-function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
+function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake }: WorkspaceProps) {
   const id = useId()
   const load = useCallback((signal: AbortSignal, cursor?: string) => listFiles(projectId, signal, cursor), [projectId])
   const page = useFilePage(load, 'path')
@@ -194,6 +210,7 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   const operation = useRef<AbortController | null>(null)
   const editor = useRef<HTMLTextAreaElement>(null)
   const discardPrompt = useRef<HTMLDivElement>(null)
+  const manuscriptInput = useRef<HTMLInputElement>(null)
   const currentPath = document?.path
   const dirty = document !== undefined && draft !== document.content
   const locked = !!busy || applying
@@ -259,20 +276,21 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
       const next = await send(requestSignal(controller))
       if (controller.signal.aborted) return
       loadDocument(next)
-      if (kind === 'open' || kind === 'create') {
+      if (kind === 'open' || kind === 'create' || kind === 'import') {
         setHistory(false)
         setHistoryVersion(undefined)
         setHistoryFinding(undefined)
       }
-      if (kind === 'create') {
-        setCreatedPaths((paths) => [next.path, ...paths])
+      if (kind === 'create' || kind === 'import') {
+        setCreatedPaths((paths) => paths.includes(next.path) ? paths : [next.path, ...paths])
         setCreating(false)
         setName('')
       }
     } catch (error) {
       if (controller.signal.aborted) return
       if (error instanceof ProjectApiError && error.status === 409 && error.code === 'REVISION_CONFLICT') {
-        if (kind === 'create') setError('此路径已有文件，请选择其他路径。')
+        if (kind === 'import') setError('同名稿件已存在，请更换文件名后重新导入。')
+        else if (kind === 'create') setError('此路径已有文件，请选择其他路径。')
         else setConflict(true)
       } else setError(errorMessage(error))
     } finally {
@@ -281,10 +299,14 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
     }
   }
 
-  function goTo({ kind, path }: Destination) {
-    void run(kind, (signal) => kind === 'open'
-      ? readText(projectId, path, signal)
-      : saveText(projectId, path, '', '', signal))
+  function goTo(next: Destination) {
+    const { kind, path } = next
+    void run(kind, async (signal) => {
+      if (kind === 'open') return readText(projectId, path, signal)
+      const content = kind === 'import' ? await readManuscript(next.file) : ''
+      signal.throwIfAborted()
+      return saveText(projectId, path, content, '', signal)
+    })
   }
 
   function requestDestination(next: Destination) {
@@ -301,6 +323,28 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
     if (name.trim()) requestDestination({ kind: 'create', path: name })
   }
 
+  function importManuscript(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file || operation.current || applying || !manuscriptIntake) return
+
+    setDestination(undefined)
+    if (!markdownExtension.test(file.name)) {
+      setError('请选择 .md 或 .markdown 稿件。')
+      return
+    }
+    if (/[\\/:\p{Cc}]/u.test(file.name)) {
+      setError('稿件文件名包含无效字符，请更换文件名。')
+      return
+    }
+    if (file.size > manuscriptSizeLimit) {
+      setError('单篇稿件不能超过 64 KiB。')
+      return
+    }
+    setError('')
+    requestDestination({ kind: 'import', path: `paper/${file.name}`, file })
+  }
+
   function restore(versionId: string) {
     if (!document || dirty || conflict || versionId === document.versionId) return
     void run('restore', (signal) => restoreVersion(projectId, versionId, document.sha256, signal))
@@ -309,12 +353,22 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
   return <section className="workspace-panel" id="project-workspace" aria-labelledby={id}>
     <div className="workspace-heading">
       <h4 id={id}>文本工作区</h4>
-      <button className="button outline" type="button" aria-expanded={creating} aria-controls={`${id}-create`}
-        onClick={() => {
-          if (creating && destination?.kind === 'create') setDestination(undefined)
-          setCreating(!creating)
-        }} disabled={locked}>{creating ? '取消新建' : '新建文件'}</button>
+      <div className="workspace-actions">
+        {manuscriptIntake && <>
+          <input ref={manuscriptInput} type="file" accept=".md,.markdown" hidden onChange={importManuscript} />
+          <button className="button outline" type="button" disabled={locked} aria-describedby={`${id}-import-hint`}
+            onClick={() => manuscriptInput.current?.click()}>导入审稿稿件</button>
+        </>}
+        <button className="button outline" type="button" aria-expanded={creating} aria-controls={`${id}-create`}
+          onClick={() => {
+            if (creating && destination?.kind === 'create') setDestination(undefined)
+            setCreating(!creating)
+          }} disabled={locked}>{creating ? '取消新建' : '新建文件'}</button>
+      </div>
     </div>
+    {manuscriptIntake && <p id={`${id}-import-hint`} className="workspace-note">
+      导入 UTF-8 编码的 .md 或 .markdown 文件，单篇不超过 64 KiB。
+    </p>}
     <div id={`${id}-create`} hidden={!creating}>
       {creating && <form className="field" onSubmit={create}>
         <label htmlFor={`${id}-name`}>文件路径</label>
@@ -340,17 +394,19 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
       ))}
     </ul>}
     <PageControls page={page} label="文件" />
-    {!page.loading && !page.error && !paths.length && <p className="workspace-note">暂无文本文件，可新建文件开始编辑。</p>}
+    {!page.loading && !page.error && !paths.length && <p className="workspace-note">
+      {manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
+    </p>}
     {destination && <div className="workspace-discard" ref={discardPrompt} tabIndex={-1}
       role="group" aria-label="处理未保存的修改">
-      <p>当前有未保存的修改。{destination.kind === 'create' ? '创建' : '打开'} <bdi>{destination.path}</bdi> 前，请先保存或放弃草稿。</p>
+      <p>当前有未保存的修改。{destinationLabel[destination.kind]} <bdi>{destination.path}</bdi> 前，请先保存或放弃草稿。</p>
       <div className="workspace-actions">
         <button className="button outline" type="button" onClick={() => {
           setDestination(undefined)
           editor.current?.focus()
         }}>继续编辑</button>
         <button className="button outline" type="button" onClick={() => goTo(destination)}>
-          {destination.kind === 'create' ? '放弃草稿并创建' : '放弃草稿并打开'}
+          放弃草稿并{destinationLabel[destination.kind]}
         </button>
       </div>
     </div>}
@@ -379,7 +435,7 @@ function ProjectWorkspace({ projectId, publishedPaths }: WorkspaceProps) {
         <button className="button outline" type="button" aria-expanded={history} aria-controls={`${id}-history`}
           disabled={applying} onClick={() => setHistory((value) => !value)}>版本历史</button>
       </div>
-      {document.content.trim() && /\.(md|markdown)$/i.test(document.path) && <>
+      {document.content.trim() && markdownExtension.test(document.path) && <>
         <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
           disabled={locked || dirty || conflict} onApplying={setApplying} onApplied={loadDocument} />
         <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
