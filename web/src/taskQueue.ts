@@ -2,6 +2,7 @@ import { request } from './projects'
 
 export const queueTaskKindLabels = {
   plan: '研究计划',
+  'manuscript-check': '只读稿件检查',
   workflow: '工作流步骤',
   review: '稿件审查',
   'automatic-review': '多轮审稿',

@@ -26,6 +26,7 @@ export interface Task {
   revision: number
   status: TaskStatus
   createdAt: string
+  kind?: 'manuscript-check'
   message?: string
   inputs?: TaskInputVersion[]
   sourceTurnId?: string
@@ -52,6 +53,11 @@ interface ActionInput {
 export const taskInstructionLimit = 8_192
 export const taskInputLimit = 4
 
+export function isMarkdownTaskPath(path: string) {
+  const lower = path.toLowerCase()
+  return lower.endsWith('.md') || lower.endsWith('.markdown')
+}
+
 export function isTaskActive(status: TaskStatus) {
   return status === 'QUEUED' || status === 'RUNNING' || status === 'CANCELLING'
 }
@@ -71,10 +77,12 @@ function isTask(value: unknown): value is Task {
     && typeof task.revision === 'number' && Number.isSafeInteger(task.revision) && task.revision >= 1
     && typeof task.status === 'string' && Object.hasOwn(taskStatusLabels, task.status)
     && typeof task.createdAt === 'string' && Number.isFinite(Date.parse(task.createdAt))
+    && (task.kind === undefined || task.kind === 'manuscript-check')
     && (task.message === undefined || typeof task.message === 'string')
     && (task.sourceTurnId === undefined || (typeof task.sourceTurnId === 'string' && task.sourceTurnId.length > 0))
     && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
       && task.inputs.every(isTaskInputVersion)))
+    && (task.kind !== 'manuscript-check' || (task.inputs?.length === 1 && isMarkdownTaskPath(task.inputs[0].path)))
 }
 
 function isTaskPage(value: unknown): value is TaskPage {

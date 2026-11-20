@@ -56,7 +56,7 @@ func TestSelectionEditAppliesOnceToItsSavedVersion(t *testing.T) {
 	if err != nil || !created || queued.Original != selected {
 		t.Fatalf("queue returned %+v, %t, %v", queued, created, err)
 	}
-	task, err := store.claimQueuedTask(ctx, project.ProjectID)
+	task, err := store.claimQueuedTask(ctx, project.ProjectID, true)
 	if err != nil || !task.selectionEdit || task.TaskID != queued.EditID {
 		t.Fatalf("claim returned %+v, %v", task, err)
 	}

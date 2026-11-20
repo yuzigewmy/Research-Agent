@@ -37,42 +37,49 @@ type sendTurnInput struct {
 	Mode         string              `json:"mode"`
 }
 
-var researchTaskTool = inference.Tool{
-	Name:        "propose_research_task",
-	Description: "当用户明确要求拟定研究计划时，提出一张待用户确认的任务卡。任务产出为 Markdown 计划。写明研究范围、拟使用的资料和预期成果。",
-	Parameters:  json.RawMessage(`{"type":"object","properties":{"instruction":{"type":"string","description":"研究任务说明，包含范围、输入和交付物"}},"required":["instruction"],"additionalProperties":false}`),
-}
-
 type turnProposal struct {
 	instruction string
 	workflow    *workflowProposalRecord
+	checkInput  *taskInput
 }
 
-func proposalTool(options *workflowProposalRecord) (inference.Tool, error) {
-	if options == nil {
-		return researchTaskTool, nil
+func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput) (inference.Tool, error) {
+	properties := map[string]any{
+		"instruction": map[string]string{"type": "string", "description": "任务范围、输入和交付要求"},
 	}
-	ends := make([]string, 0, len(options.Steps))
-	for _, step := range options.Steps {
-		ends = append(ends, step.Key)
+	if steps := workflow.runnableSteps(); len(steps) != 0 {
+		ends := make([]string, 0, len(steps))
+		for _, step := range steps {
+			ends = append(ends, step.Key)
+		}
+		properties["throughStep"] = map[string]any{
+			"type": "string", "enum": ends, "description": "运行工作流时选择区间终点。与 checkVersionId 互斥。",
+		}
+	}
+	if len(manuscripts) != 0 {
+		ids := make([]string, 0, len(manuscripts))
+		for _, manuscript := range manuscripts {
+			ids = append(ids, manuscript.VersionID)
+		}
+		properties["checkVersionId"] = map[string]any{
+			"type": "string", "enum": ids, "description": "明确要求检查稿件结构时，从 manuscriptVersions 选择对应稿件的 versionId。与 throughStep 互斥。",
+		}
 	}
 	parameters, err := json.Marshal(map[string]any{
-		"type": "object", "required": []string{"instruction"}, "additionalProperties": false,
-		"properties": map[string]any{
-			"instruction": map[string]string{"type": "string", "description": "任务范围、输入和交付要求"},
-			"throughStep": map[string]any{"type": "string", "enum": ends, "description": "仅在用户明确要求运行该工作流时，从当前可运行起点运行到此步骤。"},
-		},
+		"type": "object", "required": []string{"instruction"}, "additionalProperties": false, "properties": properties,
 	})
-	tool := researchTaskTool
-	tool.Description = "为用户明确要求的行动提出一项待确认建议。研究计划使用 instruction。启动或继续本项目工作流还须选择 throughStep。"
-	tool.Parameters = parameters
-	return tool, err
+	return inference.Tool{
+		Name:        "propose_research_task",
+		Description: "为用户明确要求的研究计划、工作流区间或稿件结构检查提出一项待确认建议。",
+		Parameters:  parameters,
+	}, err
 }
 
-func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord) (turnProposal, error) {
+func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord, manuscripts []taskInput) (turnProposal, error) {
 	var input struct {
-		Instruction string          `json:"instruction"`
-		ThroughStep json.RawMessage `json:"throughStep"`
+		Instruction    string          `json:"instruction"`
+		ThroughStep    json.RawMessage `json:"throughStep"`
+		CheckVersionID json.RawMessage `json:"checkVersionId"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(arguments))
 	decoder.DisallowUnknownFields()
@@ -81,6 +88,18 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 	}
 	instruction := strings.TrimSpace(input.Instruction)
 	if !validTaskInstruction(instruction) {
+		return turnProposal{}, errInvalidTaskProposal
+	}
+	if len(input.CheckVersionID) != 0 {
+		var id string
+		if len(input.ThroughStep) != 0 || json.Unmarshal(input.CheckVersionID, &id) != nil {
+			return turnProposal{}, errInvalidTaskProposal
+		}
+		for _, source := range manuscripts {
+			if source.VersionID == id {
+				return turnProposal{instruction: instruction, checkInput: &source}, nil
+			}
+		}
 		return turnProposal{}, errInvalidTaskProposal
 	}
 	if len(input.ThroughStep) == 0 {
@@ -98,11 +117,19 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 
 var errInvalidTaskProposal = errors.New("model proposed an invalid research task")
 
-func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID, instruction string) (string, error) {
+func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, error) {
+	kind, inputs := "", "[]"
+	if proposal.checkInput != nil {
+		body, err := json.Marshal([]taskInput{*proposal.checkInput})
+		if err != nil {
+			return "", err
+		}
+		kind, inputs = manuscriptCheckTask, string(body)
+	}
 	var taskID string
-	err := tx.QueryRowContext(ctx, `INSERT INTO tasks (project_id, task_id, instruction, status, created_at, source_turn_id)
-		SELECT project_id, ?, ?, 'PROPOSED', ?, turn_id FROM turns
+	err := tx.QueryRowContext(ctx, `INSERT INTO tasks (project_id, task_id, instruction, status, created_at, source_turn_id, kind, inputs_json)
+		SELECT project_id, ?, ?, 'PROPOSED', ?, turn_id, ?, ? FROM turns
 		WHERE turn_id = ? AND status = 'RUNNING' AND mode = 'CONFIRM' RETURNING task_id`,
-		rand.Text(), instruction, time.Now().UTC().Format(createdAtLayout), turnID).Scan(&taskID)
+		rand.Text(), proposal.instruction, time.Now().UTC().Format(createdAtLayout), kind, inputs, turnID).Scan(&taskID)
 	return taskID, err
 }

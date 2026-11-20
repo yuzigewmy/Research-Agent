@@ -89,7 +89,7 @@ func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
 		case errors.Is(generateErr, errMaterialNotText):
 			event.Message = "无法读取引用资料的正文。请在资料预览中核对后重新发送。"
 		case errors.Is(generateErr, errInvalidTaskProposal):
-			event.Message = "任务建议缺少有效的说明。可重新发送消息。"
+			event.Message = "任务建议的说明、范围或稿件版本无效。请核对后重新发送。"
 		default:
 			event.Message = "回复未完成。请检查模型连接，或重新发送。"
 		}
@@ -113,8 +113,13 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		return turnProposal{}, err
 	}
 	var workflow *workflowProposalRecord
+	var manuscripts []taskInput
 	if turn.Mode == turnModeConfirm {
 		workflow, err = c.store.workflowProposalOptions(ctx, project)
+		if err != nil {
+			return turnProposal{}, err
+		}
+		manuscripts, err = c.store.manuscriptCheckChoices(ctx, project.ProjectID)
 		if err != nil {
 			return turnProposal{}, err
 		}
@@ -125,7 +130,8 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		Goal         string                   `json:"goal,omitempty"`
 		Deliverables string                   `json:"deliverables,omitempty"`
 		Workflow     []workflowStepDefinition `json:"runnableWorkflowSteps,omitempty"`
-	}{project.Title, project.TemplateID, project.Goal, project.Deliverables, workflow.runnableSteps()})
+		Manuscripts  []taskInput              `json:"manuscriptVersions,omitempty"`
+	}{project.Title, project.TemplateID, project.Goal, project.Deliverables, workflow.runnableSteps(), manuscripts})
 	if err != nil {
 		return turnProposal{}, err
 	}
@@ -158,7 +164,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	}
 	var arguments json.RawMessage
 	if turn.Mode == turnModeConfirm {
-		tool, err := proposalTool(workflow)
+		tool, err := proposalTool(workflow, manuscripts)
 		if err != nil {
 			return turnProposal{}, err
 		}
@@ -175,14 +181,17 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		}
 		return turnProposal{}, nil
 	}
-	proposal, err := parseTurnProposal(arguments, workflow)
+	proposal, err := parseTurnProposal(arguments, workflow, manuscripts)
 	if err != nil {
 		return turnProposal{}, err
 	}
 	if bytesWritten == 0 {
 		message := "请核对助手建议的研究任务。"
-		if proposal.workflow != nil {
+		switch {
+		case proposal.workflow != nil:
 			message = "请核对助手建议的工作流范围。"
+		case proposal.checkInput != nil:
+			message = "请核对要检查的稿件版本。"
 		}
 		if err := emit(message); err != nil {
 			return turnProposal{}, err

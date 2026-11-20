@@ -90,7 +90,7 @@ func TestWorkflowSkipPersistsAndAllowsChecklistRerun(t *testing.T) {
 	}
 	finish := func(runID string, step int, markdown string) {
 		t.Helper()
-		task, err := store.claimQueuedTask(ctx, id)
+		task, err := store.claimQueuedTask(ctx, id, true)
 		if err != nil || task.workflowRunID != runID || task.workflowStep != step {
 			t.Fatalf("claim step %d of %s: task=%+v, error=%v", step, runID, task, err)
 		}
@@ -139,7 +139,7 @@ func TestWorkflowSkipPersistsAndAllowsChecklistRerun(t *testing.T) {
 	assertSkipped(skipped)
 	artifactPath := "/" + started.RunID + "/steps/checklist/artifact"
 	send(http.MethodGet, artifactPath, "", http.StatusNotFound)
-	if _, err := store.claimQueuedTask(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := store.claimQueuedTask(ctx, id, true); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("skipping a step left a task available to claim: %v", err)
 	}
 

@@ -67,6 +67,7 @@ func readTaskQueue(ctx context.Context, db workspaceQuery, projectID string) (ta
 			WHEN t.review_version_id IS NOT NULL THEN 'review'
 			WHEN t.selection_edit = 1 THEN 'edit'
 			WHEN t.finding_recheck = 1 THEN 'recheck'
+			WHEN t.kind = 'manuscript-check' THEN t.kind
 			ELSE 'plan' END,
 		COALESCE(t.status, ''), COALESCE(t.revision, 0),
 		(SELECT COUNT(*) FROM tasks WHERE project_id = p.project_id AND status = 'QUEUED')

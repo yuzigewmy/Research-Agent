@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
 import {
-  changeTask, conversationTurnAnchor, editTask, isTaskActive, listTasks, proposeTask, refreshTasks,
+  changeTask, conversationTurnAnchor, editTask, isMarkdownTaskPath, isTaskActive, listTasks, proposeTask, refreshTasks,
   taskArtifactPath, taskInputLimit, taskInstructionLimit, taskStatusLabels,
 } from './tasks'
 import type { ProposalInput, Task, TaskAction, TaskInputVersion, TaskPage } from './tasks'
@@ -43,7 +43,10 @@ function sameVersionIds(left?: string[], right?: string[]) {
   return left.length === right.length && left.every((id, index) => id === right[index])
 }
 
-function rebaseInputs(draft: InstructionDraft, latest: TaskInputVersion[]) {
+function rebaseInputs(draft: InstructionDraft, latest: TaskInputVersion[], singleInput: boolean) {
+  if (singleInput) {
+    return sameVersionIds(versionIds(draft.inputs), versionIds(draft.baseInputs)) ? latest : draft.inputs
+  }
   const merged = new Map(latest.map((input) => [input.path, input]))
   const previous = new Map(draft.baseInputs.map((input) => [input.path, input.versionId]))
   for (const path of previous.keys()) {
@@ -60,6 +63,13 @@ function instructionError(instruction: string) {
   if (instruction.includes('\0')) return '说明中不能包含空字符。'
   if (instructionEncoder.encode(instruction).length > taskInstructionLimit) return '任务说明不能超过 8 KiB。'
   return ''
+}
+
+function editInputError(inputs: TaskInputVersion[], markdownOnly: boolean) {
+  if (markdownOnly && (inputs.length !== 1 || !isMarkdownTaskPath(inputs[0].path))) {
+    return '请选择一份已保存的 Markdown 稿件。'
+  }
+  return inputs.length > taskInputLimit ? `请将已选文件调整为最多 ${taskInputLimit} 个。` : ''
 }
 
 function mergeTasks(current: Task[], incoming: Task[]) {
@@ -87,6 +97,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const [inputConflict, setInputConflict] = useState<{ revision: number; message: string }>()
   const editField = useRef<HTMLTextAreaElement>(null)
   const proposed = task.status === 'PROPOSED'
+  const isManuscriptCheck = task.kind === 'manuscript-check'
   const canCancel = proposed || task.status === 'QUEUED' || task.status === 'RUNNING'
   const editing = edit !== undefined
   const saving = pending === `edit:${task.taskId}`
@@ -94,7 +105,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const currentInputs = task.inputs ?? []
   const inputsChanged = editing && !sameVersionIds(versionIds(edit.inputs), versionIds(currentInputs))
   const changed = editing && (edit.text.trim() !== task.instruction || inputsChanged)
-  const tooManyInputs = editing && edit.inputs.length > taskInputLimit
+  const inputProblem = edit ? editInputError(edit.inputs, isManuscriptCheck) : ''
   const editProblem = proposed && outdated
     ? '任务已有新修订。草稿已保留，请核对上方卡片再继续。'
     : editError?.message
@@ -105,7 +116,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!edit || !changed || !proposed || outdated || tooManyInputs || pending !== null) return
+    if (!edit || !changed || !proposed || outdated || inputProblem || pending !== null) return
     const instruction = edit.text.trim()
     const message = instructionError(instruction)
     if (message) {
@@ -145,12 +156,17 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
           <span id={`${statusId}-revision`}>修订 {task.revision}</span>
         </div>
       </div>
+      {isManuscriptCheck && <div>
+        <p className="turn-role">只读稿件检查</p>
+        <p className="task-note">输出：稿件结构检查报告</p>
+        <p className="task-note">在本机读取整份已保存稿件。稿件正文不会发送给研究模型。</p>
+      </div>}
       {edit && <p className="task-note">当前任务说明</p>}
       <p className="task-instruction" dir="auto">{task.instruction}</p>
       {showSourceLink && task.sourceTurnId && <p className="task-note">
         <a href={`#${encodeURIComponent(conversationTurnAnchor(task.sourceTurnId))}`}>回到原消息</a>
       </p>}
-      {proposed && task.sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
+      {proposed && task.sourceTurnId && !isManuscriptCheck && <p className="task-note">{turnSourceNotice}</p>}
       <TaskInputSummary projectId={projectId} inputs={task.inputs} />
       {confirmationConflict && <p className="form-error" role="alert">{confirmationConflict}</p>}
       {edit && <form className="field" onSubmit={(event) => void save(event)} noValidate aria-busy={saving}>
@@ -163,20 +179,20 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
             setEditError(undefined)
           }} />
         <TaskInputVersions projectId={projectId} inputs={edit.inputs} disabled={pending !== null || !proposed}
-          onChange={(inputs) => {
+          markdownOnly={isManuscriptCheck} onChange={(inputs) => {
             setEdit({ ...edit, inputs })
             setEditError(undefined)
           }} />
         {!proposed && <p className="task-note" role="status">任务已离开待确认状态。草稿仍可复制。</p>}
         {editProblem && <p className="form-error" role="alert" id={`${statusId}-edit-error`}>{editProblem}</p>}
-        {tooManyInputs && <p className="form-error" role="alert">请将已选文件调整为最多 {taskInputLimit} 个。</p>}
+        {inputProblem && <p className="form-error" role="alert">{inputProblem}</p>}
         <div className="task-actions">
           {proposed && outdated && <button className="button outline" type="button"
             disabled={pending !== null} onClick={() => {
               setEdit({
                 text: edit.text.trim() === edit.baseInstruction ? task.instruction : edit.text,
                 revision: task.revision,
-                inputs: rebaseInputs(edit, currentInputs),
+                inputs: rebaseInputs(edit, currentInputs, isManuscriptCheck),
                 baseInstruction: task.instruction,
                 baseInputs: currentInputs,
               })
@@ -184,7 +200,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
               editField.current?.focus()
             }}>继续编辑最新修订</button>}
           {proposed && !outdated && <button className="button primary" type="submit"
-            disabled={!changed || tooManyInputs} aria-disabled={pending !== null}>
+            disabled={!changed || !!inputProblem} aria-disabled={pending !== null}>
             {saving ? '正在保存…' : '保存说明'}
           </button>}
           <button className="button outline" type="button" disabled={saving} onClick={() => {
@@ -196,7 +212,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       </form>}
       {canCancel && <div className="task-actions">
         {proposed && <>
-          <button className="button primary" type="button" disabled={!modelConfigured || editing || !!confirmationConflict}
+          <button className="button primary" type="button"
+            disabled={(!isManuscriptCheck && !modelConfigured) || editing || !!confirmationConflict}
             aria-disabled={pending !== null} onClick={() => void confirm()}>
             {pending === `confirm:${task.taskId}` ? '正在确认…' : '确认运行'}
           </button>
@@ -218,7 +235,9 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         </button>
       </div>}
       {task.status === 'SUCCEEDED' && <div className="task-actions">
-        <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>下载 Markdown</a>
+        <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>
+          {isManuscriptCheck ? '下载检查报告' : '下载 Markdown'}
+        </a>
       </div>}
     </li>
   )
@@ -348,7 +367,9 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   }
 
   async function mutate(mutation: Mutation): Promise<MutationResult | undefined> {
-    if (submission.current || configured === undefined || (mutation.kind === 'confirm' && !configured)) return
+    const localCheck = mutation.kind !== 'propose' && mutation.task.kind === 'manuscript-check'
+    if (submission.current) return
+    if (!localCheck && (configured === undefined || (mutation.kind === 'confirm' && !configured))) return
     const key = mutation.kind === 'propose' ? 'propose' : `${mutation.kind}:${mutation.task.taskId}`
     const controller = new AbortController()
     const focusControl = document.activeElement
@@ -442,6 +463,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
 
   const proposalForm = (
     <form className="create-form" onSubmit={submit} noValidate aria-busy={pending === 'propose'}>
+      {sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
       <div className="field">
         <label htmlFor={`${panelId}-instruction`}>任务说明</label>
         <textarea id={`${panelId}-instruction`} name="instruction" rows={3} required ref={instructionField}
@@ -469,8 +491,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   return (
     <section className="task-panel" aria-labelledby={`${panelId}-heading`}>
       <h4 id={`${panelId}-heading`}>{sourceTurnId ? '此对话的任务' : '研究计划'}</h4>
-      {sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
-      {configured === false && <p className="task-note" role="status">研究模型未配置。可以提交任务提议，配置模型后即可运行。</p>}
+      {configured === false && <p className="task-note" role="status">研究模型未配置。研究计划需要配置模型后运行，只读稿件检查可在本机运行。</p>}
       {!proposedTaskId && proposalForm}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {loading && <p className="task-note" role="status">正在读取任务…</p>}

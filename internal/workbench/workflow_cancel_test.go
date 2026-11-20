@@ -75,7 +75,7 @@ func TestWorkflowCancelStopsCurrentStepAndPreservesCompletedArtifact(t *testing.
 	}
 
 	run := start("second-run")
-	first, err := store.claimQueuedTask(ctx, id)
+	first, err := store.claimQueuedTask(ctx, id, true)
 	if err != nil || first.workflowRunID != run.RunID || first.workflowStep != 0 {
 		t.Fatalf("claim after cancel: %+v, %v", first, err)
 	}
@@ -83,7 +83,7 @@ func TestWorkflowCancelStopsCurrentStepAndPreservesCompletedArtifact(t *testing.
 	if err := store.finishTask(ctx, id, first, taskSucceeded, "", taskResult{markdown: artifact}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.claimQueuedTask(ctx, id)
+	second, err := store.claimQueuedTask(ctx, id, true)
 	if err != nil || second.workflowStep != 1 {
 		t.Fatalf("claim next step: %+v, %v", second, err)
 	}
@@ -117,7 +117,7 @@ func TestWorkflowCancelStopsCurrentStepAndPreservesCompletedArtifact(t *testing.
 	}
 	send(http.MethodGet, base+"/plan/artifact", "", http.StatusNotFound)
 
-	if task, err := store.claimQueuedTask(ctx, id); err != nil || task.workflowRunID != third.RunID {
+	if task, err := store.claimQueuedTask(ctx, id, true); err != nil || task.workflowRunID != third.RunID {
 		t.Fatalf("claim third run: %+v, %v", task, err)
 	}
 	cancel("cancel-before-restart", lookup())

@@ -64,7 +64,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		// Hold the lock through the claim so cancellation can always find
 		// the new context and a concurrent confirmation cannot lose its wakeup.
 		claimCtx, stopClaim := context.WithTimeout(context.Background(), taskDBLimit)
-		task, err := s.claimQueuedTask(claimCtx, projectID)
+		task, err := s.claimQueuedTask(claimCtx, projectID, model != nil)
 		stopClaim()
 		if err != nil {
 			delete(workers.active, projectID)
@@ -87,6 +87,9 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 
 		result, err := s.generateTaskResult(ctx, model, projectID, task)
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
+		if task.Kind == manuscriptCheckTask && status == taskFailed {
+			message = "稿件检查未完成。请核对已保存的稿件后重新提出检查。"
+		}
 		if task.workflowRunID != "" && status == taskFailed {
 			message = "此步骤未生成成果。检查模型连接后，可从此步骤继续。"
 			var invalid workflowOutputError
@@ -160,6 +163,8 @@ type taskResult struct {
 
 func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
 	switch {
+	case task.Kind == manuscriptCheckTask:
+		return s.runManuscriptCheck(ctx, projectID, task.Inputs[0])
 	case task.automaticReview:
 		return s.runAutomaticReview(ctx, model, projectID, task.TaskID)
 	case task.reviewVersionID != "":

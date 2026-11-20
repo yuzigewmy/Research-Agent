@@ -76,7 +76,7 @@ func (s *Store) readWorkspaceDocument(file WorkspaceFile) (WorkspaceDocument, er
 	return WorkspaceDocument{WorkspaceFile: file, Content: string(content)}, err
 }
 
-func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, diagramsOnly bool, cursor int64, limit int) ([]WorkspaceFile, error) {
+func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name, kind string, cursor int64, limit int) ([]WorkspaceFile, error) {
 	query := `SELECT ` + workspaceFileColumns + ` FROM workspace_versions WHERE project_id = ?`
 	args := []any{projectID}
 	if name == "" {
@@ -86,8 +86,11 @@ func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name string, 
 		query += ` AND path = ?`
 		args = append(args, name)
 	}
-	if diagramsOnly {
+	switch kind {
+	case "diagram":
 		query += ` AND path GLOB 'diagrams/?*.flow.json' AND path NOT GLOB 'diagrams/*/*'`
+	case "markdown":
+		query += ` AND (LOWER(path) LIKE '%.md' OR LOWER(path) LIKE '%.markdown')`
 	}
 	if cursor > 0 {
 		query += ` AND ordinal < ?`

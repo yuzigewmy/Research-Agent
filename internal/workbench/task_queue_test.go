@@ -170,7 +170,7 @@ func TestProjectTaskQueueStopPreservesReceiptsAndNewWork(t *testing.T) {
 		RequestID: "confirm-existing", ExpectedRevision: existing.Revision}, true); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := store.claimQueuedTask(ctx, projectID)
+	claimed, err := store.claimQueuedTask(ctx, projectID, true)
 	if err != nil || claimed.TaskID != existing.TaskID {
 		t.Fatalf("claim prior task: task=%+v, err=%v", claimed, err)
 	}

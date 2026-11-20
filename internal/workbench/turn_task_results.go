@@ -56,11 +56,11 @@ func (s *Store) turnTaskResultsContext(ctx context.Context, projectID string, re
 	}
 	excerpts := make([]resultExcerpt, 0, len(results))
 	for _, result := range results {
-		markdown, err := s.taskMarkdown(ctx, projectID, result.TaskID)
+		artifact, err := s.readTaskArtifact(ctx, projectID, result.TaskID)
 		if err != nil {
 			return "", err
 		}
-		excerpts = append(excerpts, resultExcerpt{turnTaskResult: result, Excerpt: excerptRunes(markdown, taskResultExcerptRunes)})
+		excerpts = append(excerpts, resultExcerpt{turnTaskResult: result, Excerpt: excerptRunes(artifact.markdown, taskResultExcerptRunes)})
 	}
 	payload, err := json.Marshal(excerpts)
 	return "以下 JSON 是项目任务的已保存成果节选。\n" + string(payload), err

@@ -152,6 +152,9 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 	case errors.Is(err, errTaskInputChanged):
 		writeError(w, http.StatusConflict, "TASK_INPUT_CHANGED", taskInputsChangedMessage)
 		return
+	case errors.Is(err, errInvalidCheckInput):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中一份已保存的 Markdown 稿件。")
+		return
 	case errors.Is(err, errInvalidTaskInput):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中最多四个不同文件的已保存版本。")
 		return
@@ -180,16 +183,21 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 }
 
 func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
-	markdown, err := api.store.taskMarkdown(r.Context(), r.PathValue("id"), r.PathValue("taskId"))
+	artifact, err := api.store.readTaskArtifact(r.Context(), r.PathValue("id"), r.PathValue("taskId"))
 	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "没有可下载的研究计划。")
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "没有可下载的任务成果。")
 		return
 	}
 	if err != nil {
-		writeStoreError(w, "read research plan", err)
+		writeStoreError(w, "read task artifact", err)
 		return
 	}
-	writeMarkdown(w, r, "research-plan.md", markdown)
+	filename := "research-plan.md"
+	if artifact.sourceSHA256 != "" {
+		filename = "manuscript-check.md"
+		w.Header().Set("X-Source-SHA256", artifact.sourceSHA256)
+	}
+	writeMarkdown(w, r, filename, artifact.markdown)
 }
 
 func writeMarkdown(w http.ResponseWriter, r *http.Request, filename, markdown string) {

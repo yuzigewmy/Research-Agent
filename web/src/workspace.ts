@@ -50,7 +50,7 @@ function versionPath(projectId: string, versionId: string) {
   return `${filesPath(projectId)}/versions/${encodeURIComponent(versionId)}`
 }
 
-export async function listFiles(projectId: string, signal: AbortSignal, cursor?: string, kind?: 'diagram') {
+export async function listFiles(projectId: string, signal: AbortSignal, cursor?: string, kind?: 'diagram' | 'markdown') {
   const params = new URLSearchParams()
   if (kind) params.set('kind', kind)
   if (cursor) params.set('cursor', cursor)

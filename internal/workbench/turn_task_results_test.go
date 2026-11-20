@@ -95,7 +95,7 @@ func TestConversationSyncsOnlyItsCompletedTaskResultsOnce(t *testing.T) {
 			RequestID: "confirm-" + instruction, Action: confirmTask, ExpectedRevision: proposed.Revision}, true); err != nil {
 			t.Fatal(err)
 		}
-		task, err := store.claimQueuedTask(ctx, projectID)
+		task, err := store.claimQueuedTask(ctx, projectID, true)
 		if err != nil || task.TaskID != proposed.TaskID {
 			t.Fatalf("claim task %q returned %+v, %v", instruction, task, err)
 		}

@@ -228,7 +228,7 @@ func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e TurnEvent
 			}
 			workflowJSON = string(body)
 		case e.proposal.instruction != "":
-			taskID, err := insertTurnProposal(ctx, tx, turnID, e.proposal.instruction)
+			taskID, err := insertTurnProposal(ctx, tx, turnID, e.proposal)
 			if err != nil {
 				return 0, err
 			}

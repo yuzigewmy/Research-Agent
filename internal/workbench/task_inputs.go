@@ -37,7 +37,10 @@ type taskInput struct {
 	SHA256    string `json:"sha256"`
 }
 
-func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID string, ids []string) (string, error) {
+func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID, kind string, ids []string) (string, error) {
+	if kind == manuscriptCheckTask && len(ids) != 1 {
+		return "", errInvalidCheckInput
+	}
 	inputs := make([]taskInput, 0, len(ids))
 	paths := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -50,6 +53,9 @@ func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID string, ids []
 		}
 		if err != nil {
 			return "", err
+		}
+		if kind == manuscriptCheckTask && !markdownPath(file.Path) {
+			return "", errInvalidCheckInput
 		}
 		if paths[file.Path] {
 			return "", errInvalidTaskInput

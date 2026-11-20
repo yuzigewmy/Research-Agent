@@ -152,7 +152,7 @@ func TestTaskInputsRequireReconfirmationAndRemainPinnedAfterClaim(t *testing.T) 
 	queued := confirm("confirm-second", refreshed.Revision)
 	thirdContent := pinned + strings.Repeat("x", (8<<10)-len(pinned)-len(includedEnd)) + includedEnd + excludedEnd
 	third := save(projectID, second.SHA256, thirdContent)
-	if task, err := store.claimQueuedTask(ctx, projectID); !errors.Is(err, sql.ErrNoRows) {
+	if task, err := store.claimQueuedTask(ctx, projectID, true); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("claim should return the changed task for confirmation: task=%+v, err=%v", task, err)
 	}
 	var page struct{ Items []observedTask }
@@ -169,7 +169,7 @@ func TestTaskInputsRequireReconfirmationAndRemainPinnedAfterClaim(t *testing.T) 
 	assertInput(approved, third)
 	const confirmID = "confirm-third"
 	confirm(confirmID, approved.Revision)
-	claimed, err := store.claimQueuedTask(ctx, projectID)
+	claimed, err := store.claimQueuedTask(ctx, projectID, true)
 	if err != nil || claimed.TaskID != proposed.TaskID || claimed.Status != taskRunning {
 		t.Fatalf("claim after reconfirmation: task=%+v, err=%v", claimed, err)
 	}

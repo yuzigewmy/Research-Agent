@@ -373,6 +373,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
               aria-describedby="turn-task-results-hint" onChange={(event) => updateDraft(event.currentTarget.value)} />
             <p className="turn-status" id="turn-task-results-hint">
               发送消息时，本项目已完成且尚未同步的关联任务成果节选（最多 4 项）会随本轮发送给研究模型。
+              {mode === 'CONFIRM' && ' 建议任务时，模型会收到最近保存的最多 20 份 Markdown 稿件的路径、版本号和摘要。'}
             </p>
           </div>
           <div className="form-actions">
