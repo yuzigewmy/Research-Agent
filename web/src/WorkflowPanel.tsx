@@ -187,7 +187,7 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
 
 export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, acceptanceDraft, onClearAcceptanceDraft }: {
   projectId: string
-  templateId: Exclude<TemplateId, 'freeform' | 'automatic_review'>
+  templateId: Exclude<TemplateId, 'freeform' | 'automatic_review' | 'interactive_survey'>
   onManuscriptSaved: (path: string) => void
   refreshVersion?: number
   acceptanceDraft?: { file: FileRecord; openId: number }

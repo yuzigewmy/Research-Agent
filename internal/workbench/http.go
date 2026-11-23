@@ -44,6 +44,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerWorkspace(mux)
 	store.registerWord(mux, config.WordPython)
 	store.registerSurveys(mux)
+	store.registerQuestionnaires(mux)
 	manuscriptReviews{store: store, model: config.Model}.register(mux)
 	selectionEdits{store: store, model: config.Model}.register(mux)
 	findingRechecks{store: store, model: config.Model}.register(mux)

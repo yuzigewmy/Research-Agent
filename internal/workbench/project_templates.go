@@ -70,6 +70,9 @@ var projectTemplates = []projectTemplate{
 	{ID: "patent_disclosure", Label: "专利技术交底", Revision: patentDisclosureWorkflow, Kind: "workflow",
 		Summary:      "依据固定资料梳理方案，确认后编写交底稿、生成两张附图并核对证据。",
 		Deliverables: []string{"技术材料清单", "技术方案草案", "技术交底稿", "系统框图和操作流程图 SVG", "交底核对单", "可编辑 Word（启用导出组件后）"}},
+	{ID: questionnaireTemplate, Label: "互动问卷", Revision: "survey-collection-v1", Kind: "survey",
+		Summary:      "编辑问卷并发布填写链接，关闭回收后仍可导出答卷和进行清洗分析。",
+		Deliverables: []string{"可填写的问卷链接", "答卷 CSV", "问卷分析报告"}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {

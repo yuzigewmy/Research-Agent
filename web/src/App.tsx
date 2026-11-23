@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { CreateProjectForm } from './CreateProjectForm'
 import { ProjectDetails } from './ProjectDetails'
@@ -23,7 +23,18 @@ function projectUrl(projectId: string | null) {
   return url.href
 }
 
+const QuestionnaireRespond = lazy(() => import('./QuestionnaireRespond'))
+
 export function App() {
+  const publicId = new URLSearchParams(window.location.search).get('questionnaire')
+  if (publicId === null) return <Workbench />
+
+  return <Suspense fallback={<main className="workbench"><p role="status">正在读取问卷…</p></main>}>
+    <QuestionnaireRespond key={publicId} publicId={publicId} />
+  </Suspense>
+}
+
+function Workbench() {
   const [selectedId, setSelectedId] = useState(selectedFromUrl)
   const [catalog, setCatalog] = useState<Catalog>({ kind: 'loading' })
   const list = useProjectList()

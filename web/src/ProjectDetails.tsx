@@ -5,6 +5,7 @@ import { LiteraturePanel } from './LiteraturePanel'
 import { MaterialPanel } from './MaterialPanel'
 import { ProjectAdministration } from './ProjectAdministration'
 import { ProjectTaskQueue } from './ProjectTaskQueue'
+import { QuestionnairePanel } from './QuestionnairePanel'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
 import type { Task } from './tasks'
@@ -86,7 +87,9 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
     })
   }, [])
 
-  const hasWorkflow = detail.kind === 'ready' && detail.project.templateId !== 'freeform' && detail.project.templateId !== 'automatic_review'
+  const templateId = detail.kind === 'ready' ? detail.project.templateId : undefined
+  const hasWorkflow = templateId !== undefined && templateId !== 'freeform'
+    && templateId !== 'automatic_review' && templateId !== 'interactive_survey'
 
   function reviewAppliedFile(file: FileRecord) {
     setAcceptanceDraft((current) => ({ file, openId: (current?.openId ?? 0) + 1 }))
@@ -192,12 +195,15 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)}
         allowSoftwareFolder={project.templateId === 'software_registration'} />
+      {project.templateId === 'interactive_survey' && (
+        <QuestionnairePanel projectId={project.projectId} archived={project.status === 'ARCHIVED'} />
+      )}
       <SurveyPanel projectId={project.projectId} />
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
         || project.templateId === 'topic' || project.templateId === 'proposal'
         || project.templateId === 'course_paper' || project.templateId === 'course_report') && <LiteraturePanel projectId={project.projectId} />}
-      {project.templateId !== 'freeform' && project.templateId !== 'automatic_review' &&
-        <WorkflowPanel projectId={project.projectId} templateId={project.templateId} refreshVersion={workflowRefresh}
+      {hasWorkflow &&
+        <WorkflowPanel projectId={project.projectId} templateId={templateId} refreshVersion={workflowRefresh}
           acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
             current?.openId === openId ? undefined : current)}
           onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
