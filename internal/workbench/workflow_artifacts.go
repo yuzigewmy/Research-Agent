@@ -34,9 +34,9 @@ func workflowArtifactStep(ctx context.Context, db workspaceQuery, projectID, run
 
 func workflowArtifactFilename(workflow string, stage workflowStage) string {
 	family, _, _ := strings.Cut(workflow, "-v")
-	extension := ".md"
-	if stage.plainText {
-		extension = ".txt"
+	extension := stage.artifactExtension
+	if extension == "" {
+		extension = ".md"
 	}
 	return family + "-" + stage.key + extension
 }
@@ -58,6 +58,14 @@ func (s *Store) workflowArtifact(ctx context.Context, projectID, runID, key stri
 	}
 	artifact, err := lookupWorkflowArtifact(ctx, s.db, projectID, runID, step, "")
 	return name, artifact.markdown, err
+}
+
+func (s *Store) workflowArtifactVersion(ctx context.Context, projectID, runID, key, artifactID string) (workflowArtifactRecord, error) {
+	step, _, err := workflowArtifactStep(ctx, s.db, projectID, runID, key)
+	if err != nil {
+		return workflowArtifactRecord{}, err
+	}
+	return lookupWorkflowArtifact(ctx, s.db, projectID, runID, step, artifactID)
 }
 
 func (api workflows) artifacts(w http.ResponseWriter, r *http.Request) {
@@ -123,11 +131,14 @@ func (api workflows) artifact(w http.ResponseWriter, r *http.Request) {
 		writeWorkflowArtifactError(w, err)
 		return
 	}
-	if strings.HasSuffix(name, ".txt") {
+	switch {
+	case strings.HasSuffix(name, ".txt"):
 		writeTextAttachment(w, r, name, "text/plain; charset=utf-8", artifact.markdown)
-		return
+	case strings.HasSuffix(name, ".json"):
+		writeTextAttachment(w, r, name, "application/json", artifact.markdown)
+	default:
+		writeMarkdown(w, r, name, artifact.markdown)
 	}
-	writeMarkdown(w, r, name, artifact.markdown)
 }
 
 func writeWorkflowArtifactError(w http.ResponseWriter, err error) {

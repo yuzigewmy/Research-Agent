@@ -63,7 +63,7 @@ type workflowStage struct {
 	checkpoint         bool
 	acceptMarkdown     bool
 	optional           bool
-	plainText          bool
+	artifactExtension  string
 }
 
 func experimentStages(optionalChecklist bool) []workflowStage {
@@ -105,23 +105,31 @@ var workflowStages = map[string][]workflowStage{
 	courseReportWorkflow:           courseStages(courseReportWorkflow),
 	softwareRegistrationWorkflowV1: softwareRegistrationStages(""),
 	softwareRegistrationWorkflow:   softwareRegistrationStages(softwareSamplePrompt),
-	patentDisclosureWorkflow: {
+	patentDisclosureWorkflowV1:     patentDisclosureStages(false),
+	patentDisclosureWorkflow:       patentDisclosureStages(true),
+}
+
+func patentDisclosureStages(withFigures bool) []workflowStage {
+	stages := []workflowStage{
 		{key: "sources", title: "固定技术材料"},
 		{key: "outline", title: "梳理技术方案草案", prompt: patentOutlinePrompt, checkpoint: true, acceptMarkdown: true},
 		{key: "manuscript", title: "编写技术交底稿", prompt: patentManuscriptPrompt, acceptMarkdown: true},
-		{key: "check", title: "核对交底成果"},
-	},
+	}
+	if withFigures {
+		stages = append(stages, workflowStage{key: "figures", title: "编制技术附图", prompt: patentFiguresPrompt, artifactExtension: ".json"})
+	}
+	return append(stages, workflowStage{key: "check", title: "核对交底成果"})
 }
 
 func defaultTemplateCheckpoints(workflow string) bool {
-	return isSoftwareRegistrationWorkflow(workflow) || workflow == patentDisclosureWorkflow
+	return isSoftwareRegistrationWorkflow(workflow) || isPatentWorkflow(workflow)
 }
 
 func softwareRegistrationStages(programPrompt string) []workflowStage {
 	return []workflowStage{
 		{key: "sources", title: "固定材料与来源"},
 		{key: "manuscript", title: "编制操作手册草稿", prompt: softwareManualPrompt, checkpoint: true, acceptMarkdown: true},
-		{key: "program", title: "整理程序材料", prompt: programPrompt, plainText: true},
-		{key: "application", title: "生成申请信息核对单", plainText: true},
+		{key: "program", title: "整理程序材料", prompt: programPrompt, artifactExtension: ".txt"},
+		{key: "application", title: "生成申请信息核对单", artifactExtension: ".txt"},
 	}
 }

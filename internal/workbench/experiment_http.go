@@ -35,6 +35,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts", api.artifacts)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}", api.artifact)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}/pdf", api.softwareIdentificationPDF)
+	mux.HandleFunc("GET "+path+"/{runId}/steps/figures/artifacts/{artifactId}/svg/{figure}", api.patentFigureSVG)
 	mux.HandleFunc("POST "+path+"/{runId}/manuscript", api.saveManuscript)
 }
 

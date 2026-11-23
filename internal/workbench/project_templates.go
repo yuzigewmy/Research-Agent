@@ -68,8 +68,8 @@ var projectTemplates = []projectTemplate{
 		Deliverables: []string{"材料来源清单", "操作手册草稿", "程序材料 TXT", "申请信息核对单 TXT", "程序和手册 PDF（配置字体后）", "可编辑 Word（启用导出组件后）"},
 		Defaults:     projectTemplateDefaults{Software: &softwareOptions{Version: defaultSoftwareVersion}}},
 	{ID: "patent_disclosure", Label: "专利技术交底", Revision: patentDisclosureWorkflow, Kind: "workflow",
-		Summary:      "依据技术说明与固定资料梳理方案，确认后编写交底稿并核对证据。",
-		Deliverables: []string{"技术材料清单", "技术方案草案", "技术交底稿", "交底核对单", "可编辑 Word（启用导出组件后）"}},
+		Summary:      "依据固定资料梳理方案，确认后编写交底稿、生成两张附图并核对证据。",
+		Deliverables: []string{"技术材料清单", "技术方案草案", "技术交底稿", "系统框图和操作流程图 SVG", "交底核对单", "可编辑 Word（启用导出组件后）"}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {

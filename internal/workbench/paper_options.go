@@ -26,7 +26,7 @@ type paperOptions struct {
 }
 
 func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, action string, req workflowRequest) (string, int, error) {
-	if key == patentDisclosureWorkflow && action == workflowStart {
+	if isPatentWorkflow(key) && action == workflowStart {
 		if req.Paper != nil || req.Topic != nil || req.Proposal != nil || req.Course != nil || req.Software != nil || req.TargetPaperCount != 0 {
 			return "", 0, errPatentOptions
 		}

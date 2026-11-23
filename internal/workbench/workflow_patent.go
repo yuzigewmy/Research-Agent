@@ -13,7 +13,12 @@ import (
 	"research-agent/internal/inference"
 )
 
-const patentDisclosureWorkflow = "patent-disclosure-v1"
+const patentDisclosureWorkflowV1 = "patent-disclosure-v1"
+const patentDisclosureWorkflow = "patent-disclosure-v2"
+
+func isPatentWorkflow(key string) bool {
+	return key == patentDisclosureWorkflowV1 || key == patentDisclosureWorkflow
+}
 
 //go:embed prompts/patent_outline.md
 var patentOutlinePrompt string
@@ -113,17 +118,19 @@ func patentManuscriptSections(markdown string) ([]int, error) {
 	return lines, nil
 }
 
-func (s *Store) generatePatentStep(ctx context.Context, model *inference.Client, project Project, task Task, input, options string) (taskResult, error) {
+func (s *Store) generatePatentStep(ctx context.Context, model *inference.Client, project Project, task Task, workflow, input, options string) (taskResult, error) {
+	stage := workflowStages[workflow][task.workflowStep]
 	var settings patentSettings
 	if err := json.Unmarshal([]byte(options), &settings); err != nil {
 		return taskResult{}, err
 	}
-	stage := workflowStages[patentDisclosureWorkflow][task.workflowStep]
 	switch stage.key {
 	case "sources":
 		return taskResult{markdown: patentSourceList(project.Title, settings)}, nil
+	case "figures":
+		return s.generatePatentFigures(ctx, model, project.ProjectID, task.workflowRunID, stage.prompt, input)
 	case "check":
-		return s.patentDeliveryCheck(ctx, project.ProjectID, task.workflowRunID, settings)
+		return s.patentDeliveryCheck(ctx, project.ProjectID, task.workflowRunID, workflow, settings)
 	}
 
 	excerpts, err := s.turnMaterialExcerpts(ctx, settings.Materials)
@@ -157,8 +164,8 @@ func (s *Store) generatePatentStep(ctx context.Context, model *inference.Client,
 	return taskResult{markdown: markdown}, nil
 }
 
-func (s *Store) patentDeliveryCheck(ctx context.Context, projectID, runID string, settings patentSettings) (taskResult, error) {
-	_, manuscript, err := s.workflowArtifact(ctx, projectID, runID, "manuscript")
+func (s *Store) patentDeliveryCheck(ctx context.Context, projectID, runID, workflow string, settings patentSettings) (taskResult, error) {
+	manuscript, err := s.workflowArtifactVersion(ctx, projectID, runID, "manuscript", "")
 	if err != nil {
 		return taskResult{}, err
 	}
@@ -166,13 +173,28 @@ func (s *Store) patentDeliveryCheck(ctx context.Context, projectID, runID string
 	if err != nil {
 		return taskResult{}, err
 	}
-	lines, err := patentManuscriptSections(manuscript)
+	lines, err := patentManuscriptSections(manuscript.markdown)
 	if err != nil {
 		return taskResult{}, workflowOutputError{err}
 	}
+	manuscriptSHA := fmt.Sprintf("%x", sha256.Sum256([]byte(manuscript.markdown)))
 	var report strings.Builder
-	fmt.Fprintf(&report, "# 技术交底核对单\n\n交底稿 SHA-256 `%x`\n\n方案草案 SHA-256 `%x`\n\n",
-		sha256.Sum256([]byte(manuscript)), sha256.Sum256([]byte(outline)))
+	fmt.Fprintf(&report, "# 技术交底核对单\n\n交底稿 SHA-256 `%s`\n\n方案草案 SHA-256 `%x`\n\n",
+		manuscriptSHA, sha256.Sum256([]byte(outline)))
+	if workflow == patentDisclosureWorkflow {
+		figures, err := s.workflowArtifactVersion(ctx, projectID, runID, "figures", "")
+		if err != nil {
+			return taskResult{}, err
+		}
+		var provenance patentFiguresArtifact
+		if err := json.Unmarshal([]byte(figures.markdown), &provenance); err != nil {
+			return taskResult{}, err
+		}
+		if provenance.ManuscriptArtifactID != manuscript.ArtifactID || provenance.ManuscriptSHA256 != manuscriptSHA {
+			return taskResult{}, workflowOutputError{errors.New("附图与当前交底稿版本不一致。请重跑附图。")}
+		}
+		fmt.Fprintf(&report, "附图成果 `%s` · SHA-256 `%x`\n\n", figures.ArtifactID, sha256.Sum256([]byte(figures.markdown)))
+	}
 	for index, line := range lines {
 		fmt.Fprintf(&report, "- %s · 第 %d 行\n", patentSectionTitles[index], line)
 	}

@@ -521,6 +521,10 @@ export function workflowArtifactPath(projectId: string, runId: string, key: stri
   return artifactId === undefined ? `${step}/artifact` : `${step}/artifacts/${encodeURIComponent(artifactId)}`
 }
 
+export function workflowPatentFigurePath(projectId: string, runId: string, artifactId: string, figure: 'system' | 'process') {
+  return `${workflowArtifactPath(projectId, runId, 'figures', artifactId)}/svg/${figure}`
+}
+
 export type SoftwarePdfStep = 'manuscript' | 'program'
 
 export function isSoftwarePdfStep(key: string): key is SoftwarePdfStep {

@@ -59,8 +59,8 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	if isSoftwareRegistrationWorkflow(key) {
 		return s.generateSoftwareRegistrationStep(ctx, model, project, task, workflowStages[key][task.workflowStep], input, options)
 	}
-	if key == patentDisclosureWorkflow {
-		return s.generatePatentStep(ctx, model, project, task, input, options)
+	if isPatentWorkflow(key) {
+		return s.generatePatentStep(ctx, model, project, task, key, input, options)
 	}
 	stages := workflowStages[key]
 	stage := stages[task.workflowStep]

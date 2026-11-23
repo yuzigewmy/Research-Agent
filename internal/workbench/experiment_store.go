@@ -192,7 +192,7 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Software); err != nil {
 			return WorkflowRun{}, err
 		}
-	case run.WorkflowKey == patentDisclosureWorkflow:
+	case isPatentWorkflow(run.WorkflowKey):
 		run.Patent = new(patentSettings)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Patent); err != nil {
 			return WorkflowRun{}, err

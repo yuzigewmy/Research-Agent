@@ -3,6 +3,7 @@ import { errorMessage, ProjectApiError } from './projects'
 import type { TemplateId } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import { initialCourseDraft, prepareCourse, WorkflowCourseOptions, WorkflowCourseSummary } from './WorkflowCourseOptions'
+import { WorkflowPatentFigureLinks } from './WorkflowPatentFigureLinks'
 import { initialPatentDraft, preparePatent, WorkflowPatentOptions, WorkflowPatentSummary } from './WorkflowPatentOptions'
 import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
@@ -89,6 +90,7 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
         const downloadLabel = rerun ? '下载当前成果' : '下载该轮成果'
         const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
         const pdfStep = softwarePdfEnabled && isSoftwarePdfStep(step.key) ? step.key : undefined
+        const patentFigures = run.workflowKey === 'patent-disclosure-v2' && step.key === 'figures'
         return <li key={step.key}>
           <div className="workflow-step-heading">
             <strong dir="auto">{step.title}</strong>
@@ -105,6 +107,9 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
             {canDownload && pdfStep && step.artifactId && (
               <WorkflowSoftwarePdfDownload projectId={projectId} runId={run.runId} stepKey={pdfStep}
                 stepTitle={step.title} artifactId={step.artifactId} />
+            )}
+            {canDownload && patentFigures && step.artifactId && (
+              <WorkflowPatentFigureLinks projectId={projectId} runId={run.runId} artifactId={step.artifactId} />
             )}
             {rerun && eligible && <button className="button outline" type="button" disabled={rerun.disabled}
               aria-label={`${runLabel}：${step.title}`} aria-expanded={selected}
@@ -132,7 +137,8 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
             </div>
           </div>}
           {hasHistory && <WorkflowArtifactHistory projectId={projectId} runId={run.runId} stepKey={step.key}
-            stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount} softwarePdfEnabled={pdfStep !== undefined} />}
+            stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount}
+            softwarePdfEnabled={pdfStep !== undefined} patentFigures={patentFigures} />}
         </li>
       })}
     </ol>

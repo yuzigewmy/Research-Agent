@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { errorMessage } from './projects'
+import { WorkflowPatentFigureLinks } from './WorkflowPatentFigureLinks'
 import { WorkflowSoftwarePdfDownload } from './WorkflowSoftwarePdfDownload'
 import { isSoftwarePdfStep, listWorkflowArtifacts, workflowArtifactPath } from './workflow'
 import type { WorkflowArtifactPage } from './workflow'
@@ -12,6 +13,7 @@ type ArtifactSource = {
   stepKey: string
   stepTitle: string
   softwarePdfEnabled?: boolean
+  patentFigures?: boolean
 }
 
 export function WorkflowArtifactHistory({ artifactId, count, ...source }: ArtifactSource & { artifactId?: string; count?: number }) {
@@ -22,7 +24,7 @@ export function WorkflowArtifactHistory({ artifactId, count, ...source }: Artifa
   </details>
 }
 
-function ArtifactList({ projectId, runId, stepKey, stepTitle, softwarePdfEnabled }: ArtifactSource) {
+function ArtifactList({ projectId, runId, stepKey, stepTitle, softwarePdfEnabled, patentFigures }: ArtifactSource) {
   const [page, setPage] = useState<WorkflowArtifactPage>({ items: [] })
   const [query, setQuery] = useState<{ cursor?: string }>({})
   const [loading, setLoading] = useState(true)
@@ -63,6 +65,7 @@ function ArtifactList({ projectId, runId, stepKey, stepTitle, softwarePdfEnabled
             <WorkflowSoftwarePdfDownload projectId={projectId} runId={runId} stepKey={stepKey} stepTitle={stepTitle}
               artifactId={artifactId} versionLabel={`${label} ${date}`} />
           )}
+          {patentFigures && <WorkflowPatentFigureLinks projectId={projectId} runId={runId} artifactId={artifactId} />}
           {source && <span className="workflow-note">工作区来源 <bdi>{source.path}</bdi> · 版本 <bdi>{source.versionId}</bdi></span>}
         </li>
       })}
