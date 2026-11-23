@@ -4,8 +4,8 @@ import type { Material, MaterialPage } from './materials'
 import { errorMessage } from './projects'
 import type { CourseTemplateId } from './projects'
 import {
-  courseCharacterMax, courseCharacterMin, courseDisciplineLabels, courseMaterialLimit,
-  courseMethodLabels, courseReportTypeLabels, courseRequirementsLimit,
+  courseCharacterMax, courseCharacterMin, courseDisciplineLabels,
+  courseMethodLabels, courseReportTypeLabels, courseRequirementsLimit, workflowMaterialLimit,
 } from './workflow'
 import type { CourseOptions, CourseProfile, WorkflowRun } from './workflow'
 
@@ -66,7 +66,7 @@ function CourseSelect<T extends string>({ id, label, labels, value, disabled, on
 
 const materialDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' })
 
-function MaterialLabel({ name, sha256, format, createdAt }: Pick<Material, 'name' | 'sha256' | 'format'> & {
+export function WorkflowMaterialLabel({ name, sha256, format, createdAt }: Pick<Material, 'name' | 'sha256' | 'format'> & {
   createdAt?: string
 }) {
   return <span className="material-info">
@@ -79,11 +79,12 @@ function MaterialLabel({ name, sha256, format, createdAt }: Pick<Material, 'name
   </span>
 }
 
-function CourseMaterialPicker({ projectId, selected, disabled, onChange }: {
+export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange, help }: {
   projectId: string
   selected: string[]
   disabled: boolean
   onChange: (materialIds: string[]) => void
+  help?: string
 }) {
   const id = useId()
   const [page, setPage] = useState<MaterialPage>({ items: [] })
@@ -120,20 +121,20 @@ function CourseMaterialPicker({ projectId, selected, disabled, onChange }: {
   return <details className="workflow-artifact-history" onToggle={(event) => {
     if (event.currentTarget.open && !query && !loading) load()
   }}>
-    <summary>选择项目资料 · 已选 {selected.length}/{courseMaterialLimit}</summary>
+    <summary>选择项目资料 · 已选 {selected.length}/{workflowMaterialLimit}</summary>
     <div className="workflow-run-history-content">
       <p className="workflow-note" id={id}>
-        选填，最多 {courseMaterialLimit} 份 UTF-8 文本或 Word。同名文件可按 SHA-256 摘要区分版本。
+        {help ?? `选填，最多 ${workflowMaterialLimit} 份 UTF-8 文本或 Word。同名文件可按 SHA-256 摘要区分版本。`}
       </p>
       {page.items.length > 0 && <ul className="workspace-list" role="list" aria-label="可选资料版本" aria-describedby={id}>
         {page.items.map((material) => {
           const checked = selected.includes(material.materialId)
           return <li key={material.materialId}>
             <label className="workflow-checkpoint workspace-row">
-              <input type="checkbox" checked={checked} disabled={disabled || (!checked && selected.length >= courseMaterialLimit)}
+              <input type="checkbox" checked={checked} disabled={disabled || (!checked && selected.length >= workflowMaterialLimit)}
                 onChange={(event) => onChange(event.currentTarget.checked ? [...selected, material.materialId]
                   : selected.filter((materialId) => materialId !== material.materialId))} />
-              <MaterialLabel {...material} />
+              <WorkflowMaterialLabel {...material} />
             </label>
           </li>
         })}
@@ -191,7 +192,7 @@ export function WorkflowCourseOptions({ projectId, templateId, draft, errors, di
         {errors.requirements || '选填，最多 4 KiB（UTF-8）。可填写课程要求、报告结构或评分要点。'}
       </p>
     </div>
-    <CourseMaterialPicker projectId={projectId} selected={draft.materialIds} disabled={disabled}
+    <WorkflowMaterialPicker projectId={projectId} selected={draft.materialIds} disabled={disabled}
       onChange={(materialIds) => onChange({ ...draft, materialIds })} />
   </div>
 }
@@ -214,7 +215,7 @@ export function WorkflowCourseSummary({ run }: { run: WorkflowRun }) {
         {settings.requirements && <p className="workflow-note workflow-step-message" dir="auto">{settings.requirements}</p>}
         {!!settings.materials?.length && <ul className="material-list" role="list" aria-label="固定资料版本">
           {settings.materials.map((material) => <li className="material-row" key={material.materialId}>
-            <MaterialLabel {...material} />
+            <WorkflowMaterialLabel {...material} />
           </li>)}
         </ul>}
         {!settings.materials?.length && !!settings.materialIds?.length && (

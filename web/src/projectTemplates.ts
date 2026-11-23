@@ -1,6 +1,6 @@
 import { isTemplateId, request } from './projects'
 import type { TemplateId } from './projects'
-import { isCourseProfile } from './workflow'
+import { isCourseProfile, isSoftwareVersion } from './workflow'
 import type { CourseProfile } from './workflow'
 
 interface TemplateStep {
@@ -23,6 +23,7 @@ export interface TemplateDefaults {
     targetSources: number
   }
   course?: CourseProfile
+  software?: { version: string }
   maxRounds?: number
   targetScore?: number
 }
@@ -67,6 +68,7 @@ function isDefaults(value: unknown): value is TemplateDefaults {
     && (value.targetPaperCount === undefined || isNumber(value.targetPaperCount))
     && (value.proposal === undefined || isProposalDefaults(value.proposal))
     && (value.course === undefined || isCourseProfile(value.course))
+    && (value.software === undefined || (isRecord(value.software) && isSoftwareVersion(value.software.version)))
     && (value.maxRounds === undefined || isNumber(value.maxRounds))
     && (value.targetScore === undefined || isNumber(value.targetScore))
 }

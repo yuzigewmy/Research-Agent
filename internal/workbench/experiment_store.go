@@ -90,23 +90,24 @@ type WorkflowScope struct {
 }
 
 type WorkflowRun struct {
-	RunID               string           `json:"runId"`
-	WorkflowKey         string           `json:"workflowKey"`
-	Revision            int              `json:"revision"`
-	Status              string           `json:"status"`
-	Checkpoints         bool             `json:"checkpoints"`
-	ConfirmEachStep     bool             `json:"confirmEachStep,omitempty"`
-	CreatedAt           string           `json:"createdAt"`
-	TargetPaperCount    int              `json:"targetPaperCount,omitempty"`
-	SourceCount         int              `json:"sourceCount,omitempty"`
-	Language            string           `json:"language,omitempty"`
-	Scope               WorkflowScope    `json:"scope"`
-	Steps               []WorkflowStep   `json:"steps"`
-	AcceptStepKey       string           `json:"acceptStepKey,omitempty"`
-	SkipStepKey         string           `json:"skipStepKey,omitempty"`
-	TopicChoice         *topicChoice     `json:"topicChoice,omitempty"`
-	Proposal            *proposalTargets `json:"proposal,omitempty"`
-	Course              *courseSettings  `json:"course,omitempty"`
+	RunID               string            `json:"runId"`
+	WorkflowKey         string            `json:"workflowKey"`
+	Revision            int               `json:"revision"`
+	Status              string            `json:"status"`
+	Checkpoints         bool              `json:"checkpoints"`
+	ConfirmEachStep     bool              `json:"confirmEachStep,omitempty"`
+	CreatedAt           string            `json:"createdAt"`
+	TargetPaperCount    int               `json:"targetPaperCount,omitempty"`
+	SourceCount         int               `json:"sourceCount,omitempty"`
+	Language            string            `json:"language,omitempty"`
+	Scope               WorkflowScope     `json:"scope"`
+	Steps               []WorkflowStep    `json:"steps"`
+	AcceptStepKey       string            `json:"acceptStepKey,omitempty"`
+	SkipStepKey         string            `json:"skipStepKey,omitempty"`
+	TopicChoice         *topicChoice      `json:"topicChoice,omitempty"`
+	Proposal            *proposalTargets  `json:"proposal,omitempty"`
+	Course              *courseSettings   `json:"course,omitempty"`
+	Software            *softwareSettings `json:"software,omitempty"`
 	step                int
 	rangeStart          int
 	rangeEnd            int
@@ -131,7 +132,7 @@ type workflowRequest struct {
 	RequestID        string           `json:"requestId"`
 	RunID            string           `json:"runId"`
 	ExpectedRevision int              `json:"expectedRevision"`
-	Checkpoints      bool             `json:"checkpoints"`
+	Checkpoints      *bool            `json:"checkpoints"`
 	ThroughStep      string           `json:"throughStep"`
 	StepKey          string           `json:"stepKey"`
 	Reason           string           `json:"reason"`
@@ -141,6 +142,7 @@ type workflowRequest struct {
 	Topic            *topicOptions    `json:"topic"`
 	Proposal         *proposalOptions `json:"proposal"`
 	Course           *courseOptions   `json:"course"`
+	Software         *softwareOptions `json:"software"`
 	sourceTurnID     string
 	workflowKey      string
 }
@@ -181,6 +183,11 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	case isCourseWorkflow(run.WorkflowKey):
 		run.Course = new(courseSettings)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Course); err != nil {
+			return WorkflowRun{}, err
+		}
+	case run.WorkflowKey == softwareRegistrationWorkflow:
+		run.Software = new(softwareSettings)
+		if err := json.Unmarshal([]byte(run.optionsJSON), run.Software); err != nil {
 			return WorkflowRun{}, err
 		}
 	}
@@ -275,6 +282,10 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if key == "" {
 		return WorkflowRun{}, false, errWorkflowState
 	}
+	checkpoints := key == softwareRegistrationWorkflow
+	if req.Checkpoints != nil {
+		checkpoints = *req.Checkpoints
+	}
 	options, target, err := workflowStartSettings(ctx, tx, projectID, key, action, req)
 	if err != nil {
 		return WorkflowRun{}, false, err
@@ -293,7 +304,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
 		if err == nil && action == workflowStart {
-			if req.Checkpoints != run.templateCheckpoints || target != run.TargetPaperCount {
+			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount {
 				return WorkflowRun{}, false, errRequestConflict
 			}
 			if options != run.optionsJSON {
@@ -417,7 +428,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs
 			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json, range_end, range_source_turn_id)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`, current.RunID, projectID, req.Checkpoints,
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`, current.RunID, projectID, checkpoints,
 			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID)
 	case workflowPause, workflowCancel:
 		runStatus := taskCancelled

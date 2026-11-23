@@ -27,7 +27,11 @@ func workflowArtifactStep(ctx context.Context, db workspaceQuery, projectID, run
 	for i, stage := range workflowStages[workflow] {
 		if stage.key == key {
 			family, _, _ := strings.Cut(workflow, "-v")
-			return i, family + "-" + key + ".md", nil
+			extension := ".md"
+			if stage.plainText {
+				extension = ".txt"
+			}
+			return i, family + "-" + key + extension, nil
 		}
 	}
 	return 0, "", sql.ErrNoRows
@@ -113,6 +117,10 @@ func (api workflows) artifact(w http.ResponseWriter, r *http.Request) {
 	artifact, err := lookupWorkflowArtifact(ctx, api.store.db, projectID, runID, step, r.PathValue("artifactId"))
 	if err != nil {
 		writeWorkflowArtifactError(w, err)
+		return
+	}
+	if strings.HasSuffix(name, ".txt") {
+		writeTextAttachment(w, r, name, "text/plain; charset=utf-8", artifact.markdown)
 		return
 	}
 	writeMarkdown(w, r, name, artifact.markdown)

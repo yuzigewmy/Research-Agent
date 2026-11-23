@@ -110,6 +110,10 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择有效的写作语言，大纲上限为 16 KiB。")
 		case errors.Is(err, errCourseOptions):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对课程写作设置。目标为 1000 至 30000 字，补充要求最多 4 KiB，可选最多四份资料。")
+		case errors.Is(err, errSoftwareOptions):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对版本号和软件说明。版本号最多 64 字节，软件说明最多 4 KiB，可选最多四份资料。")
+		case errors.Is(err, errSoftwareSources):
+			writeError(w, http.StatusUnprocessableEntity, "SOURCE_TOO_LARGE", "本轮选定的源码文本合计不得超过 64 KiB。请缩小材料范围。")
 		case errors.Is(err, errInvalidTurnReference):
 			writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请选择当前项目的文本或 Word 资料。")
 		case errors.Is(err, errTopicOptions):

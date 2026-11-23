@@ -178,7 +178,7 @@ func confirmWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, turnID stri
 		workflowStages[latest.WorkflowKey][latest.step-1].checkpoint {
 		return false, errWorkflowCheckpoint
 	}
-	req := workflowRequest{RequestID: rand.Text(), ThroughStep: record.Scope.EndStep, Checkpoints: record.Checkpoints,
+	req := workflowRequest{RequestID: rand.Text(), ThroughStep: record.Scope.EndStep, Checkpoints: new(record.Checkpoints),
 		sourceTurnID: turnID, workflowKey: record.WorkflowKey}
 	if record.Action == workflowContinue {
 		req.RunID, req.ExpectedRevision = record.BaseRunID, record.BaseRevision

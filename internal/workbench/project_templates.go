@@ -27,6 +27,7 @@ type projectTemplateDefaults struct {
 	TargetPaperCount int              `json:"targetPaperCount,omitempty"`
 	Proposal         *proposalTargets `json:"proposal,omitempty"`
 	Course           *courseSettings  `json:"course,omitempty"`
+	Software         *softwareOptions `json:"software,omitempty"`
 	MaxRounds        int              `json:"maxRounds,omitempty"`
 	TargetScore      int              `json:"targetScore,omitempty"`
 }
@@ -62,6 +63,10 @@ var projectTemplates = []projectTemplate{
 	{ID: "course_report", Label: "课程报告", Revision: courseReportWorkflow, Kind: "workflow",
 		Summary:      "先梳理材料中的事实，再按课程任务撰写实施过程、观察结果和反思。",
 		Deliverables: []string{"材料核对单", "写作规划", "分节稿件与汇编稿", "交付核对报告", "可编辑 Word（启用导出组件后）"}},
+	{ID: "software_registration", Label: "软件著作权材料", Revision: softwareRegistrationWorkflow, Kind: "workflow",
+		Summary:      "固定软件说明和选定资料，生成操作手册草稿、程序材料与申请信息核对单。",
+		Deliverables: []string{"材料来源清单", "操作手册草稿", "程序材料 TXT", "申请信息核对单 TXT", "可编辑 Word（启用导出组件后）"},
+		Defaults:     projectTemplateDefaults{Software: &softwareOptions{Version: defaultSoftwareVersion}}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {
@@ -91,7 +96,7 @@ func listProjectTemplates(w http.ResponseWriter, _ *http.Request) {
 		stages := workflowStages[template.Revision]
 		template.Steps = make([]projectTemplateStep, 0, len(stages))
 		if template.Kind == "workflow" {
-			template.Defaults.Checkpoints = new(bool)
+			template.Defaults.Checkpoints = new(template.Revision == softwareRegistrationWorkflow)
 		}
 		switch {
 		case template.ID == "proposal":

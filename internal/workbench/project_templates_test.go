@@ -34,6 +34,7 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 				TargetPaperCount int
 				Proposal         *proposalTargets
 				Course           *courseSettings
+				Software         *softwareOptions
 				MaxRounds        int
 				TargetScore      int
 			}
@@ -49,7 +50,8 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 			t.Fatalf("template has incomplete metadata: %+v", item)
 		}
 		if item.Kind == "workflow" {
-			if item.Defaults.Checkpoints == nil || *item.Defaults.Checkpoints || len(item.Steps) != len(workflowStages[item.Revision]) {
+			if item.Defaults.Checkpoints == nil || *item.Defaults.Checkpoints != (item.Revision == softwareRegistrationWorkflow) ||
+				len(item.Steps) != len(workflowStages[item.Revision]) {
 				t.Fatalf("wrong workflow contract for %s: %+v", item.ID, item)
 			}
 			for i, stage := range workflowStages[item.Revision] {
@@ -61,7 +63,7 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report"}
+	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report", "software_registration"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("unexpected available templates: %v", ids)
 	}
@@ -77,5 +79,10 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 	if paper == nil || paper.TargetCharacters != 8000 || paper.Language != "zh" || paper.Method != "auto" ||
 		report == nil || report.TargetCharacters != 10000 || report.Language != "zh" || report.ReportType != "auto" {
 		t.Fatalf("wrong coursework defaults: paper=%+v report=%+v", paper, report)
+	}
+	software := items[9]
+	if software.Defaults.Software == nil || software.Defaults.Software.Version != "V1.0" ||
+		software.Steps[1].Key != "manuscript" || software.Steps[1].Checkpoint != "confirm" {
+		t.Fatalf("wrong software registration defaults: %+v", software)
 	}
 }

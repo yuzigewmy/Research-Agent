@@ -35,6 +35,7 @@ function defaultSettings(defaults: TemplateDefaults) {
     if (method) fields.push(['研究方法', courseMethodLabels[method]])
     if (reportType) fields.push(['报告类型', courseReportTypeLabels[reportType]])
   }
+  if (defaults.software) fields.push(['软件版本号', defaults.software.version])
   if (defaults.maxRounds !== undefined) fields.push(['最多审稿轮次', `${defaults.maxRounds} 轮`])
   if (defaults.targetScore !== undefined) fields.push(['目标分数', `${defaults.targetScore} 分`])
   return fields

@@ -142,7 +142,21 @@ export const courseReportTypeLabels = {
 export const courseCharacterMin = 1_000
 export const courseCharacterMax = 30_000
 export const courseRequirementsLimit = 4 * 1024
-export const courseMaterialLimit = 4
+export const workflowMaterialLimit = 4
+export const defaultSoftwareVersion = 'V1.0'
+export const softwareVersionLimit = 64
+export const softwareDescriptionLimit = 4 * 1024
+
+const utf8 = new TextEncoder()
+
+export function isSoftwareVersion(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !/\p{Cc}/u.test(value)
+    && utf8.encode(value).length <= softwareVersionLimit
+}
+
+export function isSoftwareDescription(value: unknown): value is string {
+  return typeof value === 'string' && !value.includes('\0') && utf8.encode(value).length <= softwareDescriptionLimit
+}
 
 export interface CourseProfile {
   language: 'zh'
@@ -157,7 +171,7 @@ export type CourseOptions = Partial<Omit<CourseProfile, 'language'>> & {
   materialIds?: string[]
 }
 
-interface CourseMaterial {
+interface WorkflowMaterial {
   materialId: string
   name: string
   sha256: string
@@ -167,7 +181,18 @@ interface CourseMaterial {
 export interface CourseSettings extends CourseProfile {
   requirements?: string
   materialIds?: string[]
-  materials?: CourseMaterial[]
+  materials?: WorkflowMaterial[]
+}
+
+export interface SoftwareOptions {
+  version?: string
+  description?: string
+  materialIds?: string[]
+}
+
+export interface SoftwareSettings extends SoftwareOptions {
+  version: string
+  materials?: WorkflowMaterial[]
 }
 
 export interface WorkflowRun extends WorkflowRunSummary {
@@ -184,6 +209,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   topicChoice?: WorkflowTopicChoiceData
   proposal?: ProposalTargets
   course?: CourseSettings
+  software?: SoftwareSettings
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -202,6 +228,7 @@ export interface StartWorkflowInput {
   topic?: { requirements?: string }
   proposal?: ProposalOptions
   course?: CourseOptions
+  software?: SoftwareOptions
   throughStep?: string
 }
 
@@ -340,8 +367,8 @@ export function isCourseProfile(value: unknown): value is CourseProfile {
     && (profile.reportType === undefined || hasLabel(courseReportTypeLabels, profile.reportType))
 }
 
-function isCourseMaterial(value: unknown): value is CourseMaterial {
-  const material = value as Partial<CourseMaterial> | null
+function isWorkflowMaterial(value: unknown): value is WorkflowMaterial {
+  const material = value as Partial<WorkflowMaterial> | null
   return !!material && isPathId(material.materialId) && typeof material.name === 'string' && material.name.length > 0
     && typeof material.sha256 === 'string' && /^[a-f\d]{64}$/i.test(material.sha256)
     && (material.format === undefined || material.format === 'word')
@@ -352,7 +379,17 @@ function isCourseSettings(value: unknown): value is CourseSettings {
   const { requirements, materialIds, materials } = value as CourseSettings
   return (requirements === undefined || typeof requirements === 'string')
     && (materialIds === undefined || (Array.isArray(materialIds) && materialIds.every(isPathId)))
-    && (materials === undefined || (Array.isArray(materials) && materials.every(isCourseMaterial)))
+    && (materials === undefined || (Array.isArray(materials) && materials.every(isWorkflowMaterial)))
+}
+
+function isSoftwareSettings(value: unknown): value is SoftwareSettings {
+  const settings = value as Partial<SoftwareSettings> | null
+  return !!settings && isSoftwareVersion(settings.version)
+    && (settings.description === undefined || isSoftwareDescription(settings.description))
+    && (settings.materialIds === undefined || (Array.isArray(settings.materialIds)
+      && settings.materialIds.length <= workflowMaterialLimit && settings.materialIds.every(isPathId)))
+    && (settings.materials === undefined || (Array.isArray(settings.materials)
+      && settings.materials.length <= workflowMaterialLimit && settings.materials.every(isWorkflowMaterial)))
 }
 
 function isRun(value: unknown): value is WorkflowRun {
@@ -370,6 +407,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.topicChoice === undefined || isTopicChoice(run.topicChoice))
     && (run.proposal === undefined || isProposalTargets(run.proposal))
     && (run.course === undefined || isCourseSettings(run.course))
+    && (run.software === undefined || isSoftwareSettings(run.software))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 

@@ -56,6 +56,9 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	if isCourseWorkflow(key) {
 		return s.generateCourseStep(ctx, model, project, task, key, input, evidence, options)
 	}
+	if key == softwareRegistrationWorkflow {
+		return s.generateSoftwareRegistrationStep(ctx, model, project, task, input, options)
+	}
 	stages := workflowStages[key]
 	stage := stages[task.workflowStep]
 	var sources []reviewSource

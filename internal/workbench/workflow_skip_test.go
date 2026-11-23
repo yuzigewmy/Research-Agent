@@ -102,7 +102,7 @@ func TestWorkflowSkipPersistsAndAllowsChecklistRerun(t *testing.T) {
 		return fmt.Sprintf(`{"requestId":%q,"runId":%q,"expectedRevision":%d,"stepKey":%q,"reason":%q}`, requestID, run.RunID, run.Revision, step, reason)
 	}
 	const reason = "本轮不需要单独的验收清单"
-	started := apply(workflowStart, workflowRequest{RequestID: "start", Checkpoints: true, ThroughStep: "scope"})
+	started := apply(workflowStart, workflowRequest{RequestID: "start", Checkpoints: new(true), ThroughStep: "scope"})
 	finish(started.RunID, 0, "# Research scope")
 	beforePlan := readRun()
 	send(http.MethodPost, "/skip", skipBody("required-plan", beforePlan, "plan", reason), http.StatusConflict)
@@ -188,7 +188,7 @@ func TestWorkflowSkipPersistsAndAllowsChecklistRerun(t *testing.T) {
 	}
 
 	handler = NewHandler(store, nil, HandlerConfig{})
-	legacy := apply(workflowStart, workflowRequest{RequestID: "legacy", Checkpoints: true})
+	legacy := apply(workflowStart, workflowRequest{RequestID: "legacy", Checkpoints: new(true)})
 	finish(legacy.RunID, 0, "# Legacy scope")
 	finish(legacy.RunID, 1, "# Legacy plan")
 	if _, err := store.db.ExecContext(ctx, `UPDATE workflow_runs SET workflow_key = 'experiment-v1' WHERE project_id = ? AND run_id = ?`, id, legacy.RunID); err != nil {

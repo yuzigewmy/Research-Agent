@@ -26,6 +26,16 @@ type paperOptions struct {
 }
 
 func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, action string, req workflowRequest) (string, int, error) {
+	if key == softwareRegistrationWorkflow && action == workflowStart {
+		if req.Paper != nil || req.Topic != nil || req.Proposal != nil || req.Course != nil || req.TargetPaperCount != 0 {
+			return "", 0, errSoftwareOptions
+		}
+		options, err := freezeSoftwareSettings(ctx, tx, projectID, req.Software)
+		return options, 0, err
+	}
+	if req.Software != nil {
+		return "", 0, errSoftwareOptions
+	}
 	if isCourseWorkflow(key) && action == workflowStart {
 		if req.Paper != nil || req.Topic != nil || req.Proposal != nil || req.TargetPaperCount != 0 {
 			return "", 0, errCourseOptions

@@ -6,6 +6,7 @@ import { initialCourseDraft, prepareCourse, WorkflowCourseOptions, WorkflowCours
 import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
+import { initialSoftwareDraft, prepareSoftware, WorkflowSoftwareOptions, WorkflowSoftwareSummary } from './WorkflowSoftwareOptions'
 import type { SkipTarget } from './WorkflowSkipStep'
 import { WorkflowStageAcceptance } from './WorkflowStageAcceptance'
 import type { AcceptanceTarget } from './WorkflowStageAcceptance'
@@ -179,6 +180,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const isTopic = templateId === 'topic'
   const courseTemplate = templateId === 'course_paper' || templateId === 'course_report' ? templateId : null
   const isProposal = templateId === 'proposal'
+  const isSoftware = templateId === 'software_registration'
   const title = {
     experiment: '实验工作流',
     literature_review: '文献综述工作流',
@@ -187,6 +189,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     proposal: '开题报告工作流',
     course_paper: '课程论文工作流',
     course_report: '课程报告工作流',
+    software_registration: '软件著作权材料工作流',
   }[templateId]
   const checkpointLabel = {
     experiment: '生成实验计划后，等待我确认再继续',
@@ -196,6 +199,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     proposal: '完成开题规划后由我确认',
     course_paper: '完成课程写作规划后由我确认',
     course_report: '完成课程写作规划后由我确认',
+    software_registration: '操作手册草稿完成后由我确认',
   }[templateId]
   const checkpointHint = {
     experiment: '确认实验计划后生成验收清单。',
@@ -205,19 +209,21 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     proposal: '确认开题规划后继续撰写',
     course_paper: '确认课程写作规划后开始分节撰写。',
     course_report: '确认课程写作规划后开始分节撰写。',
+    software_registration: '核对操作手册草稿后，确认继续整理程序材料。',
   }[templateId]
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
   const cancelButton = useRef<HTMLButtonElement>(null)
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
-  const [checkpoints, setCheckpoints] = useState(false)
+  const [checkpoints, setCheckpoints] = useState(isSoftware)
   const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
   const [paperOutline, setPaperOutline] = useState('')
   const [topicRequirements, setTopicRequirements] = useState('')
   const [proposalDraft, setProposalDraft] = useState(initialProposalDraft)
   const [courseDraft, setCourseDraft] = useState(() => initialCourseDraft(courseTemplate))
+  const [softwareDraft, setSoftwareDraft] = useState(initialSoftwareDraft)
   const [throughStep, setThroughStep] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
@@ -286,7 +292,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     || requirements.includes('\0'))
   const proposal = isProposal ? prepareProposal(proposalDraft) : undefined
   const course = courseTemplate ? prepareCourse(courseTemplate, courseDraft) : undefined
-  const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false || course?.valid === false
+  const software = isSoftware ? prepareSoftware(softwareDraft) : undefined
+  const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false
+    || course?.valid === false || software?.valid === false
   const currentRun = useEffectEvent(() => run)
 
   useEffect(() => {
@@ -391,6 +399,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             topic: isTopic ? { requirements: requirements || undefined } : undefined,
             proposal: proposal?.options,
             course: course?.options,
+            software: software?.options,
             throughStep: endStep || undefined,
           } }
         } else if (kind === 'rerun') {
@@ -430,8 +439,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       setCancelTarget(null)
       setThroughStep('')
       if (attempt.kind === 'start') {
-        setCheckpoints(false)
+        setCheckpoints(isSoftware)
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
+        if (isSoftware) setSoftwareDraft(initialSoftwareDraft())
       }
       if (attempt.kind === 'accept') {
         if (acceptanceDraft) onClearAcceptanceDraft(acceptanceDraft.openId)
@@ -492,6 +502,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
       {run && <WorkflowProposalSummary run={run} />}
       {run && <WorkflowCourseSummary run={run} />}
+      {run && <WorkflowSoftwareSummary run={run} />}
       {run?.workflowKey === 'proposal-v2' && <p className="workflow-note">正文各节分别保存。本轮可从未完成的一节继续。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} rerun={{
         selected: selectedRerun?.stepKey,
@@ -538,6 +549,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         <div className="workflow-controls">
           {canStart && courseTemplate && course && <WorkflowCourseOptions projectId={projectId} templateId={courseTemplate}
             draft={courseDraft} errors={course.errors} disabled={actionDisabled || retryStart !== null} onChange={setCourseDraft} />}
+          {canStart && software && <WorkflowSoftwareOptions projectId={projectId} draft={softwareDraft}
+            errors={software.errors} disabled={actionDisabled || retryStart !== null} onChange={setSoftwareDraft} />}
           {canStart && proposal && <WorkflowProposalOptions draft={proposalDraft} errors={proposal.errors}
             disabled={actionDisabled || retryStart !== null} onChange={setProposalDraft} />}
           {canStart && isTopic && <div className="field workflow-topic-requirements">
@@ -576,7 +589,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           </>}
           {firstStep && lastStep && <div className="field">
             <label htmlFor={`${headingId}-through-step`}>本次终点（可选）</label>
-            <select id={`${headingId}-through-step`} value={endStep} disabled={actionDisabled || (!!courseTemplate && !!retryStart)}
+            <select id={`${headingId}-through-step`} value={endStep} disabled={actionDisabled || ((!!courseTemplate || isSoftware) && !!retryStart)}
               aria-describedby={`${headingId}-range-help`} onChange={(event) => {
                 setThroughStep(event.currentTarget.value)
                 setRetry(null)
@@ -605,14 +618,16 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           {canPause && <p className="workflow-note" id={`${headingId}-pause-help`}>
             暂停会停止当前步骤，继续时将重新执行该步骤。
           </p>}
-          {canStart && courseTemplate && <p id={`${headingId}-course-model`} className="workflow-note">
-            启动后，补充要求、所选资料的文字节选和本轮文献元数据会发送给研究模型。
+          {canStart && (courseTemplate || isSoftware) && <p id={`${headingId}-model-input`} className="workflow-note">
+            {isSoftware
+              ? '编制操作手册时，软件名称、版本、说明、资料信息和说明文档节选会发送给研究模型。源码正文用于在本机整理程序材料。'
+              : '启动后，补充要求、所选资料的文字节选和本轮文献元数据会发送给研究模型。'}
           </p>}
           <div className="workflow-actions">
             {canStart && (
               <button className="button primary" type="button"
                 disabled={invalidStart || (actionDisabled && pending !== 'start')}
-                aria-disabled={pending === 'start'} aria-describedby={courseTemplate ? `${headingId}-course-model` : undefined}
+                aria-disabled={pending === 'start'} aria-describedby={courseTemplate || isSoftware ? `${headingId}-model-input` : undefined}
                 onClick={() => void submit('start')}>
                 {pending === 'start' ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>
@@ -665,6 +680,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
           <WorkflowProposalSummary run={historicalRun} />
           <WorkflowCourseSummary run={historicalRun} />
+          <WorkflowSoftwareSummary run={historicalRun} />
           <WorkflowSteps projectId={projectId} run={historicalRun} />
         </>} />
     </section>

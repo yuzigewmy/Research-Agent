@@ -210,12 +210,16 @@ func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeMarkdown(w http.ResponseWriter, r *http.Request, filename, markdown string) {
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	writeTextAttachment(w, r, filename, "text/markdown; charset=utf-8", markdown)
+}
+
+func writeTextAttachment(w http.ResponseWriter, r *http.Request, filename, contentType, text string) {
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Length", strconv.Itoa(len(markdown)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(text)))
 	if r.Method != http.MethodHead {
-		_, _ = io.WriteString(w, markdown)
+		_, _ = io.WriteString(w, text)
 	}
 }
 

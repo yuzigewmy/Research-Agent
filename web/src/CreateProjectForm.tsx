@@ -20,6 +20,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
   const [title, setTitle] = useState('')
   const [preferredTemplate, setTemplate] = useState<TemplateId>('freeform')
   const template = (templateItems.find((item) => item.id === preferredTemplate) ?? templateItems[0])?.id
+  const titleLabel = template === 'software_registration' ? '软件全称' : '项目名称'
   const [pending, setPending] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [submitError, setSubmitError] = useState('')
@@ -34,7 +35,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
     const trimmed = title.trim()
     const length = Array.from(trimmed).length
     if (length === 0 || length > titleLimit) {
-      setTitleError(length === 0 ? '请输入项目名称。' : `项目名称不能超过 ${titleLimit} 个字符。`)
+      setTitleError(length === 0 ? `请输入${titleLabel}。` : `${titleLabel}不能超过 ${titleLimit} 个字符。`)
       titleInput.current?.focus()
       return
     }
@@ -66,7 +67,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
   return (
     <form className="create-form" onSubmit={submit} noValidate aria-busy={pending}>
       <div className="field">
-        <label htmlFor="project-title">项目名称</label>
+        <label htmlFor="project-title">{titleLabel}</label>
         <input
           id="project-title"
           name="title"
@@ -88,6 +89,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
       <ProjectTemplatePicker id="project-template" items={templateItems} value={template} disabled={pending}
         onChange={(next) => {
           setTemplate(next)
+          setTitleError('')
           setSubmitError('')
         }} />
       {submitError && <p className="form-error" role="alert">{submitError}</p>}

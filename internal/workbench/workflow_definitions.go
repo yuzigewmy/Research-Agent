@@ -63,6 +63,7 @@ type workflowStage struct {
 	checkpoint         bool
 	acceptMarkdown     bool
 	optional           bool
+	plainText          bool
 }
 
 func experimentStages(optionalChecklist bool) []workflowStage {
@@ -102,4 +103,10 @@ var workflowStages = map[string][]workflowStage{
 	proposalWorkflow:     sectionedProposalStages(),
 	coursePaperWorkflow:  courseStages(coursePaperWorkflow),
 	courseReportWorkflow: courseStages(courseReportWorkflow),
+	softwareRegistrationWorkflow: {
+		{key: "sources", title: "固定材料与来源"},
+		{key: "manuscript", title: "编制操作手册草稿", prompt: softwareManualPrompt, checkpoint: true, acceptMarkdown: true},
+		{key: "program", title: "整理程序材料", plainText: true},
+		{key: "application", title: "生成申请信息核对单", plainText: true},
+	},
 }
