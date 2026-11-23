@@ -90,29 +90,31 @@ type WorkflowScope struct {
 }
 
 type WorkflowRun struct {
-	RunID             string           `json:"runId"`
-	WorkflowKey       string           `json:"workflowKey"`
-	Revision          int              `json:"revision"`
-	Status            string           `json:"status"`
-	Checkpoints       bool             `json:"checkpoints"`
-	CreatedAt         string           `json:"createdAt"`
-	TargetPaperCount  int              `json:"targetPaperCount,omitempty"`
-	SourceCount       int              `json:"sourceCount,omitempty"`
-	Language          string           `json:"language,omitempty"`
-	Scope             WorkflowScope    `json:"scope"`
-	Steps             []WorkflowStep   `json:"steps"`
-	AcceptStepKey     string           `json:"acceptStepKey,omitempty"`
-	SkipStepKey       string           `json:"skipStepKey,omitempty"`
-	TopicChoice       *topicChoice     `json:"topicChoice,omitempty"`
-	Proposal          *proposalTargets `json:"proposal,omitempty"`
-	Course            *courseSettings  `json:"course,omitempty"`
-	step              int
-	rangeStart        int
-	rangeEnd          int
-	stepTaskID        string
-	selectedTopic     int
-	optionsJSON       string
-	rangeSourceTurnID string
+	RunID               string           `json:"runId"`
+	WorkflowKey         string           `json:"workflowKey"`
+	Revision            int              `json:"revision"`
+	Status              string           `json:"status"`
+	Checkpoints         bool             `json:"checkpoints"`
+	ConfirmEachStep     bool             `json:"confirmEachStep,omitempty"`
+	CreatedAt           string           `json:"createdAt"`
+	TargetPaperCount    int              `json:"targetPaperCount,omitempty"`
+	SourceCount         int              `json:"sourceCount,omitempty"`
+	Language            string           `json:"language,omitempty"`
+	Scope               WorkflowScope    `json:"scope"`
+	Steps               []WorkflowStep   `json:"steps"`
+	AcceptStepKey       string           `json:"acceptStepKey,omitempty"`
+	SkipStepKey         string           `json:"skipStepKey,omitempty"`
+	TopicChoice         *topicChoice     `json:"topicChoice,omitempty"`
+	Proposal            *proposalTargets `json:"proposal,omitempty"`
+	Course              *courseSettings  `json:"course,omitempty"`
+	step                int
+	rangeStart          int
+	rangeEnd            int
+	stepTaskID          string
+	templateCheckpoints bool
+	selectedTopic       int
+	optionsJSON         string
+	rangeSourceTurnID   string
 }
 
 type WorkflowStep struct {
@@ -154,18 +156,22 @@ func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowR
 
 func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
-	var skipReason string
+	var skipReason, mode string
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
-		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json, COALESCE(w.range_source_turn_id, '')
+		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json, COALESCE(w.range_source_turn_id, ''),
+		COALESCE(t.mode, '')
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
+		LEFT JOIN turns t ON t.turn_id = w.range_source_turn_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
-		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.Checkpoints, &run.CreatedAt, &run.step,
+		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.templateCheckpoints, &run.CreatedAt, &run.step,
 			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic,
-			&run.optionsJSON, &run.rangeSourceTurnID)
+			&run.optionsJSON, &run.rangeSourceTurnID, &mode)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
+	run.ConfirmEachStep = mode == turnModeConfirmAll
+	run.Checkpoints = workflowCheckpoints(run.templateCheckpoints, mode)
 	switch {
 	case isProposalWorkflow(run.WorkflowKey):
 		run.Proposal = new(proposalTargets)
@@ -287,7 +293,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
 		if err == nil && action == workflowStart {
-			if req.Checkpoints != run.Checkpoints || target != run.TargetPaperCount {
+			if req.Checkpoints != run.templateCheckpoints || target != run.TargetPaperCount {
 				return WorkflowRun{}, false, errRequestConflict
 			}
 			if options != run.optionsJSON {
@@ -516,13 +522,15 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 	step := task.workflowStep
 	var stages []workflowStage
 	if status == taskSucceeded {
-		var key string
-		var checkpoints bool
+		var key, mode string
+		var templateCheckpoints bool
 		var end int
-		if err := tx.QueryRowContext(ctx, `SELECT workflow_key, checkpoints, range_end FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
-			Scan(&key, &checkpoints, &end); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT w.workflow_key, w.checkpoints, w.range_end, COALESCE(t.mode, '')
+			FROM workflow_runs w LEFT JOIN turns t ON t.turn_id = w.range_source_turn_id WHERE w.run_id = ?`,
+			task.workflowRunID).Scan(&key, &templateCheckpoints, &end, &mode); err != nil {
 			return err
 		}
+		checkpoints := workflowCheckpoints(templateCheckpoints, mode)
 		stages = workflowStages[key]
 		if key == topicWorkflow && step == topicShortlistStep && !checkpoints {
 			choice, err := readTopicStep[topicChoice](ctx, tx, task.workflowRunID, step)
@@ -542,7 +550,7 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 				status = workflowWaitingTopic
 			case step == end:
 				status = workflowRangeCompleted
-			case checkpoints && stages[step].checkpoint:
+			case mode == turnModeConfirmAll || (checkpoints && stages[step].checkpoint):
 				status = workflowWaiting
 			default:
 				status = taskQueued

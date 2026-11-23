@@ -67,6 +67,10 @@ func TestTurnPolicyRunsChecksButRequiresWorkflowConfirmation(t *testing.T) {
 			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", chatReply)
 			return
 		}
+		if len(input.Tools) == 0 && strings.Contains(prompt, workflowText) {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"# 已保存的步骤成果\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			return
+		}
 		if len(input.Tools) != 1 || input.Tools[0].Function.Name != "propose_research_task" {
 			t.Errorf("unexpected model request for %q", prompt)
 			http.Error(w, "expected proposal tool", http.StatusBadRequest)
@@ -219,5 +223,39 @@ func TestTurnPolicyRunsChecksButRequiresWorkflowConfirmation(t *testing.T) {
 	request(http.MethodGet, "/workflow", "", http.StatusOK, &snapshot)
 	if snapshot.Run != nil || checkTask(manual).Status != taskProposed || calls.Load() != 4 {
 		t.Fatalf("unexpected dispatch, workflow=%+v, model calls=%d", snapshot.Run, calls.Load())
+	}
+
+	strictCheck := send(`{"requestId":"strict-check","mode":"CONFIRM_ALL","text":"`+manualText+`"}`, "CONFIRM_ALL")
+	if task := checkTask(strictCheck); task.Status != taskProposed {
+		t.Fatalf("CONFIRM_ALL dispatched an unconfirmed check: %+v", task)
+	}
+	strictRun := send(`{"requestId":"strict-run","mode":"CONFIRM_ALL","text":"`+workflowText+`"}`, "CONFIRM_ALL")
+	if p := strictRun.WorkflowProposal; p == nil || p.Status != workflowProposed || !p.ConfirmEachStep || p.RunID != "" {
+		t.Fatalf("expected a proposal with step-by-step confirmation: %+v", p)
+	}
+	var approved turnWorkflowProposal
+	request(http.MethodPost, "/turns/"+strictRun.TurnID+"/workflow-proposal/confirm", "", http.StatusOK, &approved)
+	waitFor := func(status string) WorkflowRun {
+		t.Helper()
+		for {
+			request(http.MethodGet, "/workflow", "", http.StatusOK, &snapshot)
+			run := snapshot.Run
+			if run != nil && run.Status == status {
+				return *run
+			}
+			if run == nil || (run.Status != taskQueued && run.Status != taskRunning) || ctx.Err() != nil {
+				t.Fatalf("want workflow status %s, got %+v", status, run)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	paused := waitFor(workflowWaiting)
+	if paused.RunID != approved.RunID || !paused.ConfirmEachStep || paused.Steps[0].Status != taskSucceeded || paused.Steps[1].Status != "PENDING" || calls.Load() != 7 {
+		t.Fatalf("first confirmation should only run the scope step: %+v, calls=%d", paused, calls.Load())
+	}
+	continueBody := fmt.Sprintf(`{"requestId":"approve-plan","runId":%q,"expectedRevision":%d}`, paused.RunID, paused.Revision)
+	request(http.MethodPost, "/workflow/continue", continueBody, http.StatusAccepted, nil)
+	if run := waitFor(workflowRangeCompleted); run.RunID != paused.RunID || run.Steps[1].Status != taskSucceeded || calls.Load() != 8 {
+		t.Fatalf("second confirmation should finish the requested interval: %+v, calls=%d", run, calls.Load())
 	}
 }

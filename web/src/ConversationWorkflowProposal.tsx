@@ -55,7 +55,9 @@ export function ConversationWorkflowProposal({ projectId, turnId, proposal, onCh
     <h4 id={headingId} tabIndex={-1} ref={heading}>助手建议的工作流</h4>
     <p className="turn-status">
       {proposal.action === 'start' ? '开始新一轮' : '继续本轮'} · {proposal.checkpoints ? '已启用检查点' : '未启用检查点'}
+      {proposal.confirmEachStep && ' · 逐步确认'}
     </p>
+    {proposal.message && proposal.status === 'PROPOSED' && <p className="turn-status" role="status">{proposal.message}</p>}
     <p className="turn-content" dir="auto">{proposal.instruction}</p>
     <ol className="workflow-steps" aria-label="建议运行的步骤">
       {range.map(({ key, title }) => <li key={key} dir="auto">{title}</li>)}
@@ -72,7 +74,8 @@ export function ConversationWorkflowProposal({ projectId, turnId, proposal, onCh
         </button>
       </div>
     ) : <p className="turn-status" role="status">
-      {proposal.status === 'CONFIRMED' ? '工作流建议已确认' : '工作流建议已取消'}
+      {proposal.status === 'CANCELLED' ? '工作流建议已取消' : proposal.automatic ? '工作流已自动入队' : '工作流建议已确认'}
+      {proposal.runId && <> · <a href="#project-workflow">前往工作流</a></>}
     </p>}
   </section>
 }

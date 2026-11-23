@@ -158,7 +158,7 @@ func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal
 			return "", false, err
 		}
 	}
-	if mode != turnModeConfirmSteps {
+	if mode != turnModeConfirmSteps && mode != turnModeAuto {
 		return taskID, false, nil
 	}
 	queued, err := queueTurnTask(ctx, tx, projectID, taskID)

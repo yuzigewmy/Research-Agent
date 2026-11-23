@@ -17,15 +17,19 @@ export type ProjectStatus = 'READY' | 'ARCHIVED'
 export const turnModeLabels = {
   CHAT: '仅问答',
   CONFIRM: '建议任务，确认后运行',
+  CONFIRM_ALL: '所有任务先确认',
   CONFIRM_STEPS: '整步先确认',
+  AUTO: '自动推进',
 } as const
 
 export type TurnMode = keyof typeof turnModeLabels
 
 export const turnModeHelp: Record<TurnMode, string> = {
   CHAT: '只回答本轮问题。',
-  CONFIRM: '助手可提出任务，确认后入队。',
+  CONFIRM: '先回答问题，并将建议的任务交给你确认。',
+  CONFIRM_ALL: '每项任务都要确认。对话发起的工作流按步骤确认执行。',
   CONFIRM_STEPS: '研究计划、稿件检查和选区修改建议可直接入队。工作流区间需要确认，改稿应用由你决定。',
+  AUTO: '符合条件的任务和工作流直接入队。模板检查点仍需确认，改稿应用由你决定。',
 }
 
 export function isTurnMode(value: unknown): value is TurnMode {

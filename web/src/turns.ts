@@ -39,6 +39,9 @@ export interface WorkflowProposal {
   steps: { key: string; title: string }[]
   instruction: string
   checkpoints: boolean
+  confirmEachStep?: boolean
+  automatic?: boolean
+  message?: string
   status: 'PROPOSED' | 'CONFIRMED' | 'CANCELLED'
   runId?: string
 }
@@ -80,10 +83,13 @@ export function isProposedTaskId(value: unknown): value is string {
 
 export function isWorkflowProposal(value: unknown): value is WorkflowProposal {
   if (!value || typeof value !== 'object') return false
-  const { action, scope, steps, instruction, checkpoints, status, runId } = value as Partial<WorkflowProposal>
+  const { action, scope, steps, instruction, checkpoints, confirmEachStep, automatic, message, status, runId } = value as Partial<WorkflowProposal>
   if ((action !== 'start' && action !== 'continue')
     || (status !== 'PROPOSED' && status !== 'CONFIRMED' && status !== 'CANCELLED')
     || typeof instruction !== 'string' || typeof checkpoints !== 'boolean'
+    || (confirmEachStep !== undefined && typeof confirmEachStep !== 'boolean')
+    || (automatic !== undefined && typeof automatic !== 'boolean')
+    || (message !== undefined && typeof message !== 'string')
     || (runId !== undefined && !isProposedTaskId(runId))
     || !scope || typeof scope.startStep !== 'string' || typeof scope.endStep !== 'string'
     || !Array.isArray(steps) || !steps.every((step) => step && typeof step.key === 'string' && step.key.length > 0

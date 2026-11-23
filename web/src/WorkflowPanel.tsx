@@ -465,7 +465,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   }
 
   return (
-    <section className="workflow-panel" aria-labelledby={headingId}>
+    <section className="workflow-panel" id="project-workflow" aria-labelledby={headingId}>
       <div className="workflow-heading">
         <h4 id={headingId} ref={heading} tabIndex={-1}>{title}</h4>
         <p className="workflow-run-status" role="status" data-status={run?.status}>
@@ -516,7 +516,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         target={{ runId: run.runId, expectedRevision: run.revision, stepKey: skipStep.key }} stepTitle={skipStep.title}
         disabled={requestBlocked} pending={pending === 'skip'} retryReason={retrySkip?.input.reason}
         onConfirm={(target) => void submit('skip', target)} />}
-      {waiting && <p className="workflow-note">{checkpointHint}</p>}
+      {waiting && <p className="workflow-note">{run.confirmEachStep ? '核对已完成的成果后，确认运行下一步。' : checkpointHint}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}
       {paused && <p className="workflow-note">继续时从第一个未完成的步骤开始。已完成的成果仍可下载。</p>}
       {cancelled && <p className="workflow-note">已完成的成果仍可下载。</p>}

@@ -114,6 +114,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const [stopState, setStopState] = useState<StopState>()
   const [reload, setReload] = useState(0)
   const runningTurn = turns.find((turn) => turn.status === 'RUNNING')
+  const automaticTurnId = turns.filter((turn) => turn.workflowProposal?.automatic).at(-1)?.turnId
   const streamId = loading ? undefined : runningTurn?.turnId
   const matchingAttempt = attempt && attempt.text === draft && (attempt.referenceIds?.length ?? 0) === references.length
     && references.every((ref, index) => attempt.referenceIds?.[index] === ref.materialId && matchesSentReference(attempt, ref))
@@ -165,6 +166,10 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   }, [])
 
   const streamCursor = useEffectEvent((id: string) => turns.find((turn) => turn.turnId === id)?.afterSeq ?? 0)
+
+  useEffect(() => {
+    if (automaticTurnId) onWorkflowConfirmed?.()
+  }, [automaticTurnId, onWorkflowConfirmed])
 
   useEffect(() => {
     if (!streamId) return

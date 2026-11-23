@@ -237,11 +237,15 @@ func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e *TurnEven
 	if completed {
 		switch {
 		case e.proposal.workflow != nil:
+			queued, err := dispatchTurnWorkflow(ctx, tx, turnID, e.proposal.workflow)
+			if err != nil {
+				return 0, err
+			}
 			body, err := json.Marshal(e.proposal.workflow)
 			if err != nil {
 				return 0, err
 			}
-			workflowJSON = string(body)
+			workflowJSON, e.queued = string(body), queued
 		case e.proposal.instruction != "":
 			taskID, queued, err := insertTurnProposal(ctx, tx, turnID, e.proposal)
 			if err != nil {

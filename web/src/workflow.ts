@@ -169,6 +169,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
   checkpoints: boolean
+  confirmEachStep?: boolean
   targetPaperCount?: number
   sourceCount?: number
   language?: 'zh' | 'en'
@@ -353,6 +354,7 @@ function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
     && typeof run.checkpoints === 'boolean'
+    && (run.confirmEachStep === undefined || typeof run.confirmEachStep === 'boolean')
     && (run.sourceCount === undefined || Number.isSafeInteger(run.sourceCount))
     && (run.targetPaperCount === undefined || Number.isSafeInteger(run.targetPaperCount))
     && (run.language === undefined || run.language === 'zh' || run.language === 'en')

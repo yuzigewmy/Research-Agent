@@ -122,7 +122,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	var workflow *workflowProposalRecord
 	var manuscripts []taskInput
 	if turn.Mode != turnModeChat {
-		workflow, err = c.store.workflowProposalOptions(ctx, project)
+		workflow, err = c.store.workflowProposalOptions(ctx, project, turn.Mode)
 		if err != nil {
 			return turnProposal{}, err
 		}
@@ -201,6 +201,9 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 			message = "请核对要检查的稿件版本。"
 		case proposal.editSelection != nil:
 			message = "请核对要修改的稿件选区。"
+		}
+		if turn.Mode == turnModeAuto || (turn.Mode == turnModeConfirmSteps && proposal.workflow == nil) {
+			message = "已整理本轮的执行请求。"
 		}
 		if err := emit(message); err != nil {
 			return turnProposal{}, err

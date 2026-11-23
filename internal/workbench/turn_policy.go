@@ -8,38 +8,46 @@ import (
 const (
 	turnModeChat         = "CHAT"
 	turnModeConfirm      = "CONFIRM"
+	turnModeConfirmAll   = "CONFIRM_ALL"
 	turnModeConfirmSteps = "CONFIRM_STEPS"
+	turnModeAuto         = "AUTO"
 )
+
+const turnModesSQL = `('CHAT', 'CONFIRM', 'CONFIRM_ALL', 'CONFIRM_STEPS', 'AUTO')`
 
 // Replace the constrained columns without rebuilding the tables referenced by tasks and receipts.
 const turnPolicySchema = `
 	ALTER TABLE projects RENAME COLUMN default_turn_mode TO previous_turn_mode;
 	ALTER TABLE projects ADD COLUMN default_turn_mode TEXT NOT NULL DEFAULT 'CHAT'
-		CHECK (default_turn_mode IN ('CHAT', 'CONFIRM', 'CONFIRM_STEPS'));
+		CHECK (default_turn_mode IN ` + turnModesSQL + `);
 	UPDATE projects SET default_turn_mode = previous_turn_mode WHERE previous_turn_mode <> 'CHAT';
 	ALTER TABLE projects DROP COLUMN previous_turn_mode;
 
 	ALTER TABLE project_patch_requests RENAME COLUMN default_turn_mode TO previous_turn_mode;
 	ALTER TABLE project_patch_requests ADD COLUMN default_turn_mode TEXT
-		CHECK (default_turn_mode IN ('CHAT', 'CONFIRM', 'CONFIRM_STEPS'));
+		CHECK (default_turn_mode IN ` + turnModesSQL + `);
 	UPDATE project_patch_requests SET default_turn_mode = previous_turn_mode WHERE previous_turn_mode IS NOT NULL;
 	ALTER TABLE project_patch_requests DROP COLUMN previous_turn_mode;
 
 	ALTER TABLE turns RENAME COLUMN mode TO previous_turn_mode;
 	ALTER TABLE turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'CHAT'
-		CHECK (mode IN ('CHAT', 'CONFIRM', 'CONFIRM_STEPS'));
+		CHECK (mode IN ` + turnModesSQL + `);
 	UPDATE turns SET mode = previous_turn_mode WHERE previous_turn_mode <> 'CHAT';
 	ALTER TABLE turns DROP COLUMN previous_turn_mode;
-	PRAGMA user_version = 36;
+	PRAGMA user_version = 37;
 `
 
 func validTurnMode(mode string) bool {
 	switch mode {
-	case turnModeChat, turnModeConfirm, turnModeConfirmSteps:
+	case turnModeChat, turnModeConfirm, turnModeConfirmAll, turnModeConfirmSteps, turnModeAuto:
 		return true
 	default:
 		return false
 	}
+}
+
+func workflowCheckpoints(enabled bool, mode string) bool {
+	return enabled || mode == turnModeConfirmAll || mode == turnModeAuto
 }
 
 func queueTurnTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (bool, error) {
