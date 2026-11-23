@@ -61,10 +61,11 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
 }
 
-function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
+function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWordConfigured }: {
   projectId: string
   run: WorkflowRun
   softwarePdfConfigured?: boolean
+  patentWordConfigured?: boolean
   rerun?: {
     selected?: string
     disabled: boolean
@@ -109,7 +110,8 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
                 stepTitle={step.title} artifactId={step.artifactId} />
             )}
             {canDownload && patentFigures && step.artifactId && (
-              <WorkflowPatentFigureLinks projectId={projectId} runId={run.runId} artifactId={step.artifactId} />
+              <WorkflowPatentFigureLinks projectId={projectId} runId={run.runId} artifactId={step.artifactId}
+                wordEnabled={patentWordConfigured === true} />
             )}
             {rerun && eligible && <button className="button outline" type="button" disabled={rerun.disabled}
               aria-label={`${runLabel}：${step.title}`} aria-expanded={selected}
@@ -138,7 +140,8 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
           </div>}
           {hasHistory && <WorkflowArtifactHistory projectId={projectId} runId={run.runId} stepKey={step.key}
             stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount}
-            softwarePdfEnabled={pdfStep !== undefined} patentFigures={patentFigures} />}
+            softwarePdfEnabled={pdfStep !== undefined} patentFigures={patentFigures}
+            patentWordConfigured={patentWordConfigured} />}
         </li>
       })}
     </ol>
@@ -546,8 +549,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {isSoftware && snapshot?.softwarePdfConfigured === false && <p className="workflow-note">
         PDF 导出需要字体。请在服务端设置 <code>RESEARCH_PDF_FONT</code> 指向可嵌入的 TrueType 字体文件，重启服务后刷新页面。
       </p>}
+      {isPatent && snapshot?.patentWordConfigured === false && <p className="workflow-note">
+        要下载带附图的 Word，请在服务端设置 <code>RESEARCH_WORD_PYTHON</code> 和 <code>RESEARCH_PDF_FONT</code>，
+        并在该 Python 环境中安装附图导出所需的可选依赖 Pillow。配置后请重启服务并刷新页面。
+      </p>}
       {run?.workflowKey === 'proposal-v2' && <p className="workflow-note">正文各节分别保存。本轮可从未完成的一节继续。</p>}
-      {run && <WorkflowSteps projectId={projectId} run={run} softwarePdfConfigured={snapshot?.softwarePdfConfigured} rerun={{
+      {run && <WorkflowSteps projectId={projectId} run={run} softwarePdfConfigured={snapshot?.softwarePdfConfigured}
+        patentWordConfigured={snapshot?.patentWordConfigured} rerun={{
         selected: selectedRerun?.stepKey,
         disabled: rerunDisabled,
         pending: pending === 'rerun',
@@ -727,7 +735,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSoftwareSummary run={historicalRun} />
           <WorkflowPatentSummary run={historicalRun} />
-          <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured} />
+          <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured}
+            patentWordConfigured={snapshot?.patentWordConfigured} />
           <WorkflowSoftwareBundleDownload projectId={projectId} run={historicalRun} />
         </>} />
     </section>

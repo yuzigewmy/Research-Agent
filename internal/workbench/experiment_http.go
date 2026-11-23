@@ -36,6 +36,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}", api.artifact)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}/pdf", api.softwareIdentificationPDF)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/figures/artifacts/{artifactId}/svg/{figure}", api.patentFigureSVG)
+	mux.HandleFunc("GET "+path+"/{runId}/steps/figures/artifacts/{artifactId}/word", api.patentWord)
 	mux.HandleFunc("POST "+path+"/{runId}/manuscript", api.saveManuscript)
 }
 
@@ -57,9 +58,13 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		Steps                 []stepInfo   `json:"steps"`
 		ModelConfigured       bool         `json:"modelConfigured"`
 		SoftwarePDFConfigured *bool        `json:"softwarePdfConfigured,omitempty"`
+		PatentWordConfigured  *bool        `json:"patentWordConfigured,omitempty"`
 	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil}
 	if isSoftwareRegistrationWorkflow(key) {
 		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
+	}
+	if key == patentDisclosureWorkflow {
+		result.PatentWordConfigured = new(api.patentWordConfigured())
 	}
 	for index, stage := range stages {
 		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title}

@@ -14,4 +14,10 @@
 
 可将成稿保存到工作区，配置 Word 组件后从固定版本导出可编辑 Word。运行沿用工作流的历史下载、暂停、继续和重跑，重跑上游会标记受影响的下游成果。
 
-回归检查固定材料、默认检查点、同名换版、交底稿结构、附图续跑、历史 SVG 和 Word 导出。使用 `go test ./internal/workbench -run 'TestPatent|TestProjectTemplateCatalog' -count=1` 核对后端，使用 `pnpm --dir web run typecheck` 和浏览器核对建项与交付。
+## 下载带附图的 Word
+
+在 Word 导出所用的 Python 环境安装[附图导出依赖](<../internal/wordexport/requirements-figures.txt>)，设置 `RESEARCH_WORD_PYTHON` 和 `RESEARCH_PDF_FONT`。字体应覆盖附图标签所用字符。重启服务后，可在「编制技术附图」的当前成果或成果历史中点击「下载带附图的 Word」。文档在可编辑的交底正文后加入系统框图、操作流程图和两条图注。
+
+每次导出按所选附图成果找到对应的交底稿，校验稿件 SHA-256。浏览器核对附图成果编号及 DOCX 摘要后保存。重跑交底稿后仍可从历史附图下载原版正文和附图。
+
+Go 回归覆盖固定资料、确认、附图续跑和组件缺失。真实 Word 组件回归核对正文可编辑、图注顺序和两张 PNG。Chrome 核对当前下载、成果重跑和历史版本绑定。

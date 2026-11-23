@@ -248,6 +248,12 @@ func TestPatentDisclosurePinsGuideThroughDefaultCheckpoint(t *testing.T) {
 			t.Fatalf("wrong %s SVG contents: %s", figure.key, text)
 		}
 	}
+	var unavailable struct{ Error apiError }
+	request(http.MethodGet, figurePath+"/word", "", http.StatusServiceUnavailable, &unavailable)
+	if unavailable.Error.Code != "CAPABILITY_MISSING" {
+		t.Fatalf("wrong unavailable Word response: %+v", unavailable.Error)
+	}
+	request(http.MethodGet, runPath+"/steps/figures/artifacts/"+manuscriptID+"/word", "", http.StatusNotFound, nil)
 	figuresDigest := fmt.Sprintf("%x", sha256.Sum256(figureBody))
 	check := request(http.MethodGet, runPath+"/steps/check/artifact", "", http.StatusOK, nil).Body.String()
 	if !strings.Contains(check, digest) || !strings.Contains(check, figuresDigest) || !strings.Contains(check, guide.SHA256) || strings.Contains(check, latest.SHA256) {

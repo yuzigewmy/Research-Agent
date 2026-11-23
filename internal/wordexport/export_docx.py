@@ -1,6 +1,8 @@
-"""Convert a small, text-only Markdown subset from UTF-8 stdin to DOCX stdout."""
+"""Convert Markdown and optional flow diagrams from UTF-8 stdin to DOCX stdout."""
 
 from io import BytesIO
+import json
+import math
 import re
 import sys
 
@@ -25,6 +27,11 @@ INLINE = re.compile(
     r"|(?<!\w)(?P<underscores>_{1,3})(?P<under_text>[^\s_](?:[^_]*[^\s_])?)(?P=underscores)(?!\w)"
 )
 EAST_ASIA_FONT = "Microsoft YaHei"
+XML_INVALID = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+CANVAS_WIDTH, CANVAS_HEIGHT = 960, 640
+NODE_WIDTH, NODE_HEIGHT = 160, 64
+FIGURE_SCALE = 2
+FIGURE_STROKE = "#39534a"
 ALIGNMENTS = {
     (True, False): WD_ALIGN_PARAGRAPH.LEFT,
     (True, True): WD_ALIGN_PARAGRAPH.CENTER,
@@ -153,14 +160,17 @@ def add_fence(document, lines, index, marker):
     return min(index + 1, len(lines))
 
 
+def set_east_asia_font(style):
+    fonts = style.element.get_or_add_rPr().get_or_add_rFonts()
+    fonts.attrib.pop(qn("w:eastAsiaTheme"), None)
+    fonts.set(qn("w:eastAsia"), EAST_ASIA_FONT)
+
+
 def assemble(source):
     document = Document()
     headings = [f"Heading {level}" for level in range(1, 7)]
     for name in ["Normal", "List Bullet", "List Number", *headings]:
-        style = document.styles[name]
-        fonts = style.element.get_or_add_rPr().get_or_add_rFonts()
-        fonts.attrib.pop(qn("w:eastAsiaTheme"), None)
-        fonts.set(qn("w:eastAsia"), EAST_ASIA_FONT)
+        set_east_asia_font(document.styles[name])
 
     # Preserve Unicode line-separator characters as text rather than splitting on them.
     lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -198,12 +208,84 @@ def assemble(source):
     return document
 
 
+def draw_edge(draw, source, target):
+    dx, dy = target["x"] - source["x"], target["y"] - source["y"]
+    # Intersect the center line with both boxes, as in the workspace diagram.
+    fraction = min(NODE_WIDTH / 2 / abs(dx) if dx else math.inf,
+                   NODE_HEIGHT / 2 / abs(dy) if dy else math.inf)
+    if fraction >= 0.5:
+        return
+    x1 = (source["x"] + NODE_WIDTH / 2 + dx * fraction) * FIGURE_SCALE
+    y1 = (source["y"] + NODE_HEIGHT / 2 + dy * fraction) * FIGURE_SCALE
+    x2 = (target["x"] + NODE_WIDTH / 2 - dx * fraction) * FIGURE_SCALE
+    y2 = (target["y"] + NODE_HEIGHT / 2 - dy * fraction) * FIGURE_SCALE
+    draw.line((x1, y1, x2, y2), fill=FIGURE_STROKE, width=2 * FIGURE_SCALE)
+    distance = math.hypot(x2 - x1, y2 - y1)
+    ux, uy = (x2 - x1) / distance, (y2 - y1) / distance
+    length = min(10 * FIGURE_SCALE, distance)
+    half_width = length * 0.4
+    base_x, base_y = x2 - ux * length, y2 - uy * length
+    draw.polygon([(x2, y2), (base_x - uy * half_width, base_y + ux * half_width),
+                  (base_x + uy * half_width, base_y - ux * half_width)], fill=FIGURE_STROKE)
+
+
+def add_figures(document, figures, font_path):
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        sys.exit(4)
+    try:
+        # A stream makes Pillow read exactly the configured font, with no
+        # automatic search of system font directories on a missing path.
+        with open(font_path, "rb") as font_file:
+            font = ImageFont.truetype(font_file, 12 * FIGURE_SCALE)
+    except (OSError, ValueError):
+        sys.exit(5)
+
+    section = document.sections[-1]
+    width = section.page_width - section.left_margin - section.right_margin
+    set_east_asia_font(document.styles["Caption"])
+    for figure in figures:
+        with Image.new("RGB", (CANVAS_WIDTH * FIGURE_SCALE, CANVAS_HEIGHT * FIGURE_SCALE), "white") as image:
+            draw = ImageDraw.Draw(image)
+            nodes = {node["id"]: node for node in figure["nodes"]}
+            for edge in figure["edges"] or []:
+                draw_edge(draw, nodes[edge["from"]], nodes[edge["to"]])
+            for node in nodes.values():
+                x, y = node["x"] * FIGURE_SCALE, node["y"] * FIGURE_SCALE
+                draw.rounded_rectangle(
+                    (x, y, x + NODE_WIDTH * FIGURE_SCALE, y + NODE_HEIGHT * FIGURE_SCALE),
+                    radius=6 * FIGURE_SCALE, fill="#f5f8f6", outline=FIGURE_STROKE, width=2 * FIGURE_SCALE,
+                )
+                label = node["label"]
+                offsets = range(0, len(label), 12)
+                baseline = y + (NODE_HEIGHT / 2 + 5 - (len(offsets) - 1) * 9) * FIGURE_SCALE
+                for offset in offsets:
+                    draw.text((x + NODE_WIDTH / 2 * FIGURE_SCALE, baseline), label[offset:offset + 12],
+                              font=font, fill="#172920", anchor="ms")
+                    baseline += 18 * FIGURE_SCALE
+
+            picture = document.add_paragraph()
+            picture.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            picture.paragraph_format.keep_with_next = True
+            with BytesIO() as png:
+                image.save(png, format="PNG")
+                picture.add_run().add_picture(png, width=width)
+        caption = document.add_paragraph(XML_INVALID.sub("\ufffd", figure["caption"]), style="Caption")
+        caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
 def main():
     source = sys.stdin.buffer.read().decode("utf-8-sig", errors="replace")
+    payload = json.loads(source) if sys.argv[1:] == ["--figures"] else None
+    if payload is not None:
+        source = payload["source"].removeprefix("\ufeff")
     # Replace characters forbidden in XML 1.0 before handing text to Word.
-    source = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]", "\ufffd", source)
+    document = assemble(XML_INVALID.sub("\ufffd", source))
+    if payload is not None:
+        add_figures(document, payload["figures"], payload["fontPath"])
     output = BytesIO()
-    assemble(source).save(output)
+    document.save(output)
     sys.stdout.buffer.write(output.getbuffer())
 
 

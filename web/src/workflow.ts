@@ -237,6 +237,7 @@ export interface WorkflowSnapshot {
   run: WorkflowRun | null
   modelConfigured: boolean
   softwarePdfConfigured?: boolean
+  patentWordConfigured?: boolean
   steps: WorkflowStepDefinition[]
 }
 
@@ -449,6 +450,7 @@ function isSnapshot(value: unknown): value is WorkflowSnapshot {
   const snapshot = value as Partial<WorkflowSnapshot> | null
   return !!snapshot && typeof snapshot.modelConfigured === 'boolean'
     && (snapshot.softwarePdfConfigured === undefined || typeof snapshot.softwarePdfConfigured === 'boolean')
+    && (snapshot.patentWordConfigured === undefined || typeof snapshot.patentWordConfigured === 'boolean')
     && (snapshot.run === null || isRun(snapshot.run))
     && Array.isArray(snapshot.steps) && snapshot.steps.every(isStepDefinition)
 }
@@ -549,6 +551,26 @@ async function sha256Hex(bytes: ArrayBuffer) {
   if (!globalThis.crypto?.subtle) throw new ProjectApiError('当前浏览器环境无法校验成果摘要。', 0)
   const hash = await crypto.subtle.digest('SHA-256', bytes)
   return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export async function readWorkflowPatentWord(projectId: string, runId: string, artifactId: string, signal: AbortSignal) {
+  if (![projectId, runId, artifactId].every(isPathId)) throw new ProjectApiError('成果版本链接无效。', 400)
+  const wordType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  const figurePath = workflowArtifactPath(projectId, runId, 'figures', artifactId)
+  const response = await fetchArtifact(`${figurePath}/word`, wordType, '带附图的 Word', signal)
+  const contentType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
+  if (contentType !== wordType) throw new ProjectApiError('成果服务返回的文件无法识别为 Word。', 422)
+
+  if (response.headers.get('X-Source-Artifact-ID') !== artifactId) {
+    throw new ProjectApiError('Word 对应的附图版本已变更，请刷新后重试。', 409)
+  }
+  const bytes = await response.arrayBuffer()
+  const digest = response.headers.get('X-Word-SHA256')
+  if (digest !== await sha256Hex(bytes)) {
+    throw new ProjectApiError('Word 的摘要校验失败，请重试。', 422)
+  }
+  signal.throwIfAborted()
+  return new Blob([bytes], { type: wordType })
 }
 
 export async function readWorkflowSoftwarePdf(projectId: string, runId: string, key: SoftwarePdfStep, artifactId: string, signal: AbortSignal) {
