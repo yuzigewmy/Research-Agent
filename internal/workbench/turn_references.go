@@ -108,7 +108,7 @@ func (s *Store) turnMaterialExcerpts(ctx context.Context, references []TurnRefer
 }
 
 func (s *Store) turnInput(ctx context.Context, turn Turn) (string, error) {
-	if len(turn.References) == 0 && turn.ManuscriptSelection == nil {
+	if len(turn.References) == 0 && turn.ManuscriptSelection == nil && len(turn.ManuscriptSelections) == 0 {
 		return turn.Text, nil
 	}
 	materials, err := s.turnMaterialExcerpts(ctx, turn.References)
@@ -116,9 +116,10 @@ func (s *Store) turnInput(ctx context.Context, turn Turn) (string, error) {
 		return "", err
 	}
 	payload, err := json.Marshal(struct {
-		Request             string                `json:"request"`
-		Materials           []turnMaterialExcerpt `json:"materials"`
-		ManuscriptSelection *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
-	}{turn.Text, materials, turn.ManuscriptSelection})
+		Request              string                `json:"request"`
+		Materials            []turnMaterialExcerpt `json:"materials"`
+		ManuscriptSelection  *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
+		ManuscriptSelections []manuscriptSelection `json:"manuscriptSelections,omitempty"`
+	}{turn.Text, materials, turn.ManuscriptSelection, turn.ManuscriptSelections})
 	return "以下 JSON 包含本轮问题和用户选中的资料节选。\n" + string(payload), err
 }

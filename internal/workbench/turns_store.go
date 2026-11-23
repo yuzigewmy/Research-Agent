@@ -11,7 +11,7 @@ import (
 )
 
 const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at,
-	references_json, task_results_json, mode, proposed_task_id, workflow_proposal_json, manuscript_selection_json`
+	references_json, task_results_json, mode, proposed_task_id, workflow_proposal_json, manuscript_selection_json, manuscript_selections_json`
 
 var (
 	errTurnBusy         = errors.New("project already has a running turn")
@@ -19,21 +19,22 @@ var (
 )
 
 type Turn struct {
-	ordinal             int64
-	TurnID              string                `json:"turnId"`
-	RequestID           string                `json:"requestId"`
-	Text                string                `json:"text"`
-	Answer              string                `json:"answer"`
-	Status              string                `json:"status"`
-	Message             string                `json:"message,omitempty"`
-	AfterSeq            int64                 `json:"afterSeq"`
-	CreatedAt           string                `json:"createdAt"`
-	References          []TurnReference       `json:"references,omitempty"`
-	TaskResults         []turnTaskResult      `json:"taskResults,omitempty"`
-	Mode                string                `json:"mode"`
-	ProposedTaskID      string                `json:"proposedTaskId,omitempty"`
-	WorkflowProposal    *turnWorkflowProposal `json:"workflowProposal,omitempty"`
-	ManuscriptSelection *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
+	ordinal              int64
+	TurnID               string                `json:"turnId"`
+	RequestID            string                `json:"requestId"`
+	Text                 string                `json:"text"`
+	Answer               string                `json:"answer"`
+	Status               string                `json:"status"`
+	Message              string                `json:"message,omitempty"`
+	AfterSeq             int64                 `json:"afterSeq"`
+	CreatedAt            string                `json:"createdAt"`
+	References           []TurnReference       `json:"references,omitempty"`
+	TaskResults          []turnTaskResult      `json:"taskResults,omitempty"`
+	Mode                 string                `json:"mode"`
+	ProposedTaskID       string                `json:"proposedTaskId,omitempty"`
+	WorkflowProposal     *turnWorkflowProposal `json:"workflowProposal,omitempty"`
+	ManuscriptSelection  *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
+	ManuscriptSelections []manuscriptSelection `json:"manuscriptSelections,omitempty"`
 }
 
 type TurnEvent struct {
@@ -91,9 +92,9 @@ func recoverInterruptedTurns(tx *sql.Tx) error {
 
 func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var t Turn
-	var references, taskResults, workflowProposal, selection []byte
+	var references, taskResults, workflowProposal, selection, selections []byte
 	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message,
-		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID, &workflowProposal, &selection); err != nil {
+		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID, &workflowProposal, &selection, &selections); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(references, &t.References); err != nil {
@@ -108,10 +109,17 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	if err := json.Unmarshal(selection, &t.ManuscriptSelection); err != nil {
 		return Turn{}, err
 	}
+	if err := json.Unmarshal(selections, &t.ManuscriptSelections); err != nil {
+		return Turn{}, err
+	}
 	return t, nil
 }
 
 func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnInput, modelReady bool) (Turn, Project, bool, error) {
+	if input.ManuscriptSelections != nil && (input.ManuscriptSelection != nil ||
+		len(input.ManuscriptSelections) == 0 || len(input.ManuscriptSelections) > maxManuscriptSelections) {
+		return Turn{}, Project{}, false, errInvalidManuscriptSelection
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Turn{}, Project{}, false, err
@@ -122,7 +130,10 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	if err == nil {
 		// An omitted mode reuses the original choice on replay, even after settings change.
 		if turn.Text != input.Text || (input.Mode != "" && turn.Mode != input.Mode) ||
-			!turn.ManuscriptSelection.matches(input.ManuscriptSelection) || !slices.EqualFunc(turn.References, input.ReferenceIDs, func(ref TurnReference, id string) bool {
+			!turn.ManuscriptSelection.matches(input.ManuscriptSelection) ||
+			!slices.EqualFunc(turn.ManuscriptSelections, input.ManuscriptSelections, func(saved manuscriptSelection, requested manuscriptSelectionInput) bool {
+				return saved.manuscriptSelectionInput == requested
+			}) || !slices.EqualFunc(turn.References, input.ReferenceIDs, func(ref TurnReference, id string) bool {
 			if ref.MaterialID != id {
 				return false
 			}
@@ -168,6 +179,14 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
+	selections, err := s.resolveManuscriptSelections(ctx, tx, projectID, input.ManuscriptSelections)
+	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
+	selectionsJSON, err := json.Marshal(selections)
+	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
 	results, err := pendingTurnTaskResults(ctx, tx, projectID)
 	if err != nil {
 		return Turn{}, Project{}, false, err
@@ -181,11 +200,13 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 		mode = project.DefaultTurnMode
 	}
 	turn = Turn{TurnID: rand.Text(), RequestID: input.RequestID, Text: input.Text, References: references, TaskResults: results,
-		ManuscriptSelection: selection, Mode: mode, Status: "RUNNING", CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+		ManuscriptSelection: selection, ManuscriptSelections: selections, Mode: mode, Status: "RUNNING",
+		CreatedAt: time.Now().UTC().Format(createdAtLayout)}
 	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at,
-		references_json, task_results_json, mode, manuscript_selection_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
-		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON), turn.Mode, string(selectionJSON)).Scan(&turn.ordinal)
+		references_json, task_results_json, mode, manuscript_selection_json, manuscript_selections_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
+		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON), turn.Mode, string(selectionJSON),
+		string(selectionsJSON)).Scan(&turn.ordinal)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}

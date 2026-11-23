@@ -21,12 +21,13 @@ const turnProposalSchema = `
 `
 
 type sendTurnInput struct {
-	RequestID           string                    `json:"requestId"`
-	Text                string                    `json:"text"`
-	ReferenceIDs        []string                  `json:"referenceIds"`
-	PDFQuotes           map[string]pdfQuote       `json:"pdfQuotes"`
-	Mode                string                    `json:"mode"`
-	ManuscriptSelection *manuscriptSelectionInput `json:"manuscriptSelection"`
+	RequestID            string                     `json:"requestId"`
+	Text                 string                     `json:"text"`
+	ReferenceIDs         []string                   `json:"referenceIds"`
+	PDFQuotes            map[string]pdfQuote        `json:"pdfQuotes"`
+	Mode                 string                     `json:"mode"`
+	ManuscriptSelection  *manuscriptSelectionInput  `json:"manuscriptSelection"`
+	ManuscriptSelections []manuscriptSelectionInput `json:"manuscriptSelections"`
 }
 
 type turnProposal struct {

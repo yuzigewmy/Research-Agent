@@ -65,7 +65,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errInvalidTurnReference):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请重新选择当前项目的文本、Word 资料或 PDF 选区。")
 	case errors.Is(err, errInvalidManuscriptSelection):
-		writeError(w, http.StatusUnprocessableEntity, "INVALID_MANUSCRIPT_SELECTION", "请从本项目已保存的 Markdown 稿件中选取 8 KiB 以内的文字。")
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_MANUSCRIPT_SELECTION", "请从本项目最多四份不同的已保存 Markdown 稿件中选择文字，每份最多 8 KiB。")
 	case errors.Is(err, errTurnBusy):
 		writeError(w, http.StatusConflict, "TURN_RUNNING", "上一轮仍在回复。")
 	case errors.Is(err, errModelUnavailable):

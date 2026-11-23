@@ -10,6 +10,7 @@ const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED', 'STOPPED'] as
 export const turnReferenceLimit = 4
 export const pdfQuoteByteLimit = 8 * 1024
 export const manuscriptSelectionByteLimit = 8 * 1024
+export const manuscriptSelectionLimit = 4
 const turnTaskResultLimit = 4
 const utf8 = new TextEncoder()
 export type TurnStatus = typeof statuses[number]
@@ -30,6 +31,7 @@ export interface TurnInput {
   referenceIds?: string[]
   pdfQuotes?: Record<string, PdfQuote>
   manuscriptSelection?: ManuscriptSelectionInput
+  manuscriptSelections?: ManuscriptSelectionInput[]
   mode?: TurnMode
 }
 
@@ -49,6 +51,7 @@ export interface WorkflowProposal {
 export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode'> {
   references?: TurnReference[]
   manuscriptSelection?: ManuscriptSelection
+  manuscriptSelections?: ManuscriptSelection[]
   taskResults?: TurnTaskResult[]
   proposedTaskId?: string
   workflowProposal?: WorkflowProposal
@@ -118,12 +121,33 @@ export function isManuscriptSelection(value: unknown): value is ManuscriptSelect
     && utf8.encode(text).length === value.endByte - value.startByte
 }
 
+export function isManuscriptSelections(value: unknown): value is ManuscriptSelection[] {
+  return Array.isArray(value) && value.length >= 1 && value.length <= manuscriptSelectionLimit
+    && value.every(isManuscriptSelection) && new Set(value.map(({ path }) => path)).size === value.length
+}
+
+export function isManuscriptSelectionInputs(value: unknown): value is ManuscriptSelectionInput[] {
+  return Array.isArray(value) && value.length >= 1 && value.length <= manuscriptSelectionLimit
+    && value.every(isManuscriptSelectionInput) && new Set(value.map(({ versionId }) => versionId)).size === value.length
+}
+
+export function manuscriptSelectionsOf<T extends ManuscriptSelectionInput>(value: {
+  manuscriptSelection?: T
+  manuscriptSelections?: T[]
+}): T[] {
+  return value.manuscriptSelections ?? (value.manuscriptSelection ? [value.manuscriptSelection] : [])
+}
+
 export function manuscriptSelectionInput({ versionId, startByte, endByte }: ManuscriptSelectionInput): ManuscriptSelectionInput {
   return { versionId, startByte, endByte }
 }
 
 export function sameManuscriptSelection(left?: ManuscriptSelectionInput, right?: ManuscriptSelectionInput) {
   return left?.versionId === right?.versionId && left?.startByte === right?.startByte && left?.endByte === right?.endByte
+}
+
+export function sameManuscriptSelections(left: readonly ManuscriptSelectionInput[], right: readonly ManuscriptSelectionInput[]) {
+  return left.length === right.length && left.every((selection, index) => sameManuscriptSelection(selection, right[index]))
 }
 
 function isPdfExcerpt(page: unknown, text: unknown) {
@@ -172,6 +196,8 @@ function isTurn(value: unknown): value is Turn {
     && typeof turn.afterSeq === 'number' && typeof turn.createdAt === 'string'
     && (turn.references === undefined || isTurnReferences(turn.references))
     && (turn.manuscriptSelection === undefined || isManuscriptSelection(turn.manuscriptSelection))
+    && (turn.manuscriptSelections === undefined || (turn.manuscriptSelection === undefined
+      && isManuscriptSelections(turn.manuscriptSelections)))
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
     && (turn.mode === undefined || isTurnMode(turn.mode))
     && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
@@ -196,11 +222,15 @@ export function listTurns(projectId: string, signal: AbortSignal, before?: strin
 
 export function sendTurn(projectId: string, input: TurnInput, signal: AbortSignal) {
   return request(turnsPath(projectId), (value): value is Turn => isTurn(value)
-    && value.requestId === input.requestId && sameManuscriptSelection(value.manuscriptSelection, input.manuscriptSelection), {
+    && value.requestId === input.requestId
+    && sameManuscriptSelections(manuscriptSelectionsOf(value), manuscriptSelectionsOf(input)), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...input, manuscriptSelection: input.manuscriptSelection
-      ? manuscriptSelectionInput(input.manuscriptSelection) : undefined }),
+    body: JSON.stringify({
+      ...input,
+      manuscriptSelection: input.manuscriptSelection ? manuscriptSelectionInput(input.manuscriptSelection) : undefined,
+      manuscriptSelections: input.manuscriptSelections?.map(manuscriptSelectionInput),
+    }),
     signal,
   })
 }

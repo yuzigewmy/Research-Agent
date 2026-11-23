@@ -47,12 +47,13 @@ func (s *Store) taskTurnContext(ctx context.Context, projectID, turnID string) (
 		workflowInstruction = turn.WorkflowProposal.Instruction
 	}
 	payload, err := json.Marshal(struct {
-		TurnID              string                `json:"turnId"`
-		Request             string                `json:"request"`
-		AnswerExcerpt       string                `json:"answerExcerpt"`
-		Materials           []turnMaterialExcerpt `json:"materials,omitempty"`
-		WorkflowInstruction string                `json:"workflowInstruction,omitempty"`
-		ManuscriptSelection *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
-	}{turn.TurnID, turn.Text, excerptRunes(turn.Answer, 2000), materials, workflowInstruction, turn.ManuscriptSelection})
+		TurnID               string                `json:"turnId"`
+		Request              string                `json:"request"`
+		AnswerExcerpt        string                `json:"answerExcerpt"`
+		Materials            []turnMaterialExcerpt `json:"materials,omitempty"`
+		WorkflowInstruction  string                `json:"workflowInstruction,omitempty"`
+		ManuscriptSelection  *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
+		ManuscriptSelections []manuscriptSelection `json:"manuscriptSelections,omitempty"`
+	}{turn.TurnID, turn.Text, excerptRunes(turn.Answer, 2000), materials, workflowInstruction, turn.ManuscriptSelection, turn.ManuscriptSelections})
 	return "\n\n来源对话及当时引用的材料节选（JSON）\n" + string(payload), err
 }
