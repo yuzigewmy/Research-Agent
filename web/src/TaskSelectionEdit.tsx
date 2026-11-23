@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { errorMessage } from './projects'
 import { applySelectionEdit, getSelectionEdit, isSelectionEditVersionConflict, SelectionEditPreview } from './SelectionEdit'
 import type { SelectionEditRecord } from './SelectionEdit'
@@ -18,6 +18,7 @@ export function TaskSelectionEdit({ projectId, taskId, source, status, revision,
   refreshVersion: number
 }) {
   const { path, versionId, sha256 } = source
+  const fileLabelId = useId()
   const [edit, setEdit] = useState<SelectionEditRecord>()
   const [saved, setSaved] = useState<Pick<TaskInputVersion, 'versionId' | 'sha256'>>()
   const [readError, setReadError] = useState('')
@@ -29,8 +30,9 @@ export function TaskSelectionEdit({ projectId, taskId, source, status, revision,
   const submission = useRef<AbortController | null>(null)
   const preview = useRef<HTMLDivElement>(null)
   const appliedVersionId = saved?.versionId ?? edit?.appliedVersionId
-  const canApply = status === 'SUCCEEDED' && edit?.status === 'SUCCEEDED'
-    && edit.replacement !== undefined && !appliedVersionId && !conflict && !applying && !readError
+  const applicable = status === 'SUCCEEDED' && edit?.status === 'SUCCEEDED'
+    && !edit.unchanged && edit.replacement !== undefined && !appliedVersionId
+  const canApply = applicable && !conflict && !applying && !readError
 
   useEffect(() => {
     const controller = new AbortController()
@@ -88,24 +90,27 @@ export function TaskSelectionEdit({ projectId, taskId, source, status, revision,
     }
   }
 
-  return <div className="workspace-preview" ref={preview} tabIndex={-1}>
-    <p className="task-note">固定选区来自 <bdi>{path}</bdi> · 版本 <bdi>{versionId}</bdi> · SHA-256 <code title={sha256}>{sha256.slice(0, 12)}</code></p>
+  return <div className="workspace-preview" role="group" aria-labelledby={fileLabelId} ref={preview} tabIndex={-1}>
+    <p className="task-note">
+      <span id={fileLabelId}>固定选区来自 <bdi>{path}</bdi></span> · 版本 <bdi>{versionId}</bdi> · SHA-256 <code title={sha256}>{sha256.slice(0, 12)}</code>
+    </p>
     {!edit && !readError && <p className="task-note" role="status">正在读取稿件选区…</p>}
     {edit && <SelectionEditPreview edit={edit} />}
     {(readError || versionError) && <div className="task-input-body">
       {readError && <p className="form-error" role="alert">{readError}</p>}
       {versionError && <p className="form-error" role="alert">{versionError}</p>}
       <div className="task-actions">
-        <button className="button outline" type="button" disabled={applying} onClick={() => {
+        <button className="button outline" type="button" aria-describedby={fileLabelId} disabled={applying} onClick={() => {
           setReadError('')
           setVersionError('')
           setReload((value) => value + 1)
         }}>重新查询建议</button>
       </div>
     </div>}
-    {status === 'SUCCEEDED' && edit?.status === 'SUCCEEDED' && edit.replacement !== undefined && !appliedVersionId && (
+    {applicable && (
       <div className="task-actions">
-        <button className="button primary" type="button" disabled={conflict || !!readError} aria-disabled={applying}
+        <button className="button primary" type="button" aria-describedby={fileLabelId}
+          disabled={conflict || !!readError} aria-disabled={applying}
           onClick={() => void apply()}>{applying ? '正在应用…' : '应用到稿件'}</button>
       </div>
     )}

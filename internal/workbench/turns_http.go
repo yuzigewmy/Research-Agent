@@ -169,9 +169,13 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		}
 		return c.store.appendTurnEvent(ctx, turn.TurnID, &TurnEvent{Kind: "delta", Text: delta})
 	}
+	selections := turn.ManuscriptSelections
+	if turn.ManuscriptSelection != nil {
+		selections = []manuscriptSelection{*turn.ManuscriptSelection}
+	}
 	var arguments json.RawMessage
 	if turn.Mode != turnModeChat {
-		tool, err := proposalTool(workflow, manuscripts, turn.ManuscriptSelection)
+		tool, err := proposalTool(workflow, manuscripts, len(selections) != 0)
 		if err != nil {
 			return turnProposal{}, err
 		}
@@ -188,7 +192,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		}
 		return turnProposal{}, nil
 	}
-	proposal, err := parseTurnProposal(arguments, workflow, manuscripts, turn.ManuscriptSelection)
+	proposal, err := parseTurnProposal(arguments, workflow, manuscripts, selections)
 	if err != nil {
 		return turnProposal{}, err
 	}
@@ -201,7 +205,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 			message = "请核对要检查的稿件版本。"
 		case proposal.focusInputs != nil:
 			message = "请确认聚焦研究需要读取的稿件版本。"
-		case proposal.editSelection != nil:
+		case len(proposal.editSelections) != 0:
 			message = "请核对要修改的稿件选区。"
 		}
 		if (turn.Mode == turnModeAuto || (turn.Mode == turnModeConfirmSteps && proposal.workflow == nil)) && proposal.focusInputs == nil {

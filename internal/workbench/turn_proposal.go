@@ -31,14 +31,14 @@ type sendTurnInput struct {
 }
 
 type turnProposal struct {
-	instruction   string
-	workflow      *workflowProposalRecord
-	checkInput    *taskInput
-	focusInputs   []taskInput
-	editSelection *manuscriptSelection
+	instruction    string
+	workflow       *workflowProposalRecord
+	checkInput     *taskInput
+	focusInputs    []taskInput
+	editSelections []manuscriptSelection
 }
 
-func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, selection *manuscriptSelection) (inference.Tool, error) {
+func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, canEdit bool) (inference.Tool, error) {
 	properties := map[string]any{
 		"instruction": map[string]string{"type": "string", "description": "任务范围、输入和交付要求"},
 	}
@@ -65,9 +65,9 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, sel
 			"description": "围绕具体问题分析或对照稿件时，选取一至四个不同的版本。用户确认后读取节选。",
 		}
 	}
-	if selection != nil {
+	if canEdit {
 		properties["editSelection"] = map[string]any{
-			"type": "boolean", "enum": []bool{true}, "description": "用户明确要求改写本轮附带的稿件选区时填写 true。只生成该选区的替换建议。",
+			"type": "boolean", "enum": []bool{true}, "description": "用户明确要求改写本轮附带的稿件选区时填写 true。按引用范围逐份生成替换建议。",
 		}
 	}
 	parameters, err := json.Marshal(map[string]any{
@@ -80,7 +80,7 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, sel
 	}, err
 }
 
-func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord, manuscripts []taskInput, selection *manuscriptSelection) (turnProposal, error) {
+func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord, manuscripts []taskInput, selections []manuscriptSelection) (turnProposal, error) {
 	var input struct {
 		Instruction     string          `json:"instruction"`
 		ThroughStep     json.RawMessage `json:"throughStep"`
@@ -109,10 +109,10 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 	switch {
 	case len(input.EditSelection) != 0:
 		var edit bool
-		if selection == nil || len(instruction) > maxEditInstructionBytes || json.Unmarshal(input.EditSelection, &edit) != nil || !edit {
+		if len(selections) == 0 || len(instruction) > maxEditInstructionBytes || json.Unmarshal(input.EditSelection, &edit) != nil || !edit {
 			return turnProposal{}, errInvalidTaskProposal
 		}
-		return turnProposal{instruction: instruction, editSelection: selection}, nil
+		return turnProposal{instruction: instruction, editSelections: selections}, nil
 	case len(input.CheckVersionID) != 0:
 		var id string
 		if json.Unmarshal(input.CheckVersionID, &id) != nil {
@@ -149,15 +149,18 @@ var errInvalidTaskProposal = errors.New("model proposed an invalid research task
 
 func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, bool, error) {
 	kind, inputs := "", "[]"
-	selection := proposal.editSelection
+	selections := proposal.editSelections
 	var sources []taskInput
 	switch {
 	case proposal.checkInput != nil:
 		kind, sources = manuscriptCheckTask, []taskInput{*proposal.checkInput}
 	case proposal.focusInputs != nil:
 		kind, sources = focusedResearchTask, proposal.focusInputs
-	case selection != nil:
-		sources = []taskInput{{VersionID: selection.VersionID, Path: selection.Path, SHA256: selection.SHA256}}
+	case len(selections) != 0:
+		sources = make([]taskInput, 0, len(selections))
+		for _, selection := range selections {
+			sources = append(sources, taskInput{VersionID: selection.VersionID, Path: selection.Path, SHA256: selection.SHA256})
+		}
 	}
 	if len(sources) != 0 {
 		body, err := json.Marshal(sources)
@@ -175,11 +178,18 @@ func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
 		(project_id, task_id, instruction, status, created_at, source_turn_id, kind, inputs_json, selection_edit)
 		VALUES (?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?)`,
-		projectID, taskID, proposal.instruction, time.Now().UTC().Format(createdAtLayout), turnID, kind, inputs, selection != nil); err != nil {
+		projectID, taskID, proposal.instruction, time.Now().UTC().Format(createdAtLayout), turnID, kind, inputs, len(selections) != 0); err != nil {
 		return "", false, err
 	}
-	if selection != nil {
+	switch len(selections) {
+	case 0:
+	case 1:
+		selection := selections[0]
 		if err := insertSelectionEdit(ctx, tx, projectID, taskID, taskID, selection.manuscriptSelectionInput, selection.Text, reviewFindingRef{}); err != nil {
+			return "", false, err
+		}
+	default:
+		if err := insertBatchSelectionEdits(ctx, tx, projectID, taskID, selections); err != nil {
 			return "", false, err
 		}
 	}

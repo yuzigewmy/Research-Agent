@@ -177,6 +177,9 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	case task.findingRecheck:
 		markdown, err := s.generateFindingRecheck(ctx, model, projectID, task)
 		return taskResult{markdown: markdown}, err
+	case task.selectionEdit && len(task.Inputs) > 1:
+		markdown, err := s.generateBatchSelectionEdit(ctx, model, projectID, task)
+		return taskResult{markdown: markdown}, err
 	case task.selectionEdit:
 		markdown, err := s.generateSelectionEdit(ctx, model, projectID, task)
 		return taskResult{markdown: markdown}, err
@@ -226,14 +229,18 @@ func streamTaskMarkdown(ctx context.Context, model *inference.Client, prompt, in
 }
 
 func streamTaskMarkdownWithBudget(ctx context.Context, model *inference.Client, prompt, input string, tokens int) (string, error) {
+	return streamTaskText(ctx, model, prompt, input, tokens, planMaxSize)
+}
+
+func streamTaskText(ctx context.Context, model *inference.Client, prompt, input string, tokens, outputLimit int) (string, error) {
 	messages := []inference.Message{
 		{Role: "system", Content: strings.TrimSpace(prompt)},
 		{Role: "user", Content: input},
 	}
 	var output strings.Builder
 	err := model.StreamWithBudget(ctx, messages, tokens, func(delta string) error {
-		if len(delta) > planMaxSize-output.Len() {
-			return errors.New("research plan exceeds output limit")
+		if len(delta) > outputLimit-output.Len() {
+			return errors.New("task exceeds output limit")
 		}
 		output.WriteString(delta)
 		return nil

@@ -83,8 +83,11 @@ function isTask(value: unknown): value is Task {
     && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
       && task.inputs.every(isTaskInputVersion)))
     && (task.kind === undefined || (task.inputs !== undefined && task.inputs.length >= 1
-      && (task.kind === 'focused-research' || task.inputs.length === 1)
+      && (task.kind !== 'manuscript-check' || task.inputs.length === 1)
       && task.inputs.every(({ path }) => isMarkdownTaskPath(path))))
+    && (task.kind !== 'selection-edit' || (task.inputs !== undefined
+      && new Set(task.inputs.map(({ path }) => path)).size === task.inputs.length
+      && new Set(task.inputs.map(({ versionId }) => versionId)).size === task.inputs.length))
 }
 
 function isTaskPage(value: unknown): value is TaskPage {

@@ -94,6 +94,8 @@ func writeSelectionEditError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_SELECTION", "请从已保存的稿件中选择不超过 8 KiB 的完整文字。")
 	case errors.Is(err, errSelectionState):
 		writeError(w, http.StatusConflict, "EDIT_STATE_CONFLICT", "修改建议尚未生成，请查看任务状态。")
+	case errors.Is(err, errSelectionUnchanged):
+		writeError(w, http.StatusConflict, "EDIT_NO_CHANGE", "此选区无需改动。")
 	case errors.Is(err, errRequestConflict):
 		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联另一处修改建议。")
 	case errors.Is(err, errModelUnavailable):

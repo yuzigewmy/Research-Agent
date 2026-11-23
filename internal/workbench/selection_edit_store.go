@@ -31,8 +31,9 @@ const maxSelectionBytes = 8 << 10
 const maxEditInstructionBytes = 2 << 10
 
 var (
-	errSelectionRange = errors.New("invalid saved selection")
-	errSelectionState = errors.New("selection edit is not ready to apply")
+	errSelectionRange     = errors.New("invalid saved selection")
+	errSelectionState     = errors.New("selection edit is not ready to apply")
+	errSelectionUnchanged = errors.New("selection edit does not change the manuscript")
 )
 
 type selectionEditInput struct {
@@ -54,7 +55,9 @@ type selectionEdit struct {
 	Original         string `json:"original"`
 	Message          string `json:"message,omitempty"`
 	AppliedVersionID string `json:"appliedVersionId,omitempty"`
+	Unchanged        bool   `json:"unchanged,omitempty"`
 	*EditSuggestion
+	batch       bool
 	finding     reviewFindingRef
 	instruction string
 	startByte   int
@@ -84,7 +87,11 @@ func scanSelectionEdit(row interface{ Scan(...any) error }) (selectionEdit, erro
 }
 
 func readSelectionEdit(ctx context.Context, db workspaceQuery, projectID, versionID, editID string) (selectionEdit, error) {
-	return scanSelectionEdit(db.QueryRowContext(ctx, selectEdit+` AND e.source_version_id = ? AND e.task_id = ?`, projectID, versionID, editID))
+	edit, err := scanSelectionEdit(db.QueryRowContext(ctx, selectEdit+` AND e.source_version_id = ? AND e.task_id = ?`, projectID, versionID, editID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return readBatchSelectionEdit(ctx, db, projectID, versionID, editID)
+	}
+	return edit, err
 }
 
 func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, modelReady bool) (selectionEdit, bool, error) {
@@ -167,6 +174,9 @@ func (s *Store) applySelectionEdit(ctx context.Context, projectID, versionID, ed
 	if edit.Status != taskSucceeded {
 		return WorkspaceDocument{}, errSelectionState
 	}
+	if edit.Unchanged {
+		return WorkspaceDocument{}, errSelectionUnchanged
+	}
 	base, err := lookupWorkspaceVersion(ctx, tx, projectID, versionID)
 	if err != nil {
 		return WorkspaceDocument{}, err
@@ -187,8 +197,11 @@ func (s *Store) applySelectionEdit(ctx context.Context, projectID, versionID, ed
 	if err != nil {
 		return WorkspaceDocument{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE selection_edits SET applied_version_id = ? WHERE project_id = ? AND task_id = ?`,
-		file.VersionID, projectID, editID); err != nil {
+	receiptSQL := `UPDATE selection_edits SET applied_version_id = ? WHERE project_id = ? AND task_id = ? AND source_version_id = ?`
+	if edit.batch {
+		receiptSQL = `UPDATE batch_selection_edits SET applied_version_id = ? WHERE project_id = ? AND task_id = ? AND source_version_id = ?`
+	}
+	if _, err := tx.ExecContext(ctx, receiptSQL, file.VersionID, projectID, editID, versionID); err != nil {
 		return WorkspaceDocument{}, err
 	}
 	if edit.finding.reviewID != "" {

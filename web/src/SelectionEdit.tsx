@@ -40,6 +40,7 @@ export type SelectionEditRecord = {
   original: string
   replacement?: string
   reason?: string
+  unchanged?: boolean
   message?: string
   appliedVersionId?: string
 }
@@ -59,6 +60,7 @@ function isEditRecord(value: unknown): value is SelectionEditRecord {
     && typeof edit.status === 'string' && Object.hasOwn(statusLabels, edit.status)
     && (edit.replacement === undefined || typeof edit.replacement === 'string')
     && (edit.reason === undefined || typeof edit.reason === 'string')
+    && (edit.unchanged === undefined || typeof edit.unchanged === 'boolean')
     && (edit.message === undefined || typeof edit.message === 'string')
     && (edit.appliedVersionId === undefined || validId(edit.appliedVersionId))
 }
@@ -121,10 +123,12 @@ export function SelectionEditPreview({ edit }: { edit: SelectionEditRecord }) {
     <p>选区原文</p>
     <pre className="workspace-text" tabIndex={0} aria-label="选区原文" dir="auto">{edit.original}</pre>
     {edit.status === 'SUCCEEDED' && <>
-      <p>建议替换文本</p>
-      {edit.replacement === undefined ? <p className="form-error" role="alert">未收到替换文本，请重新生成建议。</p>
-        : edit.replacement === '' ? <p className="workspace-note">此建议会删除整个选区。</p>
-        : <pre className="workspace-text" tabIndex={0} aria-label="建议替换文本" dir="auto">{edit.replacement}</pre>}
+      {edit.unchanged ? <p className="workspace-note">建议保留原选区，无需应用。</p> : <>
+        <p>建议替换文本</p>
+        {edit.replacement === undefined ? <p className="form-error" role="alert">未收到替换文本，请重新生成建议。</p>
+          : edit.replacement === '' ? <p className="workspace-note">此建议会删除整个选区。</p>
+          : <pre className="workspace-text" tabIndex={0} aria-label="建议替换文本" dir="auto">{edit.replacement}</pre>}
+      </>}
       {edit.reason && <p className="workspace-note">修改理由：<bdi>{edit.reason}</bdi></p>}
     </>}
   </>
@@ -159,7 +163,7 @@ function VersionSelectionEdit({ projectId, versionId, selection, disabled, onApp
   const canGenerate = !generationBlocked && hasSelection && selectedBytes <= selectionLimit
     && !!cleanedInstruction && !instructionTooLong
   const canApply = !disabled && !pending && !conflict && edit?.status === 'SUCCEEDED'
-    && edit.replacement !== undefined && !edit.appliedVersionId
+    && !edit.unchanged && edit.replacement !== undefined && !edit.appliedVersionId
 
   useEffect(() => {
     if (!editId || !canRead) return
@@ -284,7 +288,7 @@ function VersionSelectionEdit({ projectId, versionId, selection, disabled, onApp
       <p className="workspace-note" role="status">{edit.appliedVersionId ? '建议已应用' : statusLabels[edit.status]}</p>
       {edit.message && <p className="workspace-note" dir="auto">{edit.message}</p>}
       <SelectionEditPreview edit={edit} />
-      {edit.status === 'SUCCEEDED' && !edit.appliedVersionId && (
+      {edit.status === 'SUCCEEDED' && !edit.unchanged && !edit.appliedVersionId && (
         <button className="button primary" type="button" disabled={!canApply}
           onClick={() => void apply()}>{pending === 'apply' ? '正在应用…' : '应用到稿件'}</button>
       )}

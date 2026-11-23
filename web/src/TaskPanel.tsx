@@ -112,7 +112,6 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const saving = pending === `edit:${task.taskId}`
   const outdated = editing && edit.revision !== task.revision
   const currentInputs = task.inputs ?? []
-  const selectionSource = isSelectionEdit ? currentInputs[0] : undefined
   const inputsChanged = editing && !isSelectionEdit && !sameVersionIds(versionIds(edit.inputs), versionIds(currentInputs))
   const changed = editing && (edit.text.trim() !== task.instruction || inputsChanged)
   const inputProblem = edit && !isSelectionEdit ? editInputError(edit.inputs, task.kind) : ''
@@ -182,11 +181,16 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         <a href={`#${encodeURIComponent(conversationTurnAnchor(task.sourceTurnId))}`}>回到原消息</a>
       </p>}
       {proposed && task.sourceTurnId && !isManuscriptCheck && !isSelectionEdit && <p className="task-note">{turnSourceNotice}</p>}
-      {selectionSource ? <>
+      {isSelectionEdit ? <>
         <p className="turn-role">局部改稿</p>
-        {proposed && <p className="task-note">确认运行后，模型会收到选区、相邻文字和修改要求。核对建议后可保存为新版本。</p>}
-        <TaskSelectionEdit projectId={projectId} taskId={task.taskId} source={selectionSource}
-          status={task.status} revision={task.revision} refreshVersion={refreshVersion} />
+        {proposed && <p className="task-note">
+          {currentInputs.length > 1 ? '确认运行后，模型会收到各份稿件的选区、相邻文字和修改要求。核对建议后可逐份应用。'
+            : '确认运行后，模型会收到选区、相邻文字和修改要求。核对建议后可保存为新版本。'}
+        </p>}
+        {currentInputs.map((source) => (
+          <TaskSelectionEdit key={source.versionId} projectId={projectId} taskId={task.taskId} source={source}
+            status={task.status} revision={task.revision} refreshVersion={refreshVersion} />
+        ))}
       </> : <TaskInputSummary projectId={projectId} inputs={task.inputs} />}
       {confirmationConflict && <p className="form-error" role="alert">{confirmationConflict}</p>}
       {edit && <form className="field" onSubmit={(event) => void save(event)} noValidate aria-busy={saving}>

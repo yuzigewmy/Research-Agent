@@ -19,6 +19,28 @@ const maxEditReplacementBytes = 16 << 10
 
 var errSelectionOutput = errors.New("model returned an invalid selection edit")
 
+type selectionExcerpt struct {
+	Before   string `json:"before"`
+	Selected string `json:"selected"`
+	After    string `json:"after"`
+}
+
+func excerptSelection(content string, start, end int) selectionExcerpt {
+	left, right := max(0, start-selectionContextBytes), min(len(content), end+selectionContextBytes)
+	for !utf8.RuneStart(content[left]) {
+		left++
+	}
+	for right < len(content) && !utf8.RuneStart(content[right]) {
+		right--
+	}
+	return selectionExcerpt{Before: content[left:start], Selected: content[start:end], After: content[end:right]}
+}
+
+func validSelectionSuggestion(suggestion EditSuggestion, documentSize, selectionSize int) bool {
+	return suggestion.Reason != "" && len(suggestion.Replacement) <= maxEditReplacementBytes &&
+		!strings.ContainsRune(suggestion.Replacement, 0) && documentSize-selectionSize+len(suggestion.Replacement) <= maxWorkspaceText
+}
+
 func (s *Store) generateSelectionEdit(ctx context.Context, model *inference.Client, projectID string, task Task) (string, error) {
 	var versionID string
 	var start, end int
@@ -34,19 +56,10 @@ func (s *Store) generateSelectionEdit(ctx context.Context, model *inference.Clie
 	if err != nil {
 		return "", err
 	}
-	left, right := max(0, start-selectionContextBytes), min(len(doc.Content), end+selectionContextBytes)
-	for !utf8.RuneStart(doc.Content[left]) {
-		left++
-	}
-	for right < len(doc.Content) && !utf8.RuneStart(doc.Content[right]) {
-		right--
-	}
 	input := struct {
 		Instruction string `json:"instruction"`
-		Before      string `json:"before"`
-		Selected    string `json:"selected"`
-		After       string `json:"after"`
-	}{task.Instruction, doc.Content[left:start], doc.Content[start:end], doc.Content[end:right]}
+		selectionExcerpt
+	}{task.Instruction, excerptSelection(doc.Content, start, end)}
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return "", err
@@ -62,12 +75,10 @@ func (s *Store) generateSelectionEdit(ctx context.Context, model *inference.Clie
 	if err := json.Unmarshal([]byte(output), &result); err != nil || result.Replacement == nil {
 		return "", errSelectionOutput
 	}
-	replacement := *result.Replacement
-	reason := strings.TrimSpace(result.Reason)
-	if len(replacement) > maxEditReplacementBytes || strings.ContainsRune(replacement, 0) ||
-		len(doc.Content)-(end-start)+len(replacement) > maxWorkspaceText || reason == "" || replacement == input.Selected {
+	suggestion := EditSuggestion{Replacement: *result.Replacement, Reason: strings.TrimSpace(result.Reason)}
+	if suggestion.Replacement == input.Selected || !validSelectionSuggestion(suggestion, len(doc.Content), end-start) {
 		return "", errSelectionOutput
 	}
-	encoded, err := json.Marshal(EditSuggestion{Replacement: replacement, Reason: reason})
+	encoded, err := json.Marshal(suggestion)
 	return string(encoded), err
 }
