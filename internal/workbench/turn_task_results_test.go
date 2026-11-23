@@ -71,10 +71,10 @@ func TestConversationSyncsOnlyItsCompletedTaskResultsOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.appendTurnEvent(ctx, turn.TurnID, TurnEvent{Kind: "delta", Text: "Compare the observations."}); err != nil {
+		if err := store.appendTurnEvent(ctx, turn.TurnID, &TurnEvent{Kind: "delta", Text: "Compare the observations."}); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.appendTurnEvent(ctx, turn.TurnID, TurnEvent{Kind: "done", Status: "COMPLETED"}); err != nil {
+		if err := store.appendTurnEvent(ctx, turn.TurnID, &TurnEvent{Kind: "done", Status: "COMPLETED"}); err != nil {
 			t.Fatal(err)
 		}
 		return project.ProjectID, turn.TurnID

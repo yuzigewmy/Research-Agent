@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { ConversationTasks } from './ConversationTasks'
 import { ConversationWorkflowProposal } from './ConversationWorkflowProposal'
 import { materialDownloadPath } from './materials'
-import { errorMessage, isTurnMode, turnModeLabels } from './projects'
+import { errorMessage, isTurnMode, turnModeHelp, turnModeLabels } from './projects'
 import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
@@ -394,12 +394,13 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
         <form className="create-form" onSubmit={send} aria-busy={sending}>
           <div className="field">
             <label htmlFor="turn-mode">本轮协作</label>
-            <select id="turn-mode" value={mode} disabled={loading || sending} onChange={(event) => {
+            <select id="turn-mode" value={mode} disabled={loading || sending} aria-describedby="turn-mode-help" onChange={(event) => {
               const nextMode = event.currentTarget.value
               if (isTurnMode(nextMode)) setModeOverride(nextMode === inheritedMode ? undefined : nextMode)
             }}>
               {Object.entries(turnModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
+            <p className="turn-status" id="turn-mode-help">{turnModeHelp[mode]}</p>
           </div>
           <div className="field">
             <label htmlFor="turn-message">消息</label>
@@ -407,7 +408,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
               aria-describedby="turn-task-results-hint" onChange={(event) => updateDraft(event.currentTarget.value)} />
             <p className="turn-status" id="turn-task-results-hint">
               发送消息时，本项目已完成且尚未同步的关联任务成果节选（最多 4 项）会随本轮发送给研究模型。
-              {mode === 'CONFIRM' && ' 建议任务时，模型会收到最近保存的最多 20 份 Markdown 稿件的路径、版本号和摘要。'}
+              {mode !== 'CHAT' && ' 建议任务时，模型会收到最近保存的最多 20 份 Markdown 稿件的路径、版本号和摘要。'}
             </p>
           </div>
           <div className="form-actions">

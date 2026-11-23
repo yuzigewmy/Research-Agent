@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { errorMessage, getProject, isTurnMode, ProjectApiError, turnModeLabels, updateProject } from './projects'
+import { errorMessage, getProject, isTurnMode, ProjectApiError, turnModeHelp, turnModeLabels, updateProject } from './projects'
 import type { Project, ProjectChanges, TurnMode, UpdateProject } from './projects'
 import './project-management.css'
 
@@ -113,13 +113,14 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
         if (!writesBlocked && modeDirty) void run('save-mode', { defaultTurnMode: mode })
       }}>
         <label htmlFor={`${id}-default-mode`}>默认协作方式</label>
-        <select id={`${id}-default-mode`} value={mode} disabled={pending !== undefined} onChange={(event) => {
+        <select id={`${id}-default-mode`} value={mode} disabled={pending !== undefined} aria-describedby={`${id}-mode-help`} onChange={(event) => {
           const nextMode = event.currentTarget.value
           if (isTurnMode(nextMode)) setModeDraft(nextMode === savedMode ? undefined : nextMode)
           if (!hasConflict) setFeedback(undefined)
         }}>
           {Object.entries(turnModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
+        <p className="project-management-help" id={`${id}-mode-help`}>{turnModeHelp[mode]}</p>
         {modeDirty && <p className="project-management-help">当前已保存为「{turnModeLabels[savedMode]}」。</p>}
         <div className="project-management-actions">
           <button className="button outline" type="submit" aria-disabled={writesBlocked || !modeDirty}>

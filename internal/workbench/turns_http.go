@@ -53,7 +53,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Mode != "" && !validTurnMode(input.Mode) {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择仅问答或建议任务后确认。")
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的协作方式。")
 		return
 	}
 	turn, created, err := c.startReply(r.Context(), r.PathValue("id"), input)
@@ -100,11 +100,16 @@ func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
 	// prevents late provider output from creating a proposal or syncing results.
 	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
-	if err := c.store.appendTurnEvent(saveCtx, turn.TurnID, event); err != nil {
+	if err := c.store.appendTurnEvent(saveCtx, turn.TurnID, &event); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			log.Printf("finish conversation %s: %v", turn.TurnID, err)
 		}
-	} else if event.Status == "FAILED" {
+		return
+	}
+	if event.queued {
+		c.store.kickTaskQueue(project.ProjectID, c.model)
+	}
+	if event.Status == "FAILED" {
 		log.Printf("conversation %s: %v", turn.TurnID, generateErr)
 	}
 }
@@ -116,7 +121,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	}
 	var workflow *workflowProposalRecord
 	var manuscripts []taskInput
-	if turn.Mode == turnModeConfirm {
+	if turn.Mode != turnModeChat {
 		workflow, err = c.store.workflowProposalOptions(ctx, project)
 		if err != nil {
 			return turnProposal{}, err
@@ -162,10 +167,10 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		if bytesWritten > 64<<10 {
 			return errors.New("conversation output exceeds 64 KiB")
 		}
-		return c.store.appendTurnEvent(ctx, turn.TurnID, TurnEvent{Kind: "delta", Text: delta})
+		return c.store.appendTurnEvent(ctx, turn.TurnID, &TurnEvent{Kind: "delta", Text: delta})
 	}
 	var arguments json.RawMessage
-	if turn.Mode == turnModeConfirm {
+	if turn.Mode != turnModeChat {
 		tool, err := proposalTool(workflow, manuscripts, turn.ManuscriptSelection)
 		if err != nil {
 			return turnProposal{}, err

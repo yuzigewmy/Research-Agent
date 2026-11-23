@@ -84,7 +84,7 @@ func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if input.DefaultTurnMode.Valid && !validTurnMode(input.DefaultTurnMode.String) {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择仅问答或建议任务后确认。")
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的默认协作方式。")
 		return
 	}
 

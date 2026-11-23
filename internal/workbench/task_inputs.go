@@ -25,6 +25,7 @@ const changedTaskInputs = `EXISTS (
 )`
 
 const taskInputsChangedMessage = "任务所用文件已有新版本。请核对并更新输入后重新确认。"
+const selectionTaskChangedMessage = "稿件已有新版本。请取消此任务，在最新稿件中重新选取文字并发送。"
 
 var (
 	errInvalidTaskInput = errors.New("task input must be a saved file from this project")

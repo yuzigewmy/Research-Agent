@@ -78,10 +78,10 @@ func TestTaskKeepsItsCompletedTurnAndReferences(t *testing.T) {
 			t.Fatal(err)
 		}
 		if answer != "" {
-			if err := store.appendTurnEvent(ctx, started.TurnID, TurnEvent{Kind: "delta", Text: answer}); err != nil {
+			if err := store.appendTurnEvent(ctx, started.TurnID, &TurnEvent{Kind: "delta", Text: answer}); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.appendTurnEvent(ctx, started.TurnID, TurnEvent{Kind: "done", Status: "COMPLETED"}); err != nil {
+			if err := store.appendTurnEvent(ctx, started.TurnID, &TurnEvent{Kind: "done", Status: "COMPLETED"}); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -315,8 +315,9 @@ func (s *Store) claimQueuedTask(ctx context.Context, projectID string, modelConf
 		return Task{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'PROPOSED', revision = revision + 1, queued_seq = NULL, message = ?
-		WHERE project_id = ? AND status = 'QUEUED' AND `+changedTaskInputs, taskInputsChangedMessage, projectID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'PROPOSED', revision = revision + 1, queued_seq = NULL,
+		message = CASE WHEN selection_edit = 1 THEN ? ELSE ? END
+		WHERE project_id = ? AND status = 'QUEUED' AND `+changedTaskInputs, selectionTaskChangedMessage, taskInputsChangedMessage, projectID); err != nil {
 		return Task{}, err
 	}
 	task, err := scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = 'RUNNING', revision = revision + 1

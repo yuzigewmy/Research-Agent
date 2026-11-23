@@ -17,9 +17,16 @@ export type ProjectStatus = 'READY' | 'ARCHIVED'
 export const turnModeLabels = {
   CHAT: '仅问答',
   CONFIRM: '建议任务，确认后运行',
+  CONFIRM_STEPS: '整步先确认',
 } as const
 
 export type TurnMode = keyof typeof turnModeLabels
+
+export const turnModeHelp: Record<TurnMode, string> = {
+  CHAT: '只回答本轮问题。',
+  CONFIRM: '助手可提出任务，确认后入队。',
+  CONFIRM_STEPS: '研究计划、稿件检查和选区修改建议可直接入队。工作流区间需要确认，改稿应用由你决定。',
+}
 
 export function isTurnMode(value: unknown): value is TurnMode {
   return typeof value === 'string' && Object.hasOwn(turnModeLabels, value)

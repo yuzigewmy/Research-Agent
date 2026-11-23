@@ -13,15 +13,6 @@ import (
 	"research-agent/internal/inference"
 )
 
-const (
-	turnModeChat    = "CHAT"
-	turnModeConfirm = "CONFIRM"
-)
-
-func validTurnMode(mode string) bool {
-	return mode == turnModeChat || mode == turnModeConfirm
-}
-
 const turnProposalSchema = `
 	ALTER TABLE turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'CHAT' CHECK (mode IN ('CHAT', 'CONFIRM'));
 	ALTER TABLE turns ADD COLUMN proposed_task_id TEXT NOT NULL DEFAULT '';
@@ -77,7 +68,7 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, sel
 	})
 	return inference.Tool{
 		Name:        "propose_research_task",
-		Description: "为用户明确要求的研究计划、工作流区间、稿件结构检查或选区改稿提出一项待确认建议。",
+		Description: "为用户明确要求的研究计划、工作流区间、稿件结构检查或选区改稿提交一项建议。工作台按本轮协作方式处理。",
 		Parameters:  parameters,
 	}, err
 }
@@ -133,7 +124,7 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 
 var errInvalidTaskProposal = errors.New("model proposed an invalid research task")
 
-func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, error) {
+func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, bool, error) {
 	kind, inputs := "", "[]"
 	source := proposal.checkInput
 	selection := proposal.editSelection
@@ -146,24 +137,30 @@ func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal
 	if source != nil {
 		body, err := json.Marshal([]taskInput{*source})
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		inputs = string(body)
 	}
+	var projectID, mode string
+	if err := tx.QueryRowContext(ctx, `SELECT project_id, mode FROM turns
+		WHERE turn_id = ? AND status = 'RUNNING' AND mode <> 'CHAT'`, turnID).Scan(&projectID, &mode); err != nil {
+		return "", false, err
+	}
 	taskID := rand.Text()
-	var projectID string
-	if err := tx.QueryRowContext(ctx, `INSERT INTO tasks
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
 		(project_id, task_id, instruction, status, created_at, source_turn_id, kind, inputs_json, selection_edit)
-		SELECT project_id, ?, ?, 'PROPOSED', ?, turn_id, ?, ?, ? FROM turns
-		WHERE turn_id = ? AND status = 'RUNNING' AND mode = 'CONFIRM' RETURNING project_id`,
-		taskID, proposal.instruction, time.Now().UTC().Format(createdAtLayout), kind, inputs, selection != nil, turnID).
-		Scan(&projectID); err != nil {
-		return "", err
+		VALUES (?, ?, ?, 'PROPOSED', ?, ?, ?, ?, ?)`,
+		projectID, taskID, proposal.instruction, time.Now().UTC().Format(createdAtLayout), turnID, kind, inputs, selection != nil); err != nil {
+		return "", false, err
 	}
 	if selection != nil {
 		if err := insertSelectionEdit(ctx, tx, projectID, taskID, taskID, selection.manuscriptSelectionInput, selection.Text, reviewFindingRef{}); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
-	return taskID, nil
+	if mode != turnModeConfirmSteps {
+		return taskID, false, nil
+	}
+	queued, err := queueTurnTask(ctx, tx, projectID, taskID)
+	return taskID, queued, err
 }

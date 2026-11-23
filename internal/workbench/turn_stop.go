@@ -83,7 +83,7 @@ func (s *Store) stopTurn(ctx context.Context, projectID, turnID string) (Turn, e
 		return turn, err
 	}
 	event := TurnEvent{Kind: "done", Status: turnStopped, Message: stoppedReplyMessage}
-	seq, err := recordTurnEvent(ctx, tx, turnID, event)
+	seq, err := recordTurnEvent(ctx, tx, turnID, &event)
 	if err != nil {
 		return Turn{}, err
 	}

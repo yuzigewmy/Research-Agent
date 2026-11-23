@@ -45,6 +45,7 @@ type TurnEvent struct {
 	ProposedTaskID   string                `json:"proposedTaskId,omitempty"`
 	WorkflowProposal *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 	proposal         turnProposal
+	queued           bool
 }
 
 const turnsSchema = `
@@ -218,7 +219,7 @@ func (s *Store) listTurns(ctx context.Context, projectID string, before int64, l
 	return turns, rows.Err()
 }
 
-func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent) error {
+func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e *TurnEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -230,7 +231,7 @@ func (s *Store) appendTurnEvent(ctx context.Context, turnID string, e TurnEvent)
 	return tx.Commit()
 }
 
-func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e TurnEvent) (int64, error) {
+func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e *TurnEvent) (int64, error) {
 	completed := e.Kind == "done" && e.Status == "COMPLETED"
 	workflowJSON := "null"
 	if completed {
@@ -242,11 +243,11 @@ func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e TurnEvent
 			}
 			workflowJSON = string(body)
 		case e.proposal.instruction != "":
-			taskID, err := insertTurnProposal(ctx, tx, turnID, e.proposal)
+			taskID, queued, err := insertTurnProposal(ctx, tx, turnID, e.proposal)
 			if err != nil {
 				return 0, err
 			}
-			e.ProposedTaskID = taskID
+			e.ProposedTaskID, e.queued = taskID, queued
 		}
 	}
 	var seq int64
