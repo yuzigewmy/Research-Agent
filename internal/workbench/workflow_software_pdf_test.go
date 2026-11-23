@@ -44,7 +44,7 @@ func TestSoftwareWorkflowPDFUsesRequestedArtifactAndPaginatesSource(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		return softwareProgramMaterials(inputs.sources)
+		return softwareProgramMaterials(softwareProgramHeading, inputs.sources)
 	}
 	shortLines := programText("package main\n" + strings.Repeat("// 水位观测\n", 49) + "func main() {}")
 	wrappedLines := programText("package main\n" + strings.Repeat("// 水位观测\n", 34) + "// " + strings.Repeat("W", 3000) + "\nfunc main() {}")

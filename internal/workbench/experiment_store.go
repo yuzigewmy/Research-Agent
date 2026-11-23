@@ -185,7 +185,7 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Course); err != nil {
 			return WorkflowRun{}, err
 		}
-	case run.WorkflowKey == softwareRegistrationWorkflow:
+	case isSoftwareRegistrationWorkflow(run.WorkflowKey):
 		run.Software = new(softwareSettings)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Software); err != nil {
 			return WorkflowRun{}, err

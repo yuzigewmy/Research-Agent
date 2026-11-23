@@ -55,7 +55,7 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		ModelConfigured       bool         `json:"modelConfigured"`
 		SoftwarePDFConfigured *bool        `json:"softwarePdfConfigured,omitempty"`
 	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil}
-	if key == softwareRegistrationWorkflow {
+	if isSoftwareRegistrationWorkflow(key) {
 		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
 	}
 	for index, stage := range stages {

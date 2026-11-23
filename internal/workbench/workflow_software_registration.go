@@ -17,14 +17,24 @@ import (
 	"research-agent/internal/inference"
 )
 
-const softwareRegistrationWorkflow = "software-registration-v1"
+const softwareRegistrationWorkflowV1 = "software-registration-v1"
+const softwareRegistrationWorkflow = "software-registration-v2"
 const defaultSoftwareVersion = "V1.0"
 const maxSoftwareSourceBytes = 64 << 10
 const softwareProgramHeading = "程序材料\n\n"
 const softwareProgramMissing = "本轮未选择源码。请补充用于登记的软件源码。\n"
+const softwareSampleLabel = "示例源码 · 待核对"
+const softwareSampleHeading = softwareSampleLabel + "\n\n"
 
 //go:embed prompts/software_registration_manual.md
 var softwareManualPrompt string
+
+//go:embed prompts/software_registration_sample.md
+var softwareSamplePrompt string
+
+func isSoftwareRegistrationWorkflow(key string) bool {
+	return key == softwareRegistrationWorkflowV1 || key == softwareRegistrationWorkflow
+}
 
 var (
 	errSoftwareOptions         = errors.New("invalid software registration options")
@@ -163,9 +173,9 @@ func softwareMaterialList(title string, settings softwareSettings, inputs softwa
 	return list.String()
 }
 
-func softwareProgramMaterials(sources []softwareSourceText) string {
+func softwareProgramMaterials(heading string, sources []softwareSourceText) string {
 	var program strings.Builder
-	program.WriteString(softwareProgramHeading)
+	program.WriteString(heading)
 	for _, source := range sources {
 		fmt.Fprintf(&program, "文件 %s\nSHA-256 %s\n字节数 %d\n\n", source.name, source.digest, len(source.body))
 		program.WriteString(source.body)
@@ -204,12 +214,11 @@ func (s *Store) softwareDocumentExcerpts(ctx context.Context, materials []TurnRe
 	return excerpts, nil
 }
 
-func (s *Store) generateSoftwareRegistrationStep(ctx context.Context, model *inference.Client, project Project, task Task, input, options string) (taskResult, error) {
+func (s *Store) generateSoftwareRegistrationStep(ctx context.Context, model *inference.Client, project Project, task Task, stage workflowStage, input, options string) (taskResult, error) {
 	var settings softwareSettings
 	if err := json.Unmarshal([]byte(options), &settings); err != nil {
 		return taskResult{}, err
 	}
-	stage := workflowStages[softwareRegistrationWorkflow][task.workflowStep]
 	if stage.key == "application" {
 		_, manual, err := s.workflowArtifact(ctx, project.ProjectID, task.workflowRunID, "manuscript")
 		if err != nil {
@@ -225,6 +234,9 @@ func (s *Store) generateSoftwareRegistrationStep(ctx context.Context, model *inf
 		}
 		text := fmt.Sprintf("软件著作权登记申请信息核对单\n\n软件全称 %s\n版本号 %s\n著作权人 待填写\n开发完成日期 待核实\n首次发表情况 待核实\n运行环境 待核实\n\n操作手册 SHA-256 %x\n程序材料 SHA-256 %x\n",
 			project.Title, settings.Version, sha256.Sum256([]byte(manual)), sha256.Sum256([]byte(program)))
+		if strings.HasPrefix(program, softwareSampleHeading) {
+			text += "程序来源 模型生成的示例（待核对）\n"
+		}
 		return taskResult{markdown: text + "\n" + materials}, nil
 	}
 
@@ -236,7 +248,10 @@ func (s *Store) generateSoftwareRegistrationStep(ctx context.Context, model *inf
 	case "sources":
 		return taskResult{markdown: softwareMaterialList(project.Title, settings, inputs)}, nil
 	case "program":
-		return taskResult{markdown: softwareProgramMaterials(inputs.sources)}, nil
+		if len(inputs.sources) > 0 || stage.prompt == "" {
+			return taskResult{markdown: softwareProgramMaterials(softwareProgramHeading, inputs.sources)}, nil
+		}
+		return s.generateSoftwareSample(ctx, model, project, task, stage.prompt, settings)
 	default:
 		excerpts, err := s.softwareDocumentExcerpts(ctx, settings.Materials, inputs)
 		if err != nil {

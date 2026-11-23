@@ -27,6 +27,7 @@ import './workflow.css'
 const pollInterval = 1_000
 const requestTimeout = 10_000
 const topicRequirementsLimit = 4 * 1024
+const softwareRegistrationV2 = 'software-registration-v2'
 
 type Attempt =
   | { kind: 'start'; input: StartWorkflowInput }
@@ -73,6 +74,8 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
 }) {
   const confirmationId = useId()
   const selectedButton = useRef<HTMLButtonElement>(null)
+  const softwarePdfEnabled = softwarePdfConfigured === true
+    && (run.workflowKey === 'software-registration-v1' || run.workflowKey === softwareRegistrationV2)
   return (
     <ol className="workflow-steps" aria-label="工作流步骤">
       {run.steps.map((step, index) => {
@@ -83,8 +86,7 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
         const canDownload = step.status === 'SUCCEEDED' && (!!rerun || !!step.artifactId)
         const downloadLabel = rerun ? '下载当前成果' : '下载该轮成果'
         const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
-        const pdfStep = softwarePdfConfigured === true && run.workflowKey === 'software-registration-v1'
-          && isSoftwarePdfStep(step.key) ? step.key : undefined
+        const pdfStep = softwarePdfEnabled && isSoftwarePdfStep(step.key) ? step.key : undefined
         return <li key={step.key}>
           <div className="workflow-step-heading">
             <strong dir="auto">{step.title}</strong>
@@ -251,6 +253,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const completedWithSkip = run?.status === 'COMPLETED' && run.steps.some((step) => step.status === 'SKIPPED')
   const canStart = snapshot !== null && (run === null || run.status === 'COMPLETED' || cancelled)
   const waiting = run?.status === 'WAITING_CHECKPOINT'
+  const checkpointMessage = run?.confirmEachStep ? '核对已完成的成果后，确认运行下一步。'
+    : run?.workflowKey === softwareRegistrationV2
+      ? '核对操作手册草稿后，确认继续整理程序材料。若无可用源码，下一步会生成待核对的 Python 示例。'
+      : checkpointHint
   const waitingTopic = run?.status === 'WAITING_TOPIC_CHOICE'
   const rangeCompleted = run?.status === 'RANGE_COMPLETED'
   const pausing = run?.status === 'PAUSING'
@@ -548,7 +554,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         target={{ runId: run.runId, expectedRevision: run.revision, stepKey: skipStep.key }} stepTitle={skipStep.title}
         disabled={requestBlocked} pending={pending === 'skip'} retryReason={retrySkip?.input.reason}
         onConfirm={(target) => void submit('skip', target)} />}
-      {waiting && <p className="workflow-note">{run.confirmEachStep ? '核对已完成的成果后，确认运行下一步。' : checkpointHint}</p>}
+      {waiting && <p className="workflow-note">{checkpointMessage}</p>}
       {pausing && <p className="workflow-note">当前步骤停止后即可继续运行。</p>}
       {paused && <p className="workflow-note">继续时从第一个未完成的步骤开始。已完成的成果仍可下载。</p>}
       {cancelled && <p className="workflow-note">已完成的成果仍可下载。</p>}

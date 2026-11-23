@@ -64,8 +64,8 @@ var projectTemplates = []projectTemplate{
 		Summary:      "先梳理材料中的事实，再按课程任务撰写实施过程、观察结果和反思。",
 		Deliverables: []string{"材料核对单", "写作规划", "分节稿件与汇编稿", "交付核对报告", "可编辑 Word（启用导出组件后）"}},
 	{ID: "software_registration", Label: "软件著作权材料", Revision: softwareRegistrationWorkflow, Kind: "workflow",
-		Summary:      "固定软件说明和选定资料，生成操作手册草稿、程序材料与申请信息核对单。",
-		Deliverables: []string{"材料来源清单", "操作手册草稿", "程序材料 TXT", "申请信息核对单 TXT", "可编辑 Word（启用导出组件后）"},
+		Summary:      "整理固定版本的资料和操作手册。没有可用源码时，根据软件说明和手册生成待核对的示例。",
+		Deliverables: []string{"材料来源清单", "操作手册草稿", "程序材料 TXT", "申请信息核对单 TXT", "程序和手册 PDF（配置字体后）", "可编辑 Word（启用导出组件后）"},
 		Defaults:     projectTemplateDefaults{Software: &softwareOptions{Version: defaultSoftwareVersion}}},
 }
 

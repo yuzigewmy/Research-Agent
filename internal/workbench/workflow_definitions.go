@@ -100,13 +100,18 @@ var workflowStages = map[string][]workflowStage{
 		{key: "defense", title: "准备开题答辩", prompt: proposalDefensePrompt, acceptMarkdown: true},
 		{key: "check", title: "核对开题交付"},
 	},
-	proposalWorkflow:     sectionedProposalStages(),
-	coursePaperWorkflow:  courseStages(coursePaperWorkflow),
-	courseReportWorkflow: courseStages(courseReportWorkflow),
-	softwareRegistrationWorkflow: {
+	proposalWorkflow:               sectionedProposalStages(),
+	coursePaperWorkflow:            courseStages(coursePaperWorkflow),
+	courseReportWorkflow:           courseStages(courseReportWorkflow),
+	softwareRegistrationWorkflowV1: softwareRegistrationStages(""),
+	softwareRegistrationWorkflow:   softwareRegistrationStages(softwareSamplePrompt),
+}
+
+func softwareRegistrationStages(programPrompt string) []workflowStage {
+	return []workflowStage{
 		{key: "sources", title: "固定材料与来源"},
 		{key: "manuscript", title: "编制操作手册草稿", prompt: softwareManualPrompt, checkpoint: true, acceptMarkdown: true},
-		{key: "program", title: "整理程序材料", plainText: true},
+		{key: "program", title: "整理程序材料", prompt: programPrompt, plainText: true},
 		{key: "application", title: "生成申请信息核对单", plainText: true},
-	},
+	}
 }

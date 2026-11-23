@@ -1,12 +1,12 @@
 # 软件著作权材料工作流
 
-`software-registration-v1` 面向整理软件著作权登记材料的项目。软件全称取建项题目，工作流版本号留空时使用 `V1.0`。可补充软件说明并从项目资料库选取最多四份 UTF-8 文本、Word 或压缩包。每份材料以编号、名称和 SHA-256 固定。源码文本合计上限为 64 KiB。
+`software-registration-v2` 面向整理软件著作权登记材料的项目。既有运行沿用保存的 `software-registration-v1` 修订。软件全称取建项题目，工作流版本号留空时使用 `V1.0`。可补充软件说明并从项目资料库选取最多四份 UTF-8 文本、Word 或压缩包。每份材料以编号、名称和 SHA-256 固定。源码文本合计上限为 64 KiB。
 
 | 步骤 | 输入与成果 |
 | --- | --- |
 | 固定材料与来源 | 将本轮选定的文档和识别出的源码按原顺序登记，生成 Markdown 清单。 |
 | 编制操作手册草稿 | 根据软件说明和选定文档节选撰写手册，标示待核实的信息。浏览器默认在此暂停，供用户核对名称、版本、材料来源及草稿。 |
-| 整理程序材料 | 把固定版的 UTF-8 源码按文件登记到 TXT。源文件正文保持原字节，清单记录各段的来源。无源码时列出待补交项。 |
+| 整理程序材料 | 把固定版的 UTF-8 源码按文件登记到 TXT，保留源文件原字节。第二版在该轮没有可用源码时，根据软件说明和固定手册生成 Python 示例。 |
 | 生成申请信息核对单 | 用固定信息和材料指纹生成 TXT，列出申请人需要核实和补充的字段。操作手册可保存至文本工作区，配置 Word 组件后可导出。 |
 
 工作流沿用项目队列、步骤下载和请求回执。启用草稿检查点时，确认前暂停，恢复时沿用原材料和版本。
@@ -17,7 +17,11 @@
 
 UTF-8 源码及 Markdown、TXT 说明按包名和成员相对路径登记。程序材料保留源码的原始字节。手册生成使用最多四份说明文档的节选。每包最多 1000 项，解压数据限 16 MiB。多份材料的源码合计限 64 KiB。资料检查会拒绝不安全路径、重名成员和链接，并在步骤中提示原因。依赖目录和常见构建目录中的文件会被跳过。
 
-目录选择使用 [浏览器目录输入](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/webkitdirectory)，按需加载 [fflate 0.8.3](https://github.com/101arrowz/fflate/tree/v0.8.3#usage) 生成 ZIP，再通过现有资料上传接口保存固定版本。示例源码仍待实现。
+目录选择沿用项目资料上传接口。浏览器按需加载 ZIP 打包模块，保存可复用的资料版本。 [浏览器目录输入](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/webkitdirectory) · [fflate 0.8.3](https://github.com/101arrowz/fflate/tree/v0.8.3#usage)
+
+## 示例源码
+
+第二版在程序材料步骤发现本轮没有源码时，向已配置模型发送软件全称、版本、软件说明及已保存手册的节选。模型返回最多 8 KiB 的 Python 示例文本。程序 TXT、程序 PDF 与申请核对单都标注示例来源和待核对状态。工作流只保存和排版示例文本。第一版无源码的运行沿用待补交提示。
 
 ## 鉴别材料 PDF
 
@@ -25,4 +29,4 @@ UTF-8 源码及 Markdown、TXT 说明按包名和成员相对路径登记。程�
 
 程序 PDF 每个源文件另起一页，每页最多 50 个正文排版行，过长的源码行折行后计入页行数。TXT 保留原始源码字节。手册 PDF 按保存的 Markdown 文本分页。浏览器核对所选成果编号和原始正文的 SHA-256 后下载。字体子集嵌入采用 [GoPDF v0.38.6](https://github.com/signintech/gopdf/blob/v0.38.6/README.md#features)。
 
-`go test ./internal/workbench -run 'TestSoftware|TestProjectTemplateCatalog' -count=1` 核对本流程。设置 `SOFTWARE_PDF_TEST_FONT` 后运行真实排版回归。Chrome 验证建项、默认检查点、材料换版、历史 PDF 下载和失败重试。PDF.js 核对页数、中文和长源码行的末尾。
+`go test ./internal/workbench -run 'TestSoftware|TestProjectTemplateCatalog' -count=1` 核对本流程。设置 `SOFTWARE_PDF_TEST_FONT` 后运行真实排版回归。Chrome 验证建项、默认检查点、材料换版、示例回包失败后的续跑、历史 PDF 下载和失败重试。PDF.js 核对页数、中文、长源码行的末尾和示例来源。

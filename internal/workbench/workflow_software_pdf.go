@@ -21,7 +21,10 @@ var errSoftwareProgramFormat = errors.New("invalid program material record")
 func softwareProgramSections(program string) ([]softwarePDFSection, error) {
 	body, ok := strings.CutPrefix(program, softwareProgramHeading)
 	if !ok {
-		return nil, errSoftwareProgramFormat
+		body, ok = strings.CutPrefix(program, softwareSampleHeading)
+		if !ok {
+			return nil, errSoftwareProgramFormat
+		}
 	}
 	if body == softwareProgramMissing {
 		return []softwarePDFSection{{text: body}}, nil
@@ -65,8 +68,8 @@ func (api workflows) softwareIdentificationPDF(w http.ResponseWriter, r *http.Re
 	}
 	var title, options string
 	if err := api.store.db.QueryRowContext(ctx, `SELECT p.title, w.options_json FROM workflow_runs w
-		JOIN projects p ON p.project_id = w.project_id WHERE w.project_id = ? AND w.run_id = ? AND w.workflow_key = ?`,
-		projectID, runID, softwareRegistrationWorkflow).Scan(&title, &options); err != nil {
+		JOIN projects p ON p.project_id = w.project_id WHERE w.project_id = ? AND w.run_id = ? AND w.workflow_key IN (?, ?)`,
+		projectID, runID, softwareRegistrationWorkflowV1, softwareRegistrationWorkflow).Scan(&title, &options); err != nil {
 		writeWorkflowArtifactError(w, err)
 		return
 	}
@@ -91,6 +94,9 @@ func (api workflows) softwareIdentificationPDF(w http.ResponseWriter, r *http.Re
 	}
 	sections := []softwarePDFSection{{text: artifact.markdown}}
 	if key == "program" {
+		if strings.HasPrefix(artifact.markdown, softwareSampleHeading) {
+			kind += " · " + softwareSampleLabel
+		}
 		sections, err = softwareProgramSections(artifact.markdown)
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "INVALID_ARTIFACT", "无法核对程序材料中的源码及指纹。")
