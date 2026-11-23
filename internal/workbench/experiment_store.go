@@ -108,6 +108,7 @@ type WorkflowRun struct {
 	Proposal            *proposalTargets  `json:"proposal,omitempty"`
 	Course              *courseSettings   `json:"course,omitempty"`
 	Software            *softwareSettings `json:"software,omitempty"`
+	Patent              *patentSettings   `json:"patent,omitempty"`
 	step                int
 	rangeStart          int
 	rangeEnd            int
@@ -143,6 +144,7 @@ type workflowRequest struct {
 	Proposal         *proposalOptions `json:"proposal"`
 	Course           *courseOptions   `json:"course"`
 	Software         *softwareOptions `json:"software"`
+	Patent           *patentOptions   `json:"patent"`
 	sourceTurnID     string
 	workflowKey      string
 }
@@ -188,6 +190,11 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	case isSoftwareRegistrationWorkflow(run.WorkflowKey):
 		run.Software = new(softwareSettings)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Software); err != nil {
+			return WorkflowRun{}, err
+		}
+	case run.WorkflowKey == patentDisclosureWorkflow:
+		run.Patent = new(patentSettings)
+		if err := json.Unmarshal([]byte(run.optionsJSON), run.Patent); err != nil {
 			return WorkflowRun{}, err
 		}
 	}
@@ -282,7 +289,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if key == "" {
 		return WorkflowRun{}, false, errWorkflowState
 	}
-	checkpoints := key == softwareRegistrationWorkflow
+	checkpoints := defaultTemplateCheckpoints(key)
 	if req.Checkpoints != nil {
 		checkpoints = *req.Checkpoints
 	}

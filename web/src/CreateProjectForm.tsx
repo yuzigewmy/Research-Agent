@@ -20,7 +20,8 @@ export function CreateProjectForm({ templateItems, onCreated }: {
   const [title, setTitle] = useState('')
   const [preferredTemplate, setTemplate] = useState<TemplateId>('freeform')
   const template = (templateItems.find((item) => item.id === preferredTemplate) ?? templateItems[0])?.id
-  const titleLabel = template === 'software_registration' ? '软件全称' : '项目名称'
+  const titleLabel = template === 'software_registration' ? '软件全称'
+    : template === 'patent_disclosure' ? '技术方案名称' : '项目名称'
   const [pending, setPending] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [submitError, setSubmitError] = useState('')

@@ -146,6 +146,7 @@ export const workflowMaterialLimit = 4
 export const defaultSoftwareVersion = 'V1.0'
 export const softwareVersionLimit = 64
 export const softwareDescriptionLimit = 4 * 1024
+export const patentDescriptionLimit = 4 * 1024
 
 const utf8 = new TextEncoder()
 
@@ -154,8 +155,16 @@ export function isSoftwareVersion(value: unknown): value is string {
     && utf8.encode(value).length <= softwareVersionLimit
 }
 
+function isWorkflowDescription(value: unknown, limit: number): value is string {
+  return typeof value === 'string' && !value.includes('\0') && utf8.encode(value).length <= limit
+}
+
 export function isSoftwareDescription(value: unknown): value is string {
-  return typeof value === 'string' && !value.includes('\0') && utf8.encode(value).length <= softwareDescriptionLimit
+  return isWorkflowDescription(value, softwareDescriptionLimit)
+}
+
+export function isPatentDescription(value: unknown): value is string {
+  return isWorkflowDescription(value, patentDescriptionLimit)
 }
 
 export interface CourseProfile {
@@ -195,6 +204,15 @@ export interface SoftwareSettings extends SoftwareOptions {
   materials?: WorkflowMaterial[]
 }
 
+export interface PatentOptions {
+  description?: string
+  materialIds?: string[]
+}
+
+export interface PatentSettings extends PatentOptions {
+  materials?: (WorkflowMaterial & { format?: 'word' })[]
+}
+
 export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
@@ -210,6 +228,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   proposal?: ProposalTargets
   course?: CourseSettings
   software?: SoftwareSettings
+  patent?: PatentSettings
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -230,6 +249,7 @@ export interface StartWorkflowInput {
   proposal?: ProposalOptions
   course?: CourseOptions
   software?: SoftwareOptions
+  patent?: PatentOptions
   throughStep?: string
 }
 
@@ -394,6 +414,17 @@ function isSoftwareSettings(value: unknown): value is SoftwareSettings {
       && settings.materials.every((material) => isWorkflowMaterial(material, true))))
 }
 
+function isPatentSettings(value: unknown): value is PatentSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const settings = value as Partial<PatentSettings>
+  return (settings.description === undefined || isPatentDescription(settings.description))
+    && (settings.materialIds === undefined || (Array.isArray(settings.materialIds)
+      && settings.materialIds.length <= workflowMaterialLimit && settings.materialIds.every(isPathId)))
+    && (settings.materials === undefined || (Array.isArray(settings.materials)
+      && settings.materials.length <= workflowMaterialLimit
+      && settings.materials.every((material) => isWorkflowMaterial(material, false))))
+}
+
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
@@ -410,6 +441,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.proposal === undefined || isProposalTargets(run.proposal))
     && (run.course === undefined || isCourseSettings(run.course))
     && (run.software === undefined || isSoftwareSettings(run.software))
+    && (run.patent === undefined || isPatentSettings(run.patent))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 

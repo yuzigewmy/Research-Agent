@@ -173,6 +173,11 @@ func (s *Store) acceptableWorkflowMarkdown(ctx context.Context, tx *sql.Tx, run 
 	if !utf8.ValidString(document.Content) || strings.TrimSpace(document.Content) == "" || strings.ContainsRune(document.Content, 0) {
 		return "", invalidWorkflowArtifact("该 Markdown 版本没有可验收的 UTF-8 正文。")
 	}
+	if run.WorkflowKey == patentDisclosureWorkflow && run.Steps[run.step].Key == "manuscript" {
+		if _, err := patentManuscriptSections(document.Content); err != nil {
+			return "", invalidWorkflowArtifact(err.Error())
+		}
+	}
 	if run.WorkflowKey == paperWorkflow || run.WorkflowKey == reviewWorkflow || run.WorkflowKey == topicWorkflow ||
 		isProposalWorkflow(run.WorkflowKey) || isCourseWorkflow(run.WorkflowKey) {
 		var evidence string

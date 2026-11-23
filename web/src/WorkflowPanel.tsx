@@ -3,6 +3,7 @@ import { errorMessage, ProjectApiError } from './projects'
 import type { TemplateId } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
 import { initialCourseDraft, prepareCourse, WorkflowCourseOptions, WorkflowCourseSummary } from './WorkflowCourseOptions'
+import { initialPatentDraft, preparePatent, WorkflowPatentOptions, WorkflowPatentSummary } from './WorkflowPatentOptions'
 import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
@@ -192,6 +193,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const courseTemplate = templateId === 'course_paper' || templateId === 'course_report' ? templateId : null
   const isProposal = templateId === 'proposal'
   const isSoftware = templateId === 'software_registration'
+  const isPatent = templateId === 'patent_disclosure'
+  const defaultCheckpoints = isSoftware || isPatent
   const title = {
     experiment: '实验工作流',
     literature_review: '文献综述工作流',
@@ -201,6 +204,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     course_paper: '课程论文工作流',
     course_report: '课程报告工作流',
     software_registration: '软件著作权材料工作流',
+    patent_disclosure: '专利技术交底工作流',
   }[templateId]
   const checkpointLabel = {
     experiment: '生成实验计划后，等待我确认再继续',
@@ -211,6 +215,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     course_paper: '完成课程写作规划后由我确认',
     course_report: '完成课程写作规划后由我确认',
     software_registration: '操作手册草稿完成后由我确认',
+    patent_disclosure: '技术方案草案完成后由我确认',
   }[templateId]
   const checkpointHint = {
     experiment: '确认实验计划后生成验收清单。',
@@ -221,13 +226,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     course_paper: '确认课程写作规划后开始分节撰写。',
     course_report: '确认课程写作规划后开始分节撰写。',
     software_registration: '核对操作手册草稿后，确认继续整理程序材料。',
+    patent_disclosure: '核对技术方案草案后，确认继续编写技术交底稿。',
   }[templateId]
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
   const cancelButton = useRef<HTMLButtonElement>(null)
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
-  const [checkpoints, setCheckpoints] = useState(isSoftware)
+  const [checkpoints, setCheckpoints] = useState(defaultCheckpoints)
   const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
   const [paperOutline, setPaperOutline] = useState('')
@@ -235,6 +241,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const [proposalDraft, setProposalDraft] = useState(initialProposalDraft)
   const [courseDraft, setCourseDraft] = useState(() => initialCourseDraft(courseTemplate))
   const [softwareDraft, setSoftwareDraft] = useState(initialSoftwareDraft)
+  const [patentDraft, setPatentDraft] = useState(initialPatentDraft)
   const [throughStep, setThroughStep] = useState('')
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
@@ -308,8 +315,17 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const proposal = isProposal ? prepareProposal(proposalDraft) : undefined
   const course = courseTemplate ? prepareCourse(courseTemplate, courseDraft) : undefined
   const software = isSoftware ? prepareSoftware(softwareDraft) : undefined
+  const patent = isPatent ? preparePatent(patentDraft) : undefined
   const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false
-    || course?.valid === false || software?.valid === false
+    || course?.valid === false || software?.valid === false || !!patent?.descriptionError
+  let modelInputNotice: string | undefined
+  if (isPatent) {
+    modelInputNotice = '编写技术方案草案和交底稿时，技术方案名称、技术说明及所选资料的文字节选会发送给研究模型。'
+  } else if (isSoftware) {
+    modelInputNotice = '编制操作手册时，软件名称、版本、说明、资料信息和说明文档节选会发送给研究模型。源码正文用于在本机整理程序材料。'
+  } else if (courseTemplate) {
+    modelInputNotice = '启动后，补充要求、所选资料的文字节选和本轮文献元数据会发送给研究模型。'
+  }
   const currentRun = useEffectEvent(() => run)
 
   useEffect(() => {
@@ -415,6 +431,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             proposal: proposal?.options,
             course: course?.options,
             software: software?.options,
+            patent: patent?.options,
             throughStep: endStep || undefined,
           } }
         } else if (kind === 'rerun') {
@@ -454,9 +471,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       setCancelTarget(null)
       setThroughStep('')
       if (attempt.kind === 'start') {
-        setCheckpoints(isSoftware)
+        setCheckpoints(defaultCheckpoints)
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
         if (isSoftware) setSoftwareDraft(initialSoftwareDraft())
+        if (isPatent) setPatentDraft(initialPatentDraft())
       }
       if (attempt.kind === 'accept') {
         if (acceptanceDraft) onClearAcceptanceDraft(acceptanceDraft.openId)
@@ -518,6 +536,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {run && <WorkflowProposalSummary run={run} />}
       {run && <WorkflowCourseSummary run={run} />}
       {run && <WorkflowSoftwareSummary run={run} />}
+      {run && <WorkflowPatentSummary run={run} />}
       {isSoftware && snapshot?.softwarePdfConfigured === false && <p className="workflow-note">
         PDF 导出需要字体。请在服务端设置 <code>RESEARCH_PDF_FONT</code> 指向可嵌入的 TrueType 字体文件，重启服务后刷新页面。
       </p>}
@@ -570,6 +589,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             draft={courseDraft} errors={course.errors} disabled={actionDisabled || retryStart !== null} onChange={setCourseDraft} />}
           {canStart && software && <WorkflowSoftwareOptions projectId={projectId} draft={softwareDraft}
             errors={software.errors} disabled={actionDisabled || retryStart !== null} onChange={setSoftwareDraft} />}
+          {canStart && patent && <WorkflowPatentOptions projectId={projectId} draft={patentDraft}
+            descriptionError={patent.descriptionError} disabled={actionDisabled || retryStart !== null} onChange={setPatentDraft} />}
           {canStart && proposal && <WorkflowProposalOptions draft={proposalDraft} errors={proposal.errors}
             disabled={actionDisabled || retryStart !== null} onChange={setProposalDraft} />}
           {canStart && isTopic && <div className="field workflow-topic-requirements">
@@ -608,7 +629,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           </>}
           {firstStep && lastStep && <div className="field">
             <label htmlFor={`${headingId}-through-step`}>本次终点（可选）</label>
-            <select id={`${headingId}-through-step`} value={endStep} disabled={actionDisabled || ((!!courseTemplate || isSoftware) && !!retryStart)}
+            <select id={`${headingId}-through-step`} value={endStep}
+              disabled={actionDisabled || ((!!courseTemplate || defaultCheckpoints) && !!retryStart)}
               aria-describedby={`${headingId}-range-help`} onChange={(event) => {
                 setThroughStep(event.currentTarget.value)
                 setRetry(null)
@@ -637,16 +659,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           {canPause && <p className="workflow-note" id={`${headingId}-pause-help`}>
             暂停会停止当前步骤，继续时将重新执行该步骤。
           </p>}
-          {canStart && (courseTemplate || isSoftware) && <p id={`${headingId}-model-input`} className="workflow-note">
-            {isSoftware
-              ? '编制操作手册时，软件名称、版本、说明、资料信息和说明文档节选会发送给研究模型。源码正文用于在本机整理程序材料。'
-              : '启动后，补充要求、所选资料的文字节选和本轮文献元数据会发送给研究模型。'}
+          {canStart && modelInputNotice && <p id={`${headingId}-model-input`} className="workflow-note">
+            {modelInputNotice}
           </p>}
           <div className="workflow-actions">
             {canStart && (
               <button className="button primary" type="button"
                 disabled={invalidStart || (actionDisabled && pending !== 'start')}
-                aria-disabled={pending === 'start'} aria-describedby={courseTemplate || isSoftware ? `${headingId}-model-input` : undefined}
+                aria-disabled={pending === 'start'} aria-describedby={modelInputNotice ? `${headingId}-model-input` : undefined}
                 onClick={() => void submit('start')}>
                 {pending === 'start' ? '正在启动…' : retryStart ? '重试启动' : run ? '开始新一轮' : '启动工作流'}
               </button>
@@ -700,6 +720,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           <WorkflowProposalSummary run={historicalRun} />
           <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSoftwareSummary run={historicalRun} />
+          <WorkflowPatentSummary run={historicalRun} />
           <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured} />
           <WorkflowSoftwareBundleDownload projectId={projectId} run={historicalRun} />
         </>} />

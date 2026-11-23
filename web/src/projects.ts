@@ -7,6 +7,7 @@ export const templates = {
   course_paper: '课程论文',
   course_report: '课程报告',
   software_registration: '软件著作权材料',
+  patent_disclosure: '专利技术交底',
   experiment: '实验计划',
   automatic_review: '多轮审稿',
 } as const

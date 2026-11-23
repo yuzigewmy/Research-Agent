@@ -26,6 +26,16 @@ type paperOptions struct {
 }
 
 func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, action string, req workflowRequest) (string, int, error) {
+	if key == patentDisclosureWorkflow && action == workflowStart {
+		if req.Paper != nil || req.Topic != nil || req.Proposal != nil || req.Course != nil || req.Software != nil || req.TargetPaperCount != 0 {
+			return "", 0, errPatentOptions
+		}
+		options, err := freezePatentSettings(ctx, tx, projectID, req.Patent)
+		return options, 0, err
+	}
+	if req.Patent != nil {
+		return "", 0, errPatentOptions
+	}
 	if key == softwareRegistrationWorkflow && action == workflowStart {
 		if req.Paper != nil || req.Topic != nil || req.Proposal != nil || req.Course != nil || req.TargetPaperCount != 0 {
 			return "", 0, errSoftwareOptions

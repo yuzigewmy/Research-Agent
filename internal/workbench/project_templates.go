@@ -67,6 +67,9 @@ var projectTemplates = []projectTemplate{
 		Summary:      "整理固定版本的资料和操作手册。没有可用源码时，根据软件说明和手册生成待核对的示例。",
 		Deliverables: []string{"材料来源清单", "操作手册草稿", "程序材料 TXT", "申请信息核对单 TXT", "程序和手册 PDF（配置字体后）", "可编辑 Word（启用导出组件后）"},
 		Defaults:     projectTemplateDefaults{Software: &softwareOptions{Version: defaultSoftwareVersion}}},
+	{ID: "patent_disclosure", Label: "专利技术交底", Revision: patentDisclosureWorkflow, Kind: "workflow",
+		Summary:      "依据技术说明与固定资料梳理方案，确认后编写交底稿并核对证据。",
+		Deliverables: []string{"技术材料清单", "技术方案草案", "技术交底稿", "交底核对单", "可编辑 Word（启用导出组件后）"}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {
@@ -96,7 +99,7 @@ func listProjectTemplates(w http.ResponseWriter, _ *http.Request) {
 		stages := workflowStages[template.Revision]
 		template.Steps = make([]projectTemplateStep, 0, len(stages))
 		if template.Kind == "workflow" {
-			template.Defaults.Checkpoints = new(template.Revision == softwareRegistrationWorkflow)
+			template.Defaults.Checkpoints = new(defaultTemplateCheckpoints(template.Revision))
 		}
 		switch {
 		case template.ID == "proposal":

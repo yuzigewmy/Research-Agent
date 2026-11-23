@@ -105,6 +105,16 @@ var workflowStages = map[string][]workflowStage{
 	courseReportWorkflow:           courseStages(courseReportWorkflow),
 	softwareRegistrationWorkflowV1: softwareRegistrationStages(""),
 	softwareRegistrationWorkflow:   softwareRegistrationStages(softwareSamplePrompt),
+	patentDisclosureWorkflow: {
+		{key: "sources", title: "固定技术材料"},
+		{key: "outline", title: "梳理技术方案草案", prompt: patentOutlinePrompt, checkpoint: true, acceptMarkdown: true},
+		{key: "manuscript", title: "编写技术交底稿", prompt: patentManuscriptPrompt, acceptMarkdown: true},
+		{key: "check", title: "核对交底成果"},
+	},
+}
+
+func defaultTemplateCheckpoints(workflow string) bool {
+	return isSoftwareRegistrationWorkflow(workflow) || workflow == patentDisclosureWorkflow
 }
 
 func softwareRegistrationStages(programPrompt string) []workflowStage {

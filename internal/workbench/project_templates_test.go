@@ -50,7 +50,7 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 			t.Fatalf("template has incomplete metadata: %+v", item)
 		}
 		if item.Kind == "workflow" {
-			if item.Defaults.Checkpoints == nil || *item.Defaults.Checkpoints != (item.Revision == softwareRegistrationWorkflow) ||
+			if item.Defaults.Checkpoints == nil || *item.Defaults.Checkpoints != defaultTemplateCheckpoints(item.Revision) ||
 				len(item.Steps) != len(workflowStages[item.Revision]) {
 				t.Fatalf("wrong workflow contract for %s: %+v", item.ID, item)
 			}
@@ -63,7 +63,7 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report", "software_registration"}
+	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report", "software_registration", "patent_disclosure"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("unexpected available templates: %v", ids)
 	}
