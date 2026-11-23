@@ -5,6 +5,8 @@ import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
 import { errorMessage, ProjectApiError } from './projects'
+import { researchBriefPath, researchDocumentTemplates } from './researchDocuments'
+import type { ResearchDocumentTemplate } from './researchDocuments'
 import { isManuscriptSelection, manuscriptSelectionByteLimit, manuscriptSelectionLimit, sameManuscriptSelection } from './turns'
 import type { ManuscriptSelection } from './turns'
 import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText } from './workspace'
@@ -176,7 +178,10 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore, select
   </div>
 }
 
-type Destination = { kind: 'open' | 'create'; path: string } | { kind: 'import'; path: string; file: File }
+type Destination =
+  | { kind: 'open'; path: string }
+  | { kind: 'create'; path: string; content: string }
+  | { kind: 'import'; path: string; file: File }
 type Operation = Destination['kind'] | 'save' | 'reload' | 'restore'
 
 const destinationLabel = { open: '打开', create: '创建', import: '导入' }
@@ -204,6 +209,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const [createdPaths, setCreatedPaths] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
+  const [template, setTemplate] = useState<ResearchDocumentTemplate>()
   const [document, setDocument] = useState<Document>()
   const [draft, setDraft] = useState('')
   const [selection, setSelection] = useState<SelectionEditRange>()
@@ -230,6 +236,21 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const currentQuote = manuscriptSelections.find(({ path }) => path === currentPath)
   const alreadyQuoted = !!selectedQuote && sameManuscriptSelection(selectedQuote, currentQuote)
   const quoteLimitReached = manuscriptSelections.length >= manuscriptSelectionLimit && !currentQuote
+  const brief = document?.path === researchBriefPath ? document : undefined
+  const briefCandidate = brief && !dirty && !conflict ? {
+    path: brief.path,
+    versionId: brief.versionId,
+    sha256: brief.sha256,
+    text: brief.content,
+    startByte: 0,
+    endByte: brief.size,
+  } : undefined
+  const briefQuote = isManuscriptSelection(briefCandidate) ? briefCandidate : undefined
+  const alreadyQuotedBrief = !!briefQuote && sameManuscriptSelection(briefQuote, currentQuote)
+  let briefHint = currentQuote ? '引用全文会替换此文件在下一条消息中的已有引用。' : '将完整的已保存简报加入下一条消息。'
+  if (conflict) briefHint = '请重新加载研究简报后引用。'
+  else if (dirty) briefHint = '请保存研究简报后再引用。'
+  else if (!briefQuote) briefHint = '研究简报须有正文，全文最多 8 KiB（UTF-8）。'
   const paths = [...new Set([...publishedPaths, ...createdPaths, ...page.items.map(({ path }) => path)])]
   const restoreBlocked = conflict ? '请先重新加载当前文件。'
     : dirty ? '请先保存草稿或放弃修改。'
@@ -301,6 +322,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
         setCreatedPaths((paths) => paths.includes(next.path) ? paths : [next.path, ...paths])
         setCreating(false)
         setName('')
+        setTemplate(undefined)
       }
     } catch (error) {
       if (controller.signal.aborted) return
@@ -319,7 +341,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     const { kind, path } = next
     void run(kind, async (signal) => {
       if (kind === 'open') return readText(projectId, path, signal)
-      const content = kind === 'import' ? await readManuscript(next.file) : ''
+      const content = kind === 'import' ? await readManuscript(next.file) : next.content
       signal.throwIfAborted()
       return saveText(projectId, path, content, '', signal)
     })
@@ -334,9 +356,23 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     else goTo(next)
   }
 
+  function selectTemplate(templateId: string) {
+    const next = researchDocumentTemplates.find(({ id }) => id === templateId)
+    if (next) setName(next.path)
+    else if (name === template?.path) setName('')
+    setTemplate(next)
+    if (destination?.kind === 'create') setDestination(undefined)
+  }
+
   function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (name.trim()) requestDestination({ kind: 'create', path: name })
+    if (!name.trim()) return
+    if (template && (name === currentPath || paths.includes(name))) {
+      setDestination(undefined)
+      setError('此路径已有文件，请选择其他路径。')
+      return
+    }
+    requestDestination({ kind: 'create', path: name, content: template?.content ?? '' })
   }
 
   function importManuscript(event: ChangeEvent<HTMLInputElement>) {
@@ -387,6 +423,16 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     </p>}
     <div id={`${id}-create`} hidden={!creating}>
       {creating && <form className="field" onSubmit={create}>
+        <label htmlFor={`${id}-template`}>文件模板</label>
+        <select id={`${id}-template`} value={template?.id ?? ''} disabled={locked}
+          onChange={(event) => selectTemplate(event.currentTarget.value)}>
+          <option value="">空白文件</option>
+          {researchDocumentTemplates.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
+        </select>
+        {template && <details>
+          <summary>预览模板初稿</summary>
+          <pre className="workspace-text" tabIndex={0} aria-label="模板初稿">{template.content}</pre>
+        </details>}
         <label htmlFor={`${id}-name`}>文件路径</label>
         <div className="workspace-create-row">
           <input id={`${id}-name`} value={name} required autoFocus autoComplete="off" spellCheck={false}
@@ -454,7 +500,16 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
           aria-disabled={alreadyQuoted || undefined} disabled={locked || !selectedQuote || quoteLimitReached} onClick={() => {
             if (!locked && selectedQuote && !alreadyQuoted && !quoteLimitReached) onManuscriptSelection(selectedQuote)
           }}>引用稿件选区</button>}
+        {brief && <button className="button outline" type="button" aria-describedby={`${id}-brief-hint`}
+          aria-disabled={alreadyQuotedBrief || undefined} disabled={locked || !briefQuote || quoteLimitReached} onClick={() => {
+            if (!locked && briefQuote && !alreadyQuotedBrief && !quoteLimitReached) onManuscriptSelection(briefQuote)
+          }}>引用研究简报</button>}
       </div>
+      {brief && <p className="workspace-note" id={`${id}-brief-hint`} role="status">
+        {alreadyQuotedBrief ? <>已将完整简报加入<a href="#conversation-title">项目对话</a>。</>
+          : briefQuote && quoteLimitReached ? <>已引用 {manuscriptSelectionLimit} 份稿件，请先在<a href="#conversation-title">项目对话</a>中移除一份。</>
+            : briefHint}
+      </p>}
       {isMarkdown && <p className="workspace-note" id={`${id}-quote-hint`} role="status">
         {alreadyQuoted ? <>已将选区加入<a href="#conversation-title">项目对话</a>。</>
           : dirty ? '请保存稿件后选取要引用的文字。'
