@@ -149,5 +149,10 @@ func (s *Store) patchProject(ctx context.Context, id string, input patchProjectI
 	if err != nil {
 		return Project{}, err
 	}
+	if project.TemplateID == engineeringTemplate && project.Status == projectArchived {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM engineering_previews WHERE project_id = ?`, id); err != nil {
+			return Project{}, err
+		}
+	}
 	return project, tx.Commit()
 }

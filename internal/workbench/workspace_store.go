@@ -91,6 +91,8 @@ func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name, kind st
 		query += ` AND path GLOB 'diagrams/?*.flow.json' AND path NOT GLOB 'diagrams/*/*'`
 	case "markdown":
 		query += ` AND (LOWER(path) LIKE '%.md' OR LOWER(path) LIKE '%.markdown')`
+	case "html":
+		query += ` AND (LOWER(path) LIKE '%.html' OR LOWER(path) LIKE '%.htm')`
 	}
 	if cursor > 0 {
 		query += ` AND ordinal < ?`

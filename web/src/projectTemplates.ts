@@ -32,7 +32,7 @@ export interface ProjectTemplate {
   id: TemplateId
   label: string
   revision: string
-  kind: 'chat' | 'workflow' | 'review' | 'survey'
+  kind: 'chat' | 'workflow' | 'review' | 'survey' | 'engineering'
   summary: string
   deliverables: string[]
   steps: TemplateStep[]
@@ -76,7 +76,8 @@ function isDefaults(value: unknown): value is TemplateDefaults {
 function isTemplate(value: unknown): value is ProjectTemplate {
   return isRecord(value) && isTemplateId(value.id) && typeof value.label === 'string'
     && typeof value.revision === 'string' && typeof value.summary === 'string'
-    && (value.kind === 'chat' || value.kind === 'workflow' || value.kind === 'review' || value.kind === 'survey')
+    && (value.kind === 'chat' || value.kind === 'workflow' || value.kind === 'review'
+      || value.kind === 'survey' || value.kind === 'engineering')
     && Array.isArray(value.deliverables) && value.deliverables.every((item) => typeof item === 'string')
     && Array.isArray(value.steps) && value.steps.every(isStep)
     && isDefaults(value.defaults)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Conversation } from './Conversation'
 import { DiagramPanel } from './DiagramPanel'
+import { EngineeringPreview } from './EngineeringPreview'
 import { LiteraturePanel } from './LiteraturePanel'
 import { MaterialPanel } from './MaterialPanel'
 import { ProjectAdministration } from './ProjectAdministration'
@@ -89,7 +90,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
 
   const templateId = detail.kind === 'ready' ? detail.project.templateId : undefined
   const hasWorkflow = templateId !== undefined && templateId !== 'freeform'
-    && templateId !== 'automatic_review' && templateId !== 'interactive_survey'
+    && templateId !== 'automatic_review' && templateId !== 'interactive_survey' && templateId !== 'engineering_project'
 
   function reviewAppliedFile(file: FileRecord) {
     setAcceptanceDraft((current) => ({ file, openId: (current?.openId ?? 0) + 1 }))
@@ -211,6 +212,10 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
         onManuscriptSelection={addManuscriptSelection} />
+      {project.templateId === 'engineering_project' && (
+        <EngineeringPreview key={`${project.projectId}:${project.status}`} projectId={project.projectId}
+          archived={project.status === 'ARCHIVED'} />
+      )}
       <DiagramPanel projectId={project.projectId} />
       <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
         onClearReferences={clearReferences} manuscriptSelections={manuscriptSelections}

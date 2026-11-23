@@ -73,6 +73,9 @@ var projectTemplates = []projectTemplate{
 	{ID: questionnaireTemplate, Label: "互动问卷", Revision: "survey-collection-v1", Kind: "survey",
 		Summary:      "编辑问卷并发布填写链接，关闭回收后仍可导出答卷和进行清洗分析。",
 		Deliverables: []string{"可填写的问卷链接", "答卷 CSV", "问卷分析报告"}},
+	{ID: engineeringTemplate, Label: "工程项目", Revision: "engineering-preview-v1", Kind: "engineering",
+		Summary:      "在工作区编辑静态页面，按固定文件版本启动、切换和关闭隔离预览。",
+		Deliverables: []string{"已保存的工程文件", "版本化 HTML 预览"}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {

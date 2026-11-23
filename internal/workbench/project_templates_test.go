@@ -63,7 +63,7 @@ func TestProjectTemplateCatalogDescribesCurrentWorkflows(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report", "software_registration", "patent_disclosure", "interactive_survey"}
+	want := []string{"freeform", "topic", "proposal", "literature_review", "paper", "experiment", "automatic_review", "course_paper", "course_report", "software_registration", "patent_disclosure", "interactive_survey", "engineering_project"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("unexpected available templates: %v", ids)
 	}
