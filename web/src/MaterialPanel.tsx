@@ -73,19 +73,21 @@ interface MaterialPanelProps {
   onReference?: (material: Material) => void
   onPdfQuote?: (material: Material, page: number, text: string) => void
   referenceIds?: string[]
+  allowSoftwareFolder?: boolean
 }
 
-export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [] }: MaterialPanelProps) {
+export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [], allowSoftwareFolder }: MaterialPanelProps) {
   const headingId = useId()
   const [items, setItems] = useState<Material[]>([])
   const [nextCursor, setNextCursor] = useState<string>()
   const [status, setStatus] = useState<ListStatus>({ kind: 'loading' })
   const [pageRequest, setPageRequest] = useState<{ cursor?: string }>({})
   const [previewId, setPreviewId] = useState<string>()
-  const [uploading, setUploading] = useState(false)
+  const [uploading, setUploading] = useState<'files' | 'folder'>()
   const [uploadedCount, setUploadedCount] = useState(0)
   const [failures, setFailures] = useState<UploadFailure[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
+  const folderInput = useRef<HTMLInputElement>(null)
   const uploadRequest = useRef<AbortController | null>(null)
   const referenceLimitReached = referenceIds.length >= turnReferenceLimit
   const referenceLimitHint = `${headingId}-reference-limit`
@@ -112,18 +114,21 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
     setPageRequest({ cursor })
   }
 
-  async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
+  async function uploadFiles(event: ChangeEvent<HTMLInputElement>, kind: 'files' | 'folder') {
     const files = Array.from(event.currentTarget.files ?? [])
     event.currentTarget.value = ''
     if (!files.length || uploadRequest.current) return
 
     const controller = new AbortController()
     uploadRequest.current = controller
-    setUploading(true)
+    setUploading(kind)
     setUploadedCount(0)
     setFailures([])
     try {
-      for (const file of files) {
+      const uploads = kind === 'folder'
+        ? [await (await import('./softwareFolder')).packSoftwareFolder(files, controller.signal)]
+        : files
+      for (const file of uploads) {
         if (controller.signal.aborted) return
         try {
           const material = await uploadMaterial(projectId, file, controller.signal)
@@ -135,9 +140,13 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           setFailures((current) => [...current, { name: file.name, message: errorMessage(error) }])
         }
       }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setFailures([{ name: files[0].webkitRelativePath.split('/')[0], message: errorMessage(error) }])
+      }
     } finally {
       uploadRequest.current = null
-      if (!controller.signal.aborted) setUploading(false)
+      if (!controller.signal.aborted) setUploading(undefined)
     }
   }
 
@@ -145,12 +154,25 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
     <section className="material-panel" aria-labelledby={headingId}>
       <div className="material-heading">
         <h4 id={headingId}>项目资料</h4>
-        <input ref={fileInput} type="file" multiple hidden onChange={(event) => void uploadFiles(event)} />
-        <button className="button primary" type="button" aria-disabled={uploading}
-          onClick={() => { if (!uploadRequest.current) fileInput.current?.click() }}>
-          {uploading ? '正在上传…' : '上传文件'}
-        </button>
+        <div className="material-actions">
+          <input ref={fileInput} type="file" multiple hidden onChange={(event) => void uploadFiles(event, 'files')} />
+          <button className="button primary" type="button" aria-disabled={!!uploading}
+            onClick={() => { if (!uploadRequest.current) fileInput.current?.click() }}>
+            {uploading === 'files' ? '正在上传…' : '上传文件'}
+          </button>
+          {allowSoftwareFolder && <>
+            <input ref={folderInput} type="file" {...{ webkitdirectory: '' }} hidden
+              onChange={(event) => void uploadFiles(event, 'folder')} />
+            <button className="button outline" type="button" aria-disabled={!!uploading} aria-describedby={`${headingId}-folder`}
+              onClick={() => { if (!uploadRequest.current) folderInput.current?.click() }}>
+              {uploading === 'folder' ? '正在导入目录…' : '上传目录'}
+            </button>
+          </>}
+        </div>
       </div>
+      {allowSoftwareFolder && <p id={`${headingId}-folder`} className="material-note">
+        目录内的源码和文字说明将保留相对路径，打包成一份可选的 ZIP 资料。
+      </p>}
       {onReference && referenceLimitReached && <p id={referenceLimitHint} className="material-note" role="status">
         已选满 {turnReferenceLimit} 份资料，移除一份后可继续选择。
       </p>}

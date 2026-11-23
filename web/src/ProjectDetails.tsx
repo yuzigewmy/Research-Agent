@@ -190,7 +190,8 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
       }} />
       <ProjectTaskQueue projectId={project.projectId} onStopped={refreshWorkflow} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
-        onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)} />
+        onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)}
+        allowSoftwareFolder={project.templateId === 'software_registration'} />
       <SurveyPanel projectId={project.projectId} />
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
         || project.templateId === 'topic' || project.templateId === 'proposal'
