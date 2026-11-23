@@ -1,4 +1,4 @@
-import { request } from './projects'
+import { ProjectApiError, request } from './projects'
 import { isFileRecord } from './workspace'
 import type { FileRecord } from './workspace'
 
@@ -217,6 +217,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
 export interface WorkflowSnapshot {
   run: WorkflowRun | null
   modelConfigured: boolean
+  softwarePdfConfigured?: boolean
   steps: WorkflowStepDefinition[]
 }
 
@@ -414,6 +415,7 @@ function isRun(value: unknown): value is WorkflowRun {
 function isSnapshot(value: unknown): value is WorkflowSnapshot {
   const snapshot = value as Partial<WorkflowSnapshot> | null
   return !!snapshot && typeof snapshot.modelConfigured === 'boolean'
+    && (snapshot.softwarePdfConfigured === undefined || typeof snapshot.softwarePdfConfigured === 'boolean')
     && (snapshot.run === null || isRun(snapshot.run))
     && Array.isArray(snapshot.steps) && snapshot.steps.every(isStepDefinition)
 }
@@ -484,6 +486,52 @@ function workflowStepPath(projectId: string, runId: string, key: string) {
 export function workflowArtifactPath(projectId: string, runId: string, key: string, artifactId?: string) {
   const step = workflowStepPath(projectId, runId, key)
   return artifactId === undefined ? `${step}/artifact` : `${step}/artifacts/${encodeURIComponent(artifactId)}`
+}
+
+export type SoftwarePdfStep = 'manuscript' | 'program'
+
+export function isSoftwarePdfStep(key: string): key is SoftwarePdfStep {
+  return key === 'manuscript' || key === 'program'
+}
+
+async function fetchArtifact(path: string, accept: string, label: string, signal: AbortSignal) {
+  const response = await fetch(path, {
+    mode: 'same-origin', redirect: 'error', cache: 'no-store', headers: { Accept: accept }, signal,
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown } } | null
+    const message = body?.error?.message
+    const code = body?.error?.code
+    throw new ProjectApiError(typeof message === 'string' && message.trim() ? message : `无法读取${label}（HTTP ${response.status}）。`,
+      response.status, typeof code === 'string' ? code : undefined)
+  }
+  return response
+}
+
+export async function readWorkflowSoftwarePdf(projectId: string, runId: string, key: SoftwarePdfStep, artifactId: string, signal: AbortSignal) {
+  if (![projectId, runId, artifactId].every(isPathId)) throw new ProjectApiError('成果版本链接无效。', 400)
+  const sourcePath = workflowArtifactPath(projectId, runId, key, artifactId)
+  const response = await fetchArtifact(`${sourcePath}/pdf`, 'application/pdf', 'PDF', signal)
+  const contentType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
+  if (contentType !== 'application/pdf') throw new ProjectApiError('成果服务返回的文件无法识别为 PDF。', 422)
+
+  const sourceDigest = response.headers.get('X-Source-SHA256')
+  if (response.headers.get('X-Source-Artifact-ID') !== artifactId || !sourceDigest || !/^[a-f\d]{64}$/i.test(sourceDigest)) {
+    throw new ProjectApiError('无法核对 PDF 的成果版本和来源摘要。', 409)
+  }
+
+  const original = await fetchArtifact(sourcePath, key === 'manuscript' ? 'text/markdown' : 'text/plain', '原成果', signal)
+  const [bytes, pdf] = await Promise.all([original.arrayBuffer(), response.blob()])
+  signal.throwIfAborted()
+  if (!globalThis.crypto?.subtle) throw new ProjectApiError('当前浏览器环境无法校验成果摘要。', 0)
+  const hash = await crypto.subtle.digest('SHA-256', bytes)
+  const expectedDigest = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  if (sourceDigest.toLowerCase() !== expectedDigest) {
+    throw new ProjectApiError('PDF 的来源摘要与所选成果版本不符。', 409)
+  }
+  if (await pdf.slice(0, 5).text() !== '%PDF-') throw new ProjectApiError('PDF 文件内容无法识别。', 422)
+  signal.throwIfAborted()
+  return pdf
 }
 
 export function listWorkflowArtifacts(projectId: string, runId: string, key: string, signal: AbortSignal, cursor?: string) {

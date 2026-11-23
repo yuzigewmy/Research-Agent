@@ -9,6 +9,12 @@
 | 整理程序材料 | 把固定版的 UTF-8 源码按文件登记到 TXT。源文件正文保持原字节，清单记录各段的来源。无源码时列出待补交项。 |
 | 生成申请信息核对单 | 用固定信息和材料指纹生成 TXT，列出申请人需要核实和补充的字段。操作手册可保存至文本工作区，配置 Word 组件后可导出。 |
 
-工作流沿用项目队列、步骤下载和请求回执。确认前暂停在草稿，恢复时沿用原材料和版本。处理源码时只作文本读取。后续切片包含示例源码、目录及压缩包导入和程序、文档鉴别材料的分页 PDF。
+工作流沿用项目队列、步骤下载和请求回执。启用草稿检查点时，确认前暂停，恢复时沿用原材料和版本。源码按文本处理。示例源码、目录和压缩包导入仍待实现。
 
-实现沿用 Go 工作流与 React 模板目录。核对命令为 `go test ./internal/workbench -run 'TestSoftwareRegistration|TestProjectTemplateCatalog' -count=1`、`pnpm --dir web run typecheck` 与 `pnpm --dir web run build`。用一次 Chrome 联测验证项目创建、默认版本与检查点、上传同名新材料后续跑，以及下载使用原版本。
+## 鉴别材料 PDF
+
+将服务端环境变量 `RESEARCH_PDF_FONT` 设为支持所需字符且允许嵌入的 TrueType 字体文件路径。重启服务后，程序材料和操作手册的当前成果及历史版本均可下载 PDF。无字体时仍可下载 TXT 或 Markdown。
+
+程序 PDF 每个源文件另起一页，每页最多 50 个正文排版行，过长的源码行折行后计入页行数。TXT 保留原始源码字节。手册 PDF 按保存的 Markdown 文本分页。浏览器核对所选成果编号和原始正文的 SHA-256 后下载。字体子集嵌入采用 [GoPDF v0.38.6](https://github.com/signintech/gopdf/blob/v0.38.6/README.md#features)。
+
+`go test ./internal/workbench -run 'TestSoftware|TestProjectTemplateCatalog' -count=1` 核对本流程。设置 `SOFTWARE_PDF_TEST_FONT` 后运行真实排版回归。Chrome 验证建项、默认检查点、材料换版、历史 PDF 下载和失败重试。PDF.js 核对页数、中文和长源码行的末尾。

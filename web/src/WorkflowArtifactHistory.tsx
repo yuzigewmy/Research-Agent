@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react'
 import { errorMessage } from './projects'
-import { listWorkflowArtifacts, workflowArtifactPath } from './workflow'
+import { WorkflowSoftwarePdfDownload } from './WorkflowSoftwarePdfDownload'
+import { isSoftwarePdfStep, listWorkflowArtifacts, workflowArtifactPath } from './workflow'
 import type { WorkflowArtifactPage } from './workflow'
 
 const artifactDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
 
-type ArtifactSource = { projectId: string; runId: string; stepKey: string; stepTitle: string }
+type ArtifactSource = {
+  projectId: string
+  runId: string
+  stepKey: string
+  stepTitle: string
+  softwarePdfEnabled?: boolean
+}
 
 export function WorkflowArtifactHistory({ artifactId, count, ...source }: ArtifactSource & { artifactId?: string; count?: number }) {
   const [open, setOpen] = useState(false)
@@ -15,7 +22,7 @@ export function WorkflowArtifactHistory({ artifactId, count, ...source }: Artifa
   </details>
 }
 
-function ArtifactList({ projectId, runId, stepKey, stepTitle }: ArtifactSource) {
+function ArtifactList({ projectId, runId, stepKey, stepTitle, softwarePdfEnabled }: ArtifactSource) {
   const [page, setPage] = useState<WorkflowArtifactPage>({ items: [] })
   const [query, setQuery] = useState<{ cursor?: string }>({})
   const [loading, setLoading] = useState(true)
@@ -52,6 +59,10 @@ function ArtifactList({ projectId, runId, stepKey, stepTitle }: ArtifactSource) 
           <span className="workflow-note">{label} · <time dateTime={createdAt}>{date}</time></span>
           <a className="workflow-download" href={workflowArtifactPath(projectId, runId, stepKey, artifactId)}
             aria-label={`下载${label}版本 ${stepTitle} ${date}`} download>下载此版本</a>
+          {softwarePdfEnabled && isSoftwarePdfStep(stepKey) && (
+            <WorkflowSoftwarePdfDownload projectId={projectId} runId={runId} stepKey={stepKey} stepTitle={stepTitle}
+              artifactId={artifactId} versionLabel={`${label} ${date}`} />
+          )}
           {source && <span className="workflow-note">工作区来源 <bdi>{source.path}</bdi> · 版本 <bdi>{source.versionId}</bdi></span>}
         </li>
       })}

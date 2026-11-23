@@ -20,6 +20,8 @@ import (
 const softwareRegistrationWorkflow = "software-registration-v1"
 const defaultSoftwareVersion = "V1.0"
 const maxSoftwareSourceBytes = 64 << 10
+const softwareProgramHeading = "程序材料\n\n"
+const softwareProgramMissing = "本轮未选择源码。请补充用于登记的软件源码。\n"
 
 //go:embed prompts/software_registration_manual.md
 var softwareManualPrompt string
@@ -107,7 +109,7 @@ func softwareMaterialList(title string, settings softwareSettings) string {
 
 func (s *Store) softwareProgramMaterials(settings softwareSettings) (string, error) {
 	var program strings.Builder
-	program.WriteString("程序材料\n\n")
+	program.WriteString(softwareProgramHeading)
 	for _, material := range settings.Materials {
 		if !softwareSourcePath(material.Name) {
 			continue
@@ -123,8 +125,8 @@ func (s *Store) softwareProgramMaterials(settings softwareSettings) (string, err
 		program.Write(content)
 		program.WriteString("\n\n")
 	}
-	if program.Len() == len("程序材料\n\n") {
-		program.WriteString("本轮未选择源码。请补充用于登记的软件源码。\n")
+	if program.Len() == len(softwareProgramHeading) {
+		program.WriteString(softwareProgramMissing)
 	}
 	return program.String(), nil
 }

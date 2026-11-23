@@ -7,13 +7,14 @@ import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, Workflo
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
 import { initialSoftwareDraft, prepareSoftware, WorkflowSoftwareOptions, WorkflowSoftwareSummary } from './WorkflowSoftwareOptions'
+import { WorkflowSoftwarePdfDownload } from './WorkflowSoftwarePdfDownload'
 import type { SkipTarget } from './WorkflowSkipStep'
 import { WorkflowStageAcceptance } from './WorkflowStageAcceptance'
 import type { AcceptanceTarget } from './WorkflowStageAcceptance'
 import { WorkflowSelectedTopic, WorkflowTopicChoice } from './WorkflowTopicChoice'
 import type { TopicSelectionTarget } from './WorkflowTopicChoice'
 import {
-  acceptWorkflow, cancelWorkflow, continueWorkflow, getWorkflow, isWorkflowActive, pauseWorkflow, rerunWorkflow,
+  acceptWorkflow, cancelWorkflow, continueWorkflow, getWorkflow, isSoftwarePdfStep, isWorkflowActive, pauseWorkflow, rerunWorkflow,
   runStatusLabels, saveManuscript, selectWorkflowTopic, skipWorkflow, startWorkflow, stepStatusLabels, workflowArtifactPath,
 } from './workflow'
 import type {
@@ -56,9 +57,10 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
 }
 
-function WorkflowSteps({ projectId, run, rerun }: {
+function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured }: {
   projectId: string
   run: WorkflowRun
+  softwarePdfConfigured?: boolean
   rerun?: {
     selected?: string
     disabled: boolean
@@ -81,6 +83,8 @@ function WorkflowSteps({ projectId, run, rerun }: {
         const canDownload = step.status === 'SUCCEEDED' && (!!rerun || !!step.artifactId)
         const downloadLabel = rerun ? '下载当前成果' : '下载该轮成果'
         const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
+        const pdfStep = softwarePdfConfigured === true && run.workflowKey === 'software-registration-v1'
+          && isSoftwarePdfStep(step.key) ? step.key : undefined
         return <li key={step.key}>
           <div className="workflow-step-heading">
             <strong dir="auto">{step.title}</strong>
@@ -94,6 +98,10 @@ function WorkflowSteps({ projectId, run, rerun }: {
             {canDownload && <a className="workflow-download"
               href={workflowArtifactPath(projectId, run.runId, step.key, step.artifactId)}
               aria-label={`${downloadLabel}：${step.title}`} download>{downloadLabel}</a>}
+            {canDownload && pdfStep && step.artifactId && (
+              <WorkflowSoftwarePdfDownload projectId={projectId} runId={run.runId} stepKey={pdfStep}
+                stepTitle={step.title} artifactId={step.artifactId} />
+            )}
             {rerun && eligible && <button className="button outline" type="button" disabled={rerun.disabled}
               aria-label={`${runLabel}：${step.title}`} aria-expanded={selected}
               aria-controls={selected ? confirmationId : undefined} onClick={(event) => {
@@ -120,7 +128,7 @@ function WorkflowSteps({ projectId, run, rerun }: {
             </div>
           </div>}
           {hasHistory && <WorkflowArtifactHistory projectId={projectId} runId={run.runId} stepKey={step.key}
-            stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount} />}
+            stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount} softwarePdfEnabled={pdfStep !== undefined} />}
         </li>
       })}
     </ol>
@@ -503,8 +511,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {run && <WorkflowProposalSummary run={run} />}
       {run && <WorkflowCourseSummary run={run} />}
       {run && <WorkflowSoftwareSummary run={run} />}
+      {isSoftware && snapshot?.softwarePdfConfigured === false && <p className="workflow-note">
+        PDF 导出需要字体。请在服务端设置 <code>RESEARCH_PDF_FONT</code> 指向可嵌入的 TrueType 字体文件，重启服务后刷新页面。
+      </p>}
       {run?.workflowKey === 'proposal-v2' && <p className="workflow-note">正文各节分别保存。本轮可从未完成的一节继续。</p>}
-      {run && <WorkflowSteps projectId={projectId} run={run} rerun={{
+      {run && <WorkflowSteps projectId={projectId} run={run} softwarePdfConfigured={snapshot?.softwarePdfConfigured} rerun={{
         selected: selectedRerun?.stepKey,
         disabled: rerunDisabled,
         pending: pending === 'rerun',
@@ -681,7 +692,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           <WorkflowProposalSummary run={historicalRun} />
           <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSoftwareSummary run={historicalRun} />
-          <WorkflowSteps projectId={projectId} run={historicalRun} />
+          <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured} />
         </>} />
     </section>
   )

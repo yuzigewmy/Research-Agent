@@ -60,8 +60,9 @@ func run(address, dataDir, webDir string) error {
 	}
 
 	handler := workbench.NewHandler(store, os.DirFS(webDir), workbench.HandlerConfig{
-		Model:      model,
-		WordPython: os.Getenv("RESEARCH_WORD_PYTHON"),
+		Model:           model,
+		WordPython:      os.Getenv("RESEARCH_WORD_PYTHON"),
+		SoftwarePDFFont: os.Getenv("RESEARCH_PDF_FONT"),
 	})
 	server := &http.Server{
 		Handler:           handler,

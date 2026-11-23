@@ -11,8 +11,9 @@ import (
 )
 
 type workflows struct {
-	store *Store
-	model *inference.Client
+	store           *Store
+	model           *inference.Client
+	softwarePDFFont string
 }
 
 func (api workflows) register(mux *http.ServeMux) {
@@ -31,6 +32,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts", api.artifacts)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}", api.artifact)
+	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}/pdf", api.softwareIdentificationPDF)
 	mux.HandleFunc("POST "+path+"/{runId}/manuscript", api.saveManuscript)
 }
 
@@ -45,12 +47,17 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		Key   string `json:"key"`
 		Title string `json:"title"`
 	}
-	stages := workflowStages[projectWorkflowKey(project.TemplateID)]
+	key := projectWorkflowKey(project.TemplateID)
+	stages := workflowStages[key]
 	result := struct {
-		Run             *WorkflowRun `json:"run"`
-		Steps           []stepInfo   `json:"steps"`
-		ModelConfigured bool         `json:"modelConfigured"`
+		Run                   *WorkflowRun `json:"run"`
+		Steps                 []stepInfo   `json:"steps"`
+		ModelConfigured       bool         `json:"modelConfigured"`
+		SoftwarePDFConfigured *bool        `json:"softwarePdfConfigured,omitempty"`
 	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil}
+	if key == softwareRegistrationWorkflow {
+		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
+	}
 	for index, stage := range stages {
 		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title}
 	}
