@@ -11,11 +11,13 @@ pnpm --dir web install --frozen-lockfile
 pnpm --dir web run typecheck
 pnpm --dir web run build
 go test ./...
-go build -trimpath -o ./dist/research-agent.exe ./cmd/research-agent
+go build -tags embedweb -trimpath -ldflags "-s -w" -o ./dist/research-agent.exe ./cmd/research-agent
 ./dist/research-agent.exe --listen 127.0.0.1:8080 --data-dir ./data
 ```
 
-在浏览器打开 <http://127.0.0.1:8080>。默认数据目录为 `data/`，数据库文件为 `projects.sqlite3`。可以用 `--web-dir` 指定构建后的界面目录，默认为 `web/dist`。开发前端时可在服务运行期间另行执行 `pnpm --dir web run dev`。
+在浏览器打开 <http://127.0.0.1:8080>。可以把内嵌版可执行文件单独复制到另一个目录运行，界面和 PDF 查看资源会随程序提供。默认数据目录为 `data/`，数据库文件名为 `projects.sqlite3`。Word 导出另需配置组件。 [本机包实测](<docs/acceptance.md#本机包实测>)
+
+开发构建可省略 `-tags embedweb`，默认从 `web/dist` 读取界面。两种构建都可以用 `--web-dir` 指定界面目录。开发前端时可在服务运行期间另行执行 `pnpm --dir web run dev`。
 
 ## 当前功能
 

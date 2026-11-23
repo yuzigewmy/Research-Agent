@@ -12,12 +12,13 @@ import (
 
 	"research-agent/internal/inference"
 	"research-agent/internal/workbench"
+	webassets "research-agent/web"
 )
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "loopback IP address and port")
 	dataDir := flag.String("data-dir", "data", "directory for the workspace database")
-	webDir := flag.String("web-dir", "web/dist", "directory containing the built web app")
+	webDir := flag.String("web-dir", "", "override the bundled or default Web build directory")
 	flag.Parse()
 
 	if err := run(*listen, *dataDir, *webDir); err != nil {
@@ -59,7 +60,11 @@ func run(address, dataDir, webDir string) error {
 		return err
 	}
 
-	handler := workbench.NewHandler(store, os.DirFS(webDir), workbench.HandlerConfig{
+	webFS, err := webassets.Files(webDir)
+	if err != nil {
+		return fmt.Errorf("open Web assets: %w", err)
+	}
+	handler := workbench.NewHandler(store, webFS, workbench.HandlerConfig{
 		Model:           model,
 		WordPython:      os.Getenv("RESEARCH_WORD_PYTHON"),
 		SoftwarePDFFont: os.Getenv("RESEARCH_PDF_FONT"),
