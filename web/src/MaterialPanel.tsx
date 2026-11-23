@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
+import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
 import { errorMessage } from './projects'
 import { turnReferenceLimit } from './turns'
@@ -166,7 +166,10 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           const previewRegion = `${headingId}-preview-${material.materialId}`
           const isPdf = material.format === 'pdf'
           const isWord = material.format === 'word'
-          const hasText = !isPdf && (material.kind === 'text' || isWord)
+          const isArchive = material.format === 'archive'
+          const hasText = !isPdf && !isArchive && (material.kind === 'text' || isWord)
+          const typeLabel = isArchive ? archiveFormatLabel(material.name)
+            : isPdf ? 'PDF' : isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件'
           const canPreview = isPdf || hasText
           const previewLabel = isOpen ? '收起预览' : isPdf ? '预览 PDF' : '预览'
           const downloadPath = materialDownloadPath(projectId, material.materialId)
@@ -178,10 +181,10 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
               <div className="material-info">
                 <strong dir="auto">{material.name}</strong>
                 <div className="material-meta material-note">
-                  <span>{isPdf ? 'PDF' : isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件'}</span>
+                  <span>{typeLabel}</span>
                   <span>{formatSize(material.size)}</span>
                   <time dateTime={material.createdAt}>{materialDate.format(new Date(material.createdAt))}</time>
-                  {canPreview && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
+                  {(canPreview || isArchive) && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
                 </div>
                 {isWord && <p className="material-note" id={wordScopeId}>正文和表格文字节选（预览最多 64 KiB，UTF-8）</p>}
               </div>

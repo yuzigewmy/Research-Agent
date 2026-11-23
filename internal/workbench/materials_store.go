@@ -88,6 +88,9 @@ func (s *Store) stageMaterial(name string, body io.Reader) (Material, *os.File, 
 		return Material{}, nil, err
 	}
 	material := Material{Name: name, SHA256: hex.EncodeToString(hash.Sum(nil)), Size: size, Kind: "file"}
+	if softwareArchiveKind(name) != "" {
+		return material, file, nil
+	}
 	if preview, err := previewText(io.NewSectionReader(file, 0, materialPreviewBytes+1), materialPreviewBytes); err == nil &&
 		strings.HasPrefix(http.DetectContentType([]byte(preview.Text)), "text/") {
 		material.Kind = "text"
@@ -129,6 +132,9 @@ func (s *Store) materialObject(digest string) string {
 
 func materialFormat(name, kind string) string {
 	if kind == "file" {
+		if softwareArchiveKind(name) != "" {
+			return softwareArchiveFormat
+		}
 		switch strings.ToLower(filepath.Ext(name)) {
 		case ".docx", ".dotx":
 			return "word"

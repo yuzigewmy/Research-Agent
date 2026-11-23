@@ -51,8 +51,8 @@ export function WorkflowSoftwareOptions({ projectId, draft, errors, disabled, on
         {errors.description || '选填，可填写主要功能和操作流程，最多 4 KiB（UTF-8）。'}
       </p>
     </div>
-    <WorkflowMaterialPicker projectId={projectId} selected={draft.materialIds} disabled={disabled}
-      help={`选填，最多 ${workflowMaterialLimit} 份 UTF-8 文本（含源码）或 Word。源码文本合计最多 64 KiB。`}
+    <WorkflowMaterialPicker projectId={projectId} selected={draft.materialIds} disabled={disabled} allowArchives
+      help={`选填，最多 ${workflowMaterialLimit} 份，可选 UTF-8 文本、Word 或 ZIP、TAR.GZ、TGZ 压缩包。包内可识别的 UTF-8 源码、Markdown 和 TXT 文件会纳入。源码文本合计最多 64 KiB。`}
       onChange={(materialIds) => onChange({ ...draft, materialIds })} />
   </div>
 }

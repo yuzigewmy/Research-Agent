@@ -6,7 +6,7 @@ export interface Material {
   sha256: string
   size: number
   kind: 'text' | 'file'
-  format?: 'word' | 'pdf'
+  format?: 'word' | 'pdf' | 'archive'
   createdAt: string
 }
 
@@ -22,6 +22,14 @@ export interface MaterialPreview {
 
 export const materialSizeLimit = 64 * 1024 * 1024
 
+export function archiveFormatLabel(name: string) {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.zip')) return 'ZIP 压缩包'
+  if (lower.endsWith('.tar.gz')) return 'TAR.GZ 压缩包'
+  if (lower.endsWith('.tgz')) return 'TGZ 压缩包'
+  return '压缩包'
+}
+
 function isPathId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
 }
@@ -33,7 +41,7 @@ export function isMaterial(value: unknown): value is Material {
     && typeof material.sha256 === 'string' && /^[a-f\d]{64}$/i.test(material.sha256)
     && typeof material.size === 'number' && Number.isSafeInteger(material.size) && material.size >= 0
     && (material.kind === 'text' || material.kind === 'file')
-    && (material.format === undefined || material.format === 'word' || material.format === 'pdf')
+    && (material.format === undefined || material.format === 'word' || material.format === 'pdf' || material.format === 'archive')
     && typeof material.createdAt === 'string' && Number.isFinite(Date.parse(material.createdAt))
 }
 

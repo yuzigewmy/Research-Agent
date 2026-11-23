@@ -175,13 +175,13 @@ interface WorkflowMaterial {
   materialId: string
   name: string
   sha256: string
-  format?: 'word'
+  format?: 'word' | 'archive'
 }
 
 export interface CourseSettings extends CourseProfile {
   requirements?: string
   materialIds?: string[]
-  materials?: WorkflowMaterial[]
+  materials?: (WorkflowMaterial & { format?: 'word' })[]
 }
 
 export interface SoftwareOptions {
@@ -368,11 +368,11 @@ export function isCourseProfile(value: unknown): value is CourseProfile {
     && (profile.reportType === undefined || hasLabel(courseReportTypeLabels, profile.reportType))
 }
 
-function isWorkflowMaterial(value: unknown): value is WorkflowMaterial {
+function isWorkflowMaterial(value: unknown, allowArchives: boolean): value is WorkflowMaterial {
   const material = value as Partial<WorkflowMaterial> | null
   return !!material && isPathId(material.materialId) && typeof material.name === 'string' && material.name.length > 0
     && typeof material.sha256 === 'string' && /^[a-f\d]{64}$/i.test(material.sha256)
-    && (material.format === undefined || material.format === 'word')
+    && (material.format === undefined || material.format === 'word' || (allowArchives && material.format === 'archive'))
 }
 
 function isCourseSettings(value: unknown): value is CourseSettings {
@@ -380,7 +380,7 @@ function isCourseSettings(value: unknown): value is CourseSettings {
   const { requirements, materialIds, materials } = value as CourseSettings
   return (requirements === undefined || typeof requirements === 'string')
     && (materialIds === undefined || (Array.isArray(materialIds) && materialIds.every(isPathId)))
-    && (materials === undefined || (Array.isArray(materials) && materials.every(isWorkflowMaterial)))
+    && (materials === undefined || (Array.isArray(materials) && materials.every((material) => isWorkflowMaterial(material, false))))
 }
 
 function isSoftwareSettings(value: unknown): value is SoftwareSettings {
@@ -390,7 +390,8 @@ function isSoftwareSettings(value: unknown): value is SoftwareSettings {
     && (settings.materialIds === undefined || (Array.isArray(settings.materialIds)
       && settings.materialIds.length <= workflowMaterialLimit && settings.materialIds.every(isPathId)))
     && (settings.materials === undefined || (Array.isArray(settings.materials)
-      && settings.materials.length <= workflowMaterialLimit && settings.materials.every(isWorkflowMaterial)))
+      && settings.materials.length <= workflowMaterialLimit
+      && settings.materials.every((material) => isWorkflowMaterial(material, true))))
 }
 
 function isRun(value: unknown): value is WorkflowRun {

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { listMaterials } from './materials'
+import { archiveFormatLabel, listMaterials } from './materials'
 import type { Material, MaterialPage } from './materials'
 import { errorMessage } from './projects'
 import type { CourseTemplateId } from './projects'
@@ -72,19 +72,20 @@ export function WorkflowMaterialLabel({ name, sha256, format, createdAt }: Pick<
   return <span className="material-info">
     <bdi>{name}</bdi>
     <span className="material-meta material-note">
-      <span>{format === 'word' ? 'Word' : 'UTF-8 文本'}</span>
+      <span>{format === 'archive' ? archiveFormatLabel(name) : format === 'word' ? 'Word' : 'UTF-8 文本'}</span>
       {createdAt && <time dateTime={createdAt}>{materialDate.format(new Date(createdAt))}</time>}
       <span>SHA-256 <code title={sha256}>{sha256.slice(0, 12)}</code></span>
     </span>
   </span>
 }
 
-export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange, help }: {
+export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange, help, allowArchives = false }: {
   projectId: string
   selected: string[]
   disabled: boolean
   onChange: (materialIds: string[]) => void
   help?: string
+  allowArchives?: boolean
 }) {
   const id = useId()
   const [page, setPage] = useState<MaterialPage>({ items: [] })
@@ -98,10 +99,9 @@ export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
     void listMaterials(projectId, signal, query.cursor).then((next) => {
       if (controller.signal.aborted) return
-      const eligible = next.items.filter((material) => material.kind === 'text' || material.format === 'word')
       setPage((previous) => {
         // Keep previously loaded versions available when refreshing after an upload.
-        const ordered = query.cursor ? [...previous.items, ...eligible] : [...eligible, ...previous.items]
+        const ordered = query.cursor ? [...previous.items, ...next.items] : [...next.items, ...previous.items]
         return { nextCursor: next.nextCursor, items: [...new Map(ordered.map((item) => [item.materialId, item])).values()] }
       })
     }).catch((cause: unknown) => {
@@ -118,6 +118,11 @@ export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange
     setQuery({ cursor })
   }
 
+  const eligible = page.items.filter(({ format, kind }) => {
+    if (format === 'archive') return allowArchives
+    return format === 'word' || (format === undefined && kind === 'text')
+  })
+
   return <details className="workflow-artifact-history" onToggle={(event) => {
     if (event.currentTarget.open && !query && !loading) load()
   }}>
@@ -126,8 +131,8 @@ export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange
       <p className="workflow-note" id={id}>
         {help ?? `选填，最多 ${workflowMaterialLimit} 份 UTF-8 文本或 Word。同名文件可按 SHA-256 摘要区分版本。`}
       </p>
-      {page.items.length > 0 && <ul className="workspace-list" role="list" aria-label="可选资料版本" aria-describedby={id}>
-        {page.items.map((material) => {
+      {eligible.length > 0 && <ul className="workspace-list" role="list" aria-label="可选资料版本" aria-describedby={id}>
+        {eligible.map((material) => {
           const checked = selected.includes(material.materialId)
           return <li key={material.materialId}>
             <label className="workflow-checkpoint workspace-row">
@@ -141,7 +146,7 @@ export function WorkflowMaterialPicker({ projectId, selected, disabled, onChange
       </ul>}
       {loading && <p className="workflow-note" role="status">正在读取资料版本…</p>}
       {error && <p className="form-error" role="alert">读取资料失败。{error}</p>}
-      {query && !loading && !error && page.items.length === 0 && <p className="workflow-note">
+      {query && !loading && !error && eligible.length === 0 && <p className="workflow-note">
         {page.nextCursor ? '已读取的资料中没有可选版本。' : '暂无可选资料。可在「项目资料」上传文件后刷新。'}
       </p>}
       <div className="workflow-actions">

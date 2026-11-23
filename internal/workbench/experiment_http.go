@@ -121,6 +121,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对版本号和软件说明。版本号最多 64 字节，软件说明最多 4 KiB，可选最多四份资料。")
 		case errors.Is(err, errSoftwareSources):
 			writeError(w, http.StatusUnprocessableEntity, "SOURCE_TOO_LARGE", "本轮选定的源码文本合计不得超过 64 KiB。请缩小材料范围。")
+		case errors.Is(err, errInvalidSoftwareMaterial):
+			writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请选择本项目中的 UTF-8 文本、Word、ZIP 或 TAR.GZ 资料。")
 		case errors.Is(err, errInvalidTurnReference):
 			writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请选择当前项目的文本或 Word 资料。")
 		case errors.Is(err, errTopicOptions):

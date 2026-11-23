@@ -38,13 +38,13 @@ func TestSoftwareWorkflowPDFUsesRequestedArtifactAndPaginatesSource(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		body, err := store.softwareProgramMaterials(softwareSettings{Materials: []TurnReference{
+		inputs, err := store.readSoftwareInputs(ctx, []TurnReference{
 			{MaterialID: file.MaterialID, Name: file.Name, SHA256: file.SHA256},
-		}})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return body
+		return softwareProgramMaterials(inputs.sources)
 	}
 	shortLines := programText("package main\n" + strings.Repeat("// 水位观测\n", 49) + "func main() {}")
 	wrappedLines := programText("package main\n" + strings.Repeat("// 水位观测\n", 34) + "// " + strings.Repeat("W", 3000) + "\nfunc main() {}")
