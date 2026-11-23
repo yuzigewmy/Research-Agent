@@ -17,6 +17,7 @@ import {
   isManuscriptSelection, isManuscriptSelections, isTurnReferences, manuscriptSelectionLimit, sameManuscriptSelection, turnReferenceLimit,
 } from './turns'
 import type { ManuscriptSelection, ManuscriptSelectionInput, TurnReference } from './turns'
+import type { FileRecord } from './workspace'
 
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' })
 const dateTimeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
@@ -73,6 +74,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
   const [manuscriptSelections, setManuscriptSelections] = useState(() => readManuscriptSelections(manuscriptKey))
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
   const [workflowRefresh, setWorkflowRefresh] = useState(0)
+  const [acceptanceDraft, setAcceptanceDraft] = useState<{ file: FileRecord; openId: number }>()
   const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
 
   const refreshWorkflow = useCallback(() => setWorkflowRefresh((version) => version + 1), [])
@@ -84,7 +86,14 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
     })
   }, [])
 
-  const taskSync = { updates: taskUpdates, onTaskChanged }
+  const hasWorkflow = detail.kind === 'ready' && detail.project.templateId !== 'freeform' && detail.project.templateId !== 'automatic_review'
+
+  function reviewAppliedFile(file: FileRecord) {
+    setAcceptanceDraft((current) => ({ file, openId: (current?.openId ?? 0) + 1 }))
+    refreshWorkflow()
+  }
+
+  const taskSync = { updates: taskUpdates, onTaskChanged, onReviewAppliedFile: hasWorkflow ? reviewAppliedFile : undefined }
 
   useEffect(() => {
     if (references.length) sessionStorage.setItem(referenceKey, JSON.stringify(references))
@@ -188,6 +197,8 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
         || project.templateId === 'course_paper' || project.templateId === 'course_report') && <LiteraturePanel projectId={project.projectId} />}
       {project.templateId !== 'freeform' && project.templateId !== 'automatic_review' &&
         <WorkflowPanel projectId={project.projectId} templateId={project.templateId} refreshVersion={workflowRefresh}
+          acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
+            current?.openId === openId ? undefined : current)}
           onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
       <TaskPanel projectId={project.projectId} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}

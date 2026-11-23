@@ -4,23 +4,26 @@ import { applySelectionEdit, getSelectionEdit, isSelectionEditVersionConflict, S
 import type { SelectionEditRecord } from './SelectionEdit'
 import type { TaskInputVersion, TaskStatus } from './tasks'
 import { readVersion } from './workspace'
+import type { FileRecord } from './workspace'
+import { isWorkflowAcceptanceFile } from './workflow'
 
 function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
 }
 
-export function TaskSelectionEdit({ projectId, taskId, source, status, revision, refreshVersion }: {
+export function TaskSelectionEdit({ projectId, taskId, source, status, revision, refreshVersion, onReviewAppliedFile }: {
   projectId: string
   taskId: string
   source: TaskInputVersion
   status: TaskStatus
   revision: number
   refreshVersion: number
+  onReviewAppliedFile?: (file: FileRecord) => void
 }) {
   const { path, versionId, sha256 } = source
   const fileLabelId = useId()
   const [edit, setEdit] = useState<SelectionEditRecord>()
-  const [saved, setSaved] = useState<Pick<TaskInputVersion, 'versionId' | 'sha256'>>()
+  const [saved, setSaved] = useState<FileRecord>()
   const [readError, setReadError] = useState('')
   const [versionError, setVersionError] = useState('')
   const [applyError, setApplyError] = useState('')
@@ -56,7 +59,8 @@ export function TaskSelectionEdit({ projectId, taskId, source, status, revision,
         setVersionError('无法核对已应用的稿件版本。')
         return
       }
-      setSaved({ versionId: doc.versionId, sha256: doc.sha256 })
+      const { content: _, ...file } = doc
+      setSaved(file)
       setVersionError('')
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) setVersionError(errorMessage(error))
@@ -76,7 +80,8 @@ export function TaskSelectionEdit({ projectId, taskId, source, status, revision,
     try {
       const doc = await applySelectionEdit(projectId, versionId, taskId, requestSignal(controller), path)
       if (controller.signal.aborted) return
-      setSaved({ versionId: doc.versionId, sha256: doc.sha256 })
+      const { content: _, ...file } = doc
+      setSaved(file)
       if (document.activeElement === control) preview.current?.focus()
     } catch (error) {
       if (controller.signal.aborted) return
@@ -121,6 +126,10 @@ export function TaskSelectionEdit({ projectId, taskId, source, status, revision,
         {saved && <> · SHA-256 <code title={saved.sha256}>{saved.sha256.slice(0, 12)}</code></>}
       </p>
       <p className="task-note"><a href="#project-workspace">前往文本工作区</a>，重新加载稿件以查看已保存的版本。</p>
+      {saved && onReviewAppliedFile && isWorkflowAcceptanceFile(saved) && <div className="task-actions">
+        <a className="button outline" href="#project-workflow" aria-describedby={fileLabelId}
+          onClick={() => onReviewAppliedFile(saved)}>预览此版本用于验收</a>
+      </div>}
     </div>}
   </div>
 }

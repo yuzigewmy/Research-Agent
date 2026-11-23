@@ -1,5 +1,10 @@
 import { request } from './projects'
 import { isFileRecord } from './workspace'
+import type { FileRecord } from './workspace'
+
+export function isWorkflowAcceptanceFile(file: FileRecord) {
+  return /\.(md|markdown)$/i.test(file.path) && file.size > 0 && file.size <= 32 * 1024
+}
 
 export const runStatusLabels = {
   QUEUED: '排队中',

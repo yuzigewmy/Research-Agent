@@ -19,6 +19,7 @@ import type {
   AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, SelectWorkflowTopicInput, SkipWorkflowInput,
   StartWorkflowInput, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
+import type { FileRecord } from './workspace'
 import './workflow.css'
 
 const pollInterval = 1_000
@@ -165,11 +166,13 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
   </div>
 }
 
-export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0 }: {
+export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, acceptanceDraft, onClearAcceptanceDraft }: {
   projectId: string
   templateId: Exclude<TemplateId, 'freeform' | 'automatic_review'>
   onManuscriptSaved: (path: string) => void
   refreshVersion?: number
+  acceptanceDraft?: { file: FileRecord; openId: number }
+  onClearAcceptanceDraft: (openId: number) => void
 }) {
   const isReview = templateId === 'literature_review'
   const isPaper = templateId === 'paper'
@@ -430,7 +433,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         setCheckpoints(false)
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
       }
-      if (attempt.kind === 'accept') setFeedback('已将所选稿件验收为步骤成果。')
+      if (attempt.kind === 'accept') {
+        if (acceptanceDraft) onClearAcceptanceDraft(acceptanceDraft.openId)
+        setFeedback('已将所选稿件验收为步骤成果。')
+      }
       if (attempt.kind === 'skip') setFeedback('已跳过该步骤。')
       if (attempt.kind === 'select-topic') setFeedback('选题已确认。')
       setSnapshot((current) => current && !hasNewerRevision(current.run, updated) ? { ...current, run: updated } : current)
@@ -507,9 +513,13 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       <WorkflowSelectedTopic choice={run?.topicChoice} />
       {run && manuscript?.artifactId && <ManuscriptHandoff key={manuscript.artifactId}
         projectId={projectId} runId={run.runId} artifactId={manuscript.artifactId} onSaved={onManuscriptSaved} />}
-      {run && acceptStep && <WorkflowStageAcceptance key={JSON.stringify([projectId, run.runId, run.revision, acceptStep.key, reload])}
+      {acceptanceDraft && !acceptStep && <p className="workflow-note" role="status">
+        {refreshing ? '正在核对可验收的步骤…' : <>当前没有可验收的步骤。已选稿件为 <bdi>{acceptanceDraft.file.path}</bdi>。</>}
+      </p>}
+      {run && acceptStep && <WorkflowStageAcceptance
+        key={JSON.stringify([projectId, run.runId, run.revision, acceptStep.key, reload, acceptanceDraft?.openId])}
         projectId={projectId} target={{ runId: run.runId, expectedRevision: run.revision, stepKey: acceptStep.key }}
-        stepTitle={acceptStep.title} disabled={requestBlocked} pending={pending === 'accept'}
+        stepTitle={acceptStep.title} disabled={requestBlocked} pending={pending === 'accept'} preferredFile={acceptanceDraft?.file}
         retryVersionId={retryAcceptance?.input.sourceVersionId} submissionError={acceptanceError}
         onConfirm={(target) => void submit('accept', target)} />}
       {run && skipStep && <WorkflowSkipStep key={JSON.stringify([projectId, run.runId, run.revision, skipStep.key, reload])}

@@ -9,6 +9,7 @@ import {
   taskArtifactPath, taskInputLimit, taskInstructionLimit, taskStatusLabels,
 } from './tasks'
 import type { ProposalInput, Task, TaskAction, TaskInputVersion, TaskPage } from './tasks'
+import type { FileRecord } from './workspace'
 import './tasks.css'
 
 const refreshInterval = 2_000
@@ -19,6 +20,7 @@ const turnSourceNotice = '确认运行后，用户原话、部分回复和当时
 export interface TaskPanelSync {
   updates: Task[]
   onTaskChanged: (task: Task) => void
+  onReviewAppliedFile?: (file: FileRecord) => void
 }
 
 type TaskFields = Omit<ProposalInput, 'requestId' | 'sourceTurnId'>
@@ -89,7 +91,7 @@ function mergeTasks(current: Task[], incoming: Task[]) {
   )
 }
 
-function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink, refreshVersion }: {
+function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink, refreshVersion, onReviewAppliedFile }: {
   projectId: string
   task: Task
   statusId: string
@@ -98,6 +100,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   onAction: (mutation: CardMutation) => Promise<MutationResult | undefined>
   showSourceLink: boolean
   refreshVersion: number
+  onReviewAppliedFile?: (file: FileRecord) => void
 }) {
   const [edit, setEdit] = useState<InstructionDraft>()
   const [editError, setEditError] = useState<{ message: string; invalid?: boolean }>()
@@ -189,7 +192,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         </p>}
         {currentInputs.map((source) => (
           <TaskSelectionEdit key={source.versionId} projectId={projectId} taskId={task.taskId} source={source}
-            status={task.status} revision={task.revision} refreshVersion={refreshVersion} />
+            status={task.status} revision={task.revision} refreshVersion={refreshVersion}
+            onReviewAppliedFile={onReviewAppliedFile} />
         ))}
       </> : <TaskInputSummary projectId={projectId} inputs={task.inputs} />}
       {confirmationConflict && <p className="form-error" role="alert">{confirmationConflict}</p>}
@@ -535,7 +539,8 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
       {tasks.length > 0 && <ol className="task-list" aria-label="研究计划任务">
         {tasks.map((task) => <TaskCard key={task.taskId} task={task} projectId={projectId}
           statusId={`${panelId}-${task.taskId}`} modelConfigured={configured === true} pending={pending}
-          onAction={mutate} showSourceLink={!sourceTurnId} refreshVersion={reload} />)}
+          onAction={mutate} showSourceLink={!sourceTurnId} refreshVersion={reload}
+          onReviewAppliedFile={sync?.onReviewAppliedFile} />)}
       </ol>}
       {!loading && !queueError && tasks.length === 0 && <p className="task-note">提交提议后，可在此查看任务进度并下载计划。</p>}
       {proposedTaskId && <details>

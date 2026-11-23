@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { errorMessage } from './projects'
+import { isWorkflowAcceptanceFile } from './workflow'
 import { listFiles, readVersion } from './workspace'
 import type { Document, FilePage, FileRecord } from './workspace'
 import type { AcceptWorkflowInput } from './workflow'
@@ -12,13 +13,10 @@ type AcceptanceProps = {
   stepTitle: string
   disabled: boolean
   pending: boolean
+  preferredFile?: FileRecord
   retryVersionId?: string
   submissionError?: { sourceVersionId: string; message: string }
   onConfirm: (target: AcceptanceTarget) => void
-}
-
-function isEligibleFile(file: FileRecord) {
-  return /\.(md|markdown)$/i.test(file.path) && file.size > 0 && file.size <= 32 * 1024
 }
 
 function requestSignal(controller: AbortController) {
@@ -27,7 +25,7 @@ function requestSignal(controller: AbortController) {
 
 export function WorkflowStageAcceptance(props: AcceptanceProps) {
   const id = useId()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(!!props.preferredFile)
   return <section className="workflow-acceptance" aria-label={`稿件验收：${props.stepTitle}`}>
     <button className="button outline" type="button" aria-expanded={open} aria-controls={id}
       disabled={props.pending} onClick={() => setOpen((previous) => !previous)}>
@@ -39,22 +37,25 @@ export function WorkflowStageAcceptance(props: AcceptanceProps) {
   </section>
 }
 
-function AcceptanceFiles({ projectId, target, stepTitle, disabled, pending, retryVersionId, submissionError, onConfirm }: AcceptanceProps) {
+function AcceptanceFiles({ projectId, target, stepTitle, disabled, pending, preferredFile, retryVersionId, submissionError, onConfirm }: AcceptanceProps) {
   const id = useId()
   const [page, setPage] = useState<FilePage>({ items: [] })
   const [query, setQuery] = useState<{ cursor?: string }>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const selected = page.items.find((file) => file.versionId === selectedId)
+  const [selectedId, setSelectedId] = useState(preferredFile?.versionId ?? '')
+  const files = preferredFile
+    ? [preferredFile, ...page.items.filter((file) => file.versionId !== preferredFile.versionId)]
+    : page.items
+  const selected = files.find((file) => file.versionId === selectedId)
 
   useEffect(() => {
     const controller = new AbortController()
-    void listFiles(projectId, requestSignal(controller), query.cursor).then((next) => {
+    void listFiles(projectId, requestSignal(controller), query.cursor, 'markdown').then((next) => {
       if (controller.signal.aborted) return
       setPage((previous) => {
         const items = new Map((query.cursor ? previous.items : []).map((file) => [file.versionId, file]))
-        for (const file of next.items) if (isEligibleFile(file)) items.set(file.versionId, file)
+        for (const file of next.items) if (isWorkflowAcceptanceFile(file)) items.set(file.versionId, file)
         return { ...next, items: [...items.values()] }
       })
     }).catch((error: unknown) => {
@@ -74,16 +75,18 @@ function AcceptanceFiles({ projectId, target, stepTitle, disabled, pending, retr
   return <div className="workflow-acceptance-fields">
     <div className="field">
       <label htmlFor={id}>工作区稿件</label>
-      <select id={id} value={selectedId} disabled={pending || !page.items.length}
+      <select id={id} value={selectedId} disabled={pending || !files.length}
         aria-describedby={`${id}-requirements`} onChange={(event) => setSelectedId(event.currentTarget.value)}>
         <option value="">请选择稿件</option>
-        {page.items.map((file) => <option key={file.versionId} value={file.versionId}>{file.path}</option>)}
+        {files.map((file) => <option key={file.versionId} value={file.versionId}>
+          {file.path}{file.versionId === preferredFile?.versionId ? '（改稿应用版本）' : ''}
+        </option>)}
       </select>
       <p className="workflow-note" id={`${id}-requirements`}>支持 32 KiB 以内的非空 Markdown 文件。</p>
     </div>
     {loading && <p className="workflow-note" role="status">正在读取工作区文件…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-    {!loading && !error && !page.items.length && <p className="workflow-note">暂无符合条件的稿件。</p>}
+    {!loading && !error && !files.length && <p className="workflow-note">暂无符合条件的稿件。</p>}
     {!loading && (error || page.nextCursor) && <div className="workflow-actions">
       <button className="button outline" type="button" disabled={pending} onClick={() => load(error ? query.cursor : page.nextCursor)}>
         {error ? '重试加载稿件' : '加载更多稿件'}
@@ -138,10 +141,10 @@ function ManuscriptPreview({ projectId, file, stepTitle, disabled, pending, retr
   </>
   if (!document) return <p className="workflow-note" role="status">正在读取所选稿件…</p>
 
-  const usable = isEligibleFile(document) && !!document.content.trim() && !document.content.includes('\0')
+  const usable = isWorkflowAcceptanceFile(document) && !!document.content.trim() && !document.content.includes('\0')
   return <>
     <p className="workflow-note">稿件 <bdi>{document.path}</bdi></p>
-    <p className="workflow-note">版本 <bdi>{document.versionId}</bdi></p>
+    <p className="workflow-note">版本 <bdi>{document.versionId}</bdi> · SHA-256 <code title={document.sha256}>{document.sha256.slice(0, 12)}</code></p>
     <pre className="workspace-text" tabIndex={0} dir="auto" aria-label="待验收的稿件原文">{document.content}</pre>
     {usable ? <>
       <p className="workflow-note" id={id}>确认后，此版本将成为「{stepTitle}」的成果。</p>
