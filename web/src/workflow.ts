@@ -509,6 +509,12 @@ async function fetchArtifact(path: string, accept: string, label: string, signal
   return response
 }
 
+async function sha256Hex(bytes: ArrayBuffer) {
+  if (!globalThis.crypto?.subtle) throw new ProjectApiError('当前浏览器环境无法校验成果摘要。', 0)
+  const hash = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 export async function readWorkflowSoftwarePdf(projectId: string, runId: string, key: SoftwarePdfStep, artifactId: string, signal: AbortSignal) {
   if (![projectId, runId, artifactId].every(isPathId)) throw new ProjectApiError('成果版本链接无效。', 400)
   const sourcePath = workflowArtifactPath(projectId, runId, key, artifactId)
@@ -524,15 +530,38 @@ export async function readWorkflowSoftwarePdf(projectId: string, runId: string, 
   const original = await fetchArtifact(sourcePath, key === 'manuscript' ? 'text/markdown' : 'text/plain', '原成果', signal)
   const [bytes, pdf] = await Promise.all([original.arrayBuffer(), response.blob()])
   signal.throwIfAborted()
-  if (!globalThis.crypto?.subtle) throw new ProjectApiError('当前浏览器环境无法校验成果摘要。', 0)
-  const hash = await crypto.subtle.digest('SHA-256', bytes)
-  const expectedDigest = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('')
-  if (sourceDigest.toLowerCase() !== expectedDigest) {
+  if (sourceDigest.toLowerCase() !== await sha256Hex(bytes)) {
     throw new ProjectApiError('PDF 的来源摘要与所选成果版本不符。', 409)
   }
   if (await pdf.slice(0, 5).text() !== '%PDF-') throw new ProjectApiError('PDF 文件内容无法识别。', 422)
   signal.throwIfAborted()
   return pdf
+}
+
+export async function readWorkflowSoftwareBundle(projectId: string, runId: string, revision: number, signal: AbortSignal) {
+  if (!isPathId(projectId) || !isPathId(runId) || !Number.isSafeInteger(revision) || revision < 1) {
+    throw new ProjectApiError('登记材料的运行或修订无效。', 400)
+  }
+  const query = new URLSearchParams({ revision: String(revision) })
+  const path = `${workflowPath(projectId)}/runs/${encodeURIComponent(runId)}/bundle?${query}`
+  const response = await fetchArtifact(path, 'application/zip', '登记材料 ZIP', signal)
+  const contentType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
+  if (contentType !== 'application/zip') throw new ProjectApiError('成果服务返回的文件无法识别为 ZIP。', 422)
+  if (response.headers.get('X-Workflow-Run-ID') !== runId
+    || response.headers.get('X-Workflow-Revision') !== String(revision)) {
+    throw new ProjectApiError('登记材料 ZIP 的运行或修订不符。请刷新后重试。', 409)
+  }
+  const digest = response.headers.get('X-Bundle-SHA256')
+  if (!digest || !/^[a-f\d]{64}$/i.test(digest)) {
+    throw new ProjectApiError('无法核对登记材料 ZIP 的摘要。', 422)
+  }
+  const bytes = await response.arrayBuffer()
+  signal.throwIfAborted()
+  if (digest.toLowerCase() !== await sha256Hex(bytes)) {
+    throw new ProjectApiError('登记材料 ZIP 的摘要校验失败。请重试。', 422)
+  }
+  signal.throwIfAborted()
+  return new Blob([bytes], { type: contentType })
 }
 
 export function listWorkflowArtifacts(projectId: string, runId: string, key: string, signal: AbortSignal, cursor?: string) {

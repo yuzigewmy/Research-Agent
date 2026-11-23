@@ -6,6 +6,7 @@ import { initialCourseDraft, prepareCourse, WorkflowCourseOptions, WorkflowCours
 import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
 import { WorkflowRunHistory } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
+import { WorkflowSoftwareBundleDownload } from './WorkflowSoftwareBundleDownload'
 import { initialSoftwareDraft, prepareSoftware, WorkflowSoftwareOptions, WorkflowSoftwareSummary } from './WorkflowSoftwareOptions'
 import { WorkflowSoftwarePdfDownload } from './WorkflowSoftwarePdfDownload'
 import type { SkipTarget } from './WorkflowSkipStep'
@@ -533,6 +534,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         onConfirm: () => void submit('rerun'),
         onCancel: () => setRerunTarget(null),
       }} />}
+      {run && <WorkflowSoftwareBundleDownload projectId={projectId} run={run} />}
       {waitingTopic && run.topicChoice && <WorkflowTopicChoice
         key={JSON.stringify([projectId, run.runId, run.revision, reload])}
         choice={run.topicChoice} target={{ runId: run.runId, expectedRevision: run.revision }}
@@ -699,6 +701,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSoftwareSummary run={historicalRun} />
           <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured} />
+          <WorkflowSoftwareBundleDownload projectId={projectId} run={historicalRun} />
         </>} />
     </section>
   )

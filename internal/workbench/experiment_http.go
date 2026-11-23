@@ -14,6 +14,7 @@ type workflows struct {
 	store           *Store
 	model           *inference.Client
 	softwarePDFFont string
+	wordPython      string
 }
 
 func (api workflows) register(mux *http.ServeMux) {
@@ -29,6 +30,7 @@ func (api workflows) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path+"/select-topic", api.change(workflowSelectTopic))
 	mux.HandleFunc("GET "+path+"/runs", api.listRuns)
 	mux.HandleFunc("GET "+path+"/runs/{runId}", api.readRun)
+	mux.HandleFunc("GET "+path+"/runs/{runId}/bundle", api.softwareBundle)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifact", api.artifact)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts", api.artifacts)
 	mux.HandleFunc("GET "+path+"/{runId}/steps/{key}/artifacts/{artifactId}", api.artifact)

@@ -29,4 +29,10 @@ UTF-8 源码及 Markdown、TXT 说明按包名和成员相对路径登记。程�
 
 程序 PDF 每个源文件另起一页，每页最多 50 个正文排版行，过长的源码行折行后计入页行数。TXT 保留原始源码字节。手册 PDF 按保存的 Markdown 文本分页。浏览器核对所选成果编号和原始正文的 SHA-256 后下载。字体子集嵌入采用 [GoPDF v0.38.6](https://github.com/signintech/gopdf/blob/v0.38.6/README.md#features)。
 
+## 登记材料 ZIP
+
+已完成的当前运行和历史运行支持「下载登记材料 ZIP」。服务端按所选运行编号与修订取得四项已保存成果。ZIP 包含材料清单、操作手册 Markdown、程序 TXT、申请核对单和 `manifest.json`。清单记录每个文件的来源成果编号、来源正文 SHA-256 和下载文件 SHA-256。
+
+配置字体时加入程序和手册 PDF，配置 Word 组件时加入按本轮手册生成的可编辑 DOCX。清单标出尚未启用的格式。打包时如已启用的组件报错，可修正配置后对同一版本重试。请求使用 `GET /api/v1/projects/{id}/workflow/runs/{runId}/bundle?revision={revision}`，修订已更新时返回 `409 REVISION_CONFLICT`。
+
 `go test ./internal/workbench -run 'TestSoftware|TestProjectTemplateCatalog' -count=1` 核对本流程。设置 `SOFTWARE_PDF_TEST_FONT` 后运行真实排版回归。Chrome 验证建项、默认检查点、材料换版、示例回包失败后的续跑、历史 PDF 下载和失败重试。PDF.js 核对页数、中文、长源码行的末尾和示例来源。

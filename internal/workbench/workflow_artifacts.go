@@ -26,15 +26,19 @@ func workflowArtifactStep(ctx context.Context, db workspaceQuery, projectID, run
 	}
 	for i, stage := range workflowStages[workflow] {
 		if stage.key == key {
-			family, _, _ := strings.Cut(workflow, "-v")
-			extension := ".md"
-			if stage.plainText {
-				extension = ".txt"
-			}
-			return i, family + "-" + key + extension, nil
+			return i, workflowArtifactFilename(workflow, stage), nil
 		}
 	}
 	return 0, "", sql.ErrNoRows
+}
+
+func workflowArtifactFilename(workflow string, stage workflowStage) string {
+	family, _, _ := strings.Cut(workflow, "-v")
+	extension := ".md"
+	if stage.plainText {
+		extension = ".txt"
+	}
+	return family + "-" + stage.key + extension
 }
 
 // An empty artifactID selects the result that is still valid for this run.
