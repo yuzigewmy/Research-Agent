@@ -87,8 +87,13 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 
 		result, err := s.generateTaskResult(ctx, model, projectID, task)
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
-		if task.Kind == manuscriptCheckTask && status == taskFailed {
-			message = "稿件检查未完成。请核对已保存的稿件后重新提出检查。"
+		if status == taskFailed {
+			switch task.Kind {
+			case manuscriptCheckTask:
+				message = "稿件检查未完成。请核对已保存的稿件后重新提出检查。"
+			case focusedResearchTask:
+				message = "聚焦研究未完成。请核对输入和模型连接后重新提出任务。"
+			}
 		}
 		if task.workflowRunID != "" && status == taskFailed {
 			message = "此步骤未生成成果。检查模型连接后，可从此步骤继续。"
@@ -204,6 +209,13 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 			return taskResult{}, err
 		}
 		input += excerpts
+	}
+	if task.Kind == focusedResearchTask {
+		analysis, err := streamTaskMarkdown(ctx, model, focusedResearchPrompt, input)
+		if err != nil {
+			return taskResult{}, err
+		}
+		return focusedResearchReport(analysis, task.Inputs)
 	}
 	markdown, err := streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
 	return taskResult{markdown: markdown}, err

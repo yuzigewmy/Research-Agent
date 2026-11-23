@@ -388,14 +388,15 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 
 type taskArtifact struct {
 	markdown     string
+	kind         string
 	sourceSHA256 string
 }
 
 func (s *Store) readTaskArtifact(ctx context.Context, projectID, taskID string) (taskArtifact, error) {
 	var artifact taskArtifact
-	err := s.db.QueryRowContext(ctx, `SELECT markdown,
+	err := s.db.QueryRowContext(ctx, `SELECT markdown, kind,
 		CASE WHEN kind = ? THEN json_extract(inputs_json, '$[0].sha256') ELSE '' END
 		FROM tasks WHERE project_id = ? AND task_id = ? AND `+standaloneTask+` AND status = 'SUCCEEDED'`,
-		manuscriptCheckTask, projectID, taskID).Scan(&artifact.markdown, &artifact.sourceSHA256)
+		manuscriptCheckTask, projectID, taskID).Scan(&artifact.markdown, &artifact.kind, &artifact.sourceSHA256)
 	return artifact, err
 }

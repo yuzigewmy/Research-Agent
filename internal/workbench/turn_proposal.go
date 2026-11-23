@@ -33,6 +33,7 @@ type turnProposal struct {
 	instruction   string
 	workflow      *workflowProposalRecord
 	checkInput    *taskInput
+	focusInputs   []taskInput
 	editSelection *manuscriptSelection
 }
 
@@ -46,7 +47,7 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, sel
 			ends = append(ends, step.Key)
 		}
 		properties["throughStep"] = map[string]any{
-			"type": "string", "enum": ends, "description": "运行工作流时选择区间终点。与 checkVersionId 互斥。",
+			"type": "string", "enum": ends, "description": "运行工作流时选择区间终点。",
 		}
 	}
 	if len(manuscripts) != 0 {
@@ -55,12 +56,17 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, sel
 			ids = append(ids, manuscript.VersionID)
 		}
 		properties["checkVersionId"] = map[string]any{
-			"type": "string", "enum": ids, "description": "明确要求检查稿件结构时，从 manuscriptVersions 选择对应稿件的 versionId。与 throughStep 互斥。",
+			"type": "string", "enum": ids, "description": "明确要求检查稿件结构时，从 manuscriptVersions 选择对应稿件的 versionId。",
+		}
+		properties["focusVersionIds"] = map[string]any{
+			"type": "array", "items": map[string]any{"type": "string", "enum": ids},
+			"minItems": 1, "maxItems": maxTaskInputs, "uniqueItems": true,
+			"description": "围绕具体问题分析或对照稿件时，选取一至四个不同的版本。用户确认后读取节选。",
 		}
 	}
 	if selection != nil {
 		properties["editSelection"] = map[string]any{
-			"type": "boolean", "enum": []bool{true}, "description": "用户明确要求改写本轮附带的稿件选区时填写 true。只生成该选区的替换建议。此项与区间运行及结构检查互斥。",
+			"type": "boolean", "enum": []bool{true}, "description": "用户明确要求改写本轮附带的稿件选区时填写 true。只生成该选区的替换建议。",
 		}
 	}
 	parameters, err := json.Marshal(map[string]any{
@@ -68,17 +74,18 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, sel
 	})
 	return inference.Tool{
 		Name:        "propose_research_task",
-		Description: "为用户明确要求的研究计划、工作流区间、稿件结构检查或选区改稿提交一项建议。工作台按本轮协作方式处理。",
+		Description: "为用户明确要求的研究计划、工作流区间、稿件结构检查、聚焦研究或选区改稿提交一项建议。范围参数最多填写一项。工作台按本轮协作方式处理。",
 		Parameters:  parameters,
 	}, err
 }
 
 func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord, manuscripts []taskInput, selection *manuscriptSelection) (turnProposal, error) {
 	var input struct {
-		Instruction    string          `json:"instruction"`
-		ThroughStep    json.RawMessage `json:"throughStep"`
-		CheckVersionID json.RawMessage `json:"checkVersionId"`
-		EditSelection  json.RawMessage `json:"editSelection"`
+		Instruction     string          `json:"instruction"`
+		ThroughStep     json.RawMessage `json:"throughStep"`
+		CheckVersionID  json.RawMessage `json:"checkVersionId"`
+		FocusVersionIDs json.RawMessage `json:"focusVersionIds"`
+		EditSelection   json.RawMessage `json:"editSelection"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(arguments))
 	decoder.DisallowUnknownFields()
@@ -89,17 +96,25 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 	if !validTaskInstruction(instruction) {
 		return turnProposal{}, errInvalidTaskProposal
 	}
-	if len(input.EditSelection) != 0 {
+	var scopeCount int
+	for _, scope := range []json.RawMessage{input.ThroughStep, input.CheckVersionID, input.FocusVersionIDs, input.EditSelection} {
+		if len(scope) != 0 {
+			scopeCount++
+		}
+	}
+	if scopeCount > 1 {
+		return turnProposal{}, errInvalidTaskProposal
+	}
+	switch {
+	case len(input.EditSelection) != 0:
 		var edit bool
-		if selection == nil || len(input.ThroughStep) != 0 || len(input.CheckVersionID) != 0 ||
-			len(instruction) > maxEditInstructionBytes || json.Unmarshal(input.EditSelection, &edit) != nil || !edit {
+		if selection == nil || len(instruction) > maxEditInstructionBytes || json.Unmarshal(input.EditSelection, &edit) != nil || !edit {
 			return turnProposal{}, errInvalidTaskProposal
 		}
 		return turnProposal{instruction: instruction, editSelection: selection}, nil
-	}
-	if len(input.CheckVersionID) != 0 {
+	case len(input.CheckVersionID) != 0:
 		var id string
-		if len(input.ThroughStep) != 0 || json.Unmarshal(input.CheckVersionID, &id) != nil {
+		if json.Unmarshal(input.CheckVersionID, &id) != nil {
 			return turnProposal{}, errInvalidTaskProposal
 		}
 		for _, source := range manuscripts {
@@ -108,34 +123,43 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 			}
 		}
 		return turnProposal{}, errInvalidTaskProposal
-	}
-	if len(input.ThroughStep) == 0 {
+	case len(input.FocusVersionIDs) != 0:
+		var ids []string
+		if json.Unmarshal(input.FocusVersionIDs, &ids) != nil {
+			return turnProposal{}, errInvalidTaskProposal
+		}
+		files, err := selectFocusInputs(ids, manuscripts)
+		return turnProposal{instruction: instruction, focusInputs: files}, err
+	case len(input.ThroughStep) != 0:
+		var end string
+		if json.Unmarshal(input.ThroughStep, &end) != nil || end == "" {
+			return turnProposal{}, errInvalidTaskProposal
+		}
+		if err := workflow.selectScope(instruction, end); err != nil {
+			return turnProposal{}, err
+		}
+		return turnProposal{workflow: workflow}, nil
+	default:
 		return turnProposal{instruction: instruction}, nil
 	}
-	var end string
-	if err := json.Unmarshal(input.ThroughStep, &end); err != nil || end == "" {
-		return turnProposal{}, errInvalidTaskProposal
-	}
-	if err := workflow.selectScope(instruction, end); err != nil {
-		return turnProposal{}, err
-	}
-	return turnProposal{workflow: workflow}, nil
 }
 
 var errInvalidTaskProposal = errors.New("model proposed an invalid research task")
 
 func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, bool, error) {
 	kind, inputs := "", "[]"
-	source := proposal.checkInput
 	selection := proposal.editSelection
-	if source != nil {
-		kind = manuscriptCheckTask
+	var sources []taskInput
+	switch {
+	case proposal.checkInput != nil:
+		kind, sources = manuscriptCheckTask, []taskInput{*proposal.checkInput}
+	case proposal.focusInputs != nil:
+		kind, sources = focusedResearchTask, proposal.focusInputs
+	case selection != nil:
+		sources = []taskInput{{VersionID: selection.VersionID, Path: selection.Path, SHA256: selection.SHA256}}
 	}
-	if selection != nil {
-		source = &taskInput{VersionID: selection.VersionID, Path: selection.Path, SHA256: selection.SHA256}
-	}
-	if source != nil {
-		body, err := json.Marshal([]taskInput{*source})
+	if len(sources) != 0 {
+		body, err := json.Marshal(sources)
 		if err != nil {
 			return "", false, err
 		}
@@ -158,7 +182,8 @@ func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal
 			return "", false, err
 		}
 	}
-	if mode != turnModeConfirmSteps && mode != turnModeAuto {
+	// The conversation has seen only version metadata. Reading these excerpts needs approval.
+	if kind == focusedResearchTask || (mode != turnModeConfirmSteps && mode != turnModeAuto) {
 		return taskID, false, nil
 	}
 	queued, err := queueTurnTask(ctx, tx, projectID, taskID)

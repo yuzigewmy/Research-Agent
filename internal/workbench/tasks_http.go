@@ -158,6 +158,9 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 	case errors.Is(err, errInvalidCheckInput):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中一份已保存的 Markdown 稿件。")
 		return
+	case errors.Is(err, errInvalidFocusInput):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中一至四份不同的 Markdown 稿件。")
+		return
 	case errors.Is(err, errInvalidTaskInput):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中最多四个不同文件的已保存版本。")
 		return
@@ -196,9 +199,12 @@ func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filename := "research-plan.md"
-	if artifact.sourceSHA256 != "" {
+	switch artifact.kind {
+	case manuscriptCheckTask:
 		filename = "manuscript-check.md"
 		w.Header().Set("X-Source-SHA256", artifact.sourceSHA256)
+	case focusedResearchTask:
+		filename = "focused-research.md"
 	}
 	writeMarkdown(w, r, filename, artifact.markdown)
 }

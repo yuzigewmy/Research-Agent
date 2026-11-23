@@ -78,27 +78,29 @@ type PickerProps = {
   projectId: string
   inputs: TaskInputVersion[]
   disabled: boolean
-  markdownOnly?: boolean
+  markdown?: 'single' | 'multiple'
   onChange: (inputs: TaskInputVersion[]) => void
 }
 
 export function TaskInputVersions(props: PickerProps) {
   const [open, setOpen] = useState(false)
-  const limit = props.markdownOnly ? 1 : taskInputLimit
+  const limit = props.markdown === 'single' ? 1 : taskInputLimit
   return <div className="task-input-body">
     <details className="task-input-disclosure" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>添加工作区文件 <span className="task-note">（已选 {props.inputs.length}/{limit}）</span></summary>
       {open && <FilePicker key={props.projectId} {...props} />}
     </details>
     <p className="task-note">
-      {props.markdownOnly ? '请选择一份已保存的 Markdown 稿件（.md 或 .markdown）。'
-        : `最多选择 ${taskInputLimit} 个文件。确认运行后，每个所选文件开头最多 8 KiB 的文字会发送给研究模型。`}
+      {props.markdown === 'single' ? '请选择一份已保存的 Markdown 稿件（.md 或 .markdown）。'
+        : props.markdown === 'multiple' ? `请选择 1 至 ${taskInputLimit} 份已保存的 Markdown 文件（.md 或 .markdown）。`
+          : `最多选择 ${taskInputLimit} 个文件。确认运行后，每个所选文件开头最多 8 KiB 的文字会发送给研究模型。`}
     </p>
   </div>
 }
 
-function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: PickerProps) {
+function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerProps) {
   const pickerId = useId()
+  const single = markdown === 'single'
   const [page, setPage] = useState<FilePage>({ items: [] })
   const [query, setQuery] = useState<{ cursor?: string }>({})
   const [loading, setLoading] = useState(true)
@@ -106,7 +108,7 @@ function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: Pic
 
   useEffect(() => {
     const controller = new AbortController()
-    void listFiles(projectId, requestSignal(controller), query.cursor, markdownOnly ? 'markdown' : undefined).then((next) => {
+    void listFiles(projectId, requestSignal(controller), query.cursor, markdown ? 'markdown' : undefined).then((next) => {
       if (controller.signal.aborted) return
       setPage((previous) => {
         if (!query.cursor) return next
@@ -119,7 +121,7 @@ function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: Pic
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [markdownOnly, projectId, query])
+  }, [markdown, projectId, query])
 
   function load(cursor?: string) {
     setLoading(true)
@@ -128,9 +130,9 @@ function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: Pic
   }
 
   function select(input: TaskInputVersion, checked: boolean) {
-    if (disabled) return
-    if (markdownOnly) {
-      if (checked && isMarkdownTaskPath(input.path)) onChange([input])
+    if (disabled || (markdown && !isMarkdownTaskPath(input.path))) return
+    if (single) {
+      if (checked) onChange([input])
       return
     }
     const present = inputs.some(({ path }) => path === input.path)
@@ -141,7 +143,7 @@ function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: Pic
 
   const listedPaths = new Set(page.items.map(({ path }) => path))
   const choices = [...inputs.filter(({ path }) => !listedPaths.has(path)), ...page.items]
-    .filter(({ path }) => !markdownOnly || isMarkdownTaskPath(path))
+    .filter(({ path }) => !markdown || isMarkdownTaskPath(path))
   return <div className="task-input-body">
     <div className="task-actions">
       <button className="button outline" type="button" disabled={loading} onClick={() => load()}>刷新文件列表</button>
@@ -149,7 +151,7 @@ function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: Pic
     {loading && <p className="task-note" role="status">正在读取工作区文件…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
     {!loading && !error && !choices.length && <p className="task-note">
-      {markdownOnly ? '工作区暂无已保存的 Markdown 稿件。' : '工作区暂无已保存的文件。'}
+      {markdown ? '工作区暂无已保存的 Markdown 文件。' : '工作区暂无已保存的文件。'}
     </p>}
     {choices.length > 0 && <ul className="task-input-list task-input-choices" role="list" aria-label="可选工作区文件">
       {choices.map(({ path, versionId, sha256 }) => {
@@ -159,8 +161,8 @@ function FilePicker({ projectId, inputs, disabled, markdownOnly, onChange }: Pic
         const input = { path, versionId, sha256 }
         return <li key={path}>
           <label className="task-input-option">
-            <input type={markdownOnly ? 'radio' : 'checkbox'} name={markdownOnly ? pickerId : undefined} checked={!!selected}
-              disabled={disabled || (!selected && (unavailable || (!markdownOnly && inputs.length >= taskInputLimit)))}
+            <input type={single ? 'radio' : 'checkbox'} name={single ? pickerId : undefined} checked={!!selected}
+              disabled={disabled || (!selected && (unavailable || (!single && inputs.length >= taskInputLimit)))}
               onChange={(event) => select(input, event.currentTarget.checked)} />
             <bdi>{path}</bdi>
           </label>

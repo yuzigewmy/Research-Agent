@@ -67,9 +67,13 @@ function instructionError(instruction: string, limit = taskInstructionLimit) {
   return ''
 }
 
-function editInputError(inputs: TaskInputVersion[], markdownOnly: boolean) {
-  if (markdownOnly && (inputs.length !== 1 || !isMarkdownTaskPath(inputs[0].path))) {
+function editInputError(inputs: TaskInputVersion[], kind: Task['kind']) {
+  if (kind === 'manuscript-check' && (inputs.length !== 1 || !isMarkdownTaskPath(inputs[0].path))) {
     return '请选择一份已保存的 Markdown 稿件。'
+  }
+  if (kind === 'focused-research' && (inputs.length < 1 || inputs.length > taskInputLimit
+    || inputs.some(({ path }) => !isMarkdownTaskPath(path)))) {
+    return `请选择 1 至 ${taskInputLimit} 份已保存的 Markdown 文件。`
   }
   return inputs.length > taskInputLimit ? `请将已选文件调整为最多 ${taskInputLimit} 个。` : ''
 }
@@ -102,6 +106,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const proposed = task.status === 'PROPOSED'
   const isManuscriptCheck = task.kind === 'manuscript-check'
   const isSelectionEdit = task.kind === 'selection-edit'
+  const isFocusedResearch = task.kind === 'focused-research'
   const canCancel = proposed || task.status === 'QUEUED' || task.status === 'RUNNING'
   const editing = edit !== undefined
   const saving = pending === `edit:${task.taskId}`
@@ -110,7 +115,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const selectionSource = isSelectionEdit ? currentInputs[0] : undefined
   const inputsChanged = editing && !isSelectionEdit && !sameVersionIds(versionIds(edit.inputs), versionIds(currentInputs))
   const changed = editing && (edit.text.trim() !== task.instruction || inputsChanged)
-  const inputProblem = edit && !isSelectionEdit ? editInputError(edit.inputs, isManuscriptCheck) : ''
+  const inputProblem = edit && !isSelectionEdit ? editInputError(edit.inputs, task.kind) : ''
   const editProblem = proposed && outdated
     ? '任务已有新修订。草稿已保留，请核对上方卡片再继续。'
     : editError?.message
@@ -167,6 +172,10 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         <p className="task-note">输出：稿件结构检查报告</p>
         <p className="task-note">在本机读取整份已保存稿件。稿件正文不会发送给研究模型。</p>
       </div>}
+      {isFocusedResearch && <div>
+        <p className="turn-role">聚焦研究</p>
+        {proposed && <p className="task-note">确认运行后，每份所选 Markdown 版本开头最多 8 KiB 的正文节选会发送给研究模型。</p>}
+      </div>}
       {edit && <p className="task-note">当前任务说明</p>}
       <p className="task-instruction" dir="auto">{task.instruction}</p>
       {showSourceLink && task.sourceTurnId && <p className="task-note">
@@ -191,7 +200,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
           }} />
         {isSelectionEdit ? <p className="task-note">修改说明最多 2 KiB。更换范围时请从稿件重新引用选区。</p>
           : <TaskInputVersions projectId={projectId} inputs={edit.inputs} disabled={pending !== null || !proposed}
-            markdownOnly={isManuscriptCheck} onChange={(inputs) => {
+            markdown={isManuscriptCheck ? 'single' : isFocusedResearch ? 'multiple' : undefined} onChange={(inputs) => {
               setEdit({ ...edit, inputs })
               setEditError(undefined)
             }} />}
@@ -248,7 +257,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       </div>}
       {task.status === 'SUCCEEDED' && !isSelectionEdit && <div className="task-actions">
         <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>
-          {isManuscriptCheck ? '下载检查报告' : '下载 Markdown'}
+          {isManuscriptCheck ? '下载检查报告' : isFocusedResearch ? '下载聚焦研究报告' : '下载 Markdown'}
         </a>
       </div>}
     </li>

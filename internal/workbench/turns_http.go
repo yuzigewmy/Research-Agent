@@ -199,10 +199,12 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 			message = "请核对助手建议的工作流范围。"
 		case proposal.checkInput != nil:
 			message = "请核对要检查的稿件版本。"
+		case proposal.focusInputs != nil:
+			message = "请确认聚焦研究需要读取的稿件版本。"
 		case proposal.editSelection != nil:
 			message = "请核对要修改的稿件选区。"
 		}
-		if turn.Mode == turnModeAuto || (turn.Mode == turnModeConfirmSteps && proposal.workflow == nil) {
+		if (turn.Mode == turnModeAuto || (turn.Mode == turnModeConfirmSteps && proposal.workflow == nil)) && proposal.focusInputs == nil {
 			message = "已整理本轮的执行请求。"
 		}
 		if err := emit(message); err != nil {

@@ -39,8 +39,18 @@ type taskInput struct {
 }
 
 func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID, kind string, ids []string) (string, error) {
-	if kind == manuscriptCheckTask && len(ids) != 1 {
-		return "", errInvalidCheckInput
+	var invalidMarkdown error
+	switch kind {
+	case manuscriptCheckTask:
+		if len(ids) != 1 {
+			return "", errInvalidCheckInput
+		}
+		invalidMarkdown = errInvalidCheckInput
+	case focusedResearchTask:
+		if len(ids) == 0 {
+			return "", errInvalidFocusInput
+		}
+		invalidMarkdown = errInvalidFocusInput
 	}
 	inputs := make([]taskInput, 0, len(ids))
 	paths := make(map[string]bool, len(ids))
@@ -55,8 +65,8 @@ func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID, kind string, 
 		if err != nil {
 			return "", err
 		}
-		if kind == manuscriptCheckTask && !markdownPath(file.Path) {
-			return "", errInvalidCheckInput
+		if invalidMarkdown != nil && !markdownPath(file.Path) {
+			return "", invalidMarkdown
 		}
 		if paths[file.Path] {
 			return "", errInvalidTaskInput
