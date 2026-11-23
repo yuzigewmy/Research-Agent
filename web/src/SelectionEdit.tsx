@@ -20,6 +20,7 @@ interface SelectionEditProps {
 }
 
 const statusLabels = {
+  PROPOSED: '待确认',
   QUEUED: '建议已排队',
   RUNNING: '正在生成建议…',
   CANCELLING: '正在取消',
@@ -29,11 +30,12 @@ const statusLabels = {
   INTERRUPTED: '生成已中断',
 } as const
 const selectionLimit = 8 * 1024
-const instructionLimit = 2 * 1024
+export const selectionEditInstructionLimit = 2 * 1024
 const encoder = new TextEncoder()
 
-type EditRecord = {
+export type SelectionEditRecord = {
   editId: string
+  versionId: string
   status: keyof typeof statusLabels
   original: string
   replacement?: string
@@ -51,21 +53,21 @@ function validId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
 }
 
-function isEditRecord(value: unknown): value is EditRecord {
-  const edit = value as Partial<EditRecord> | null
-  return !!edit && validId(edit.editId) && typeof edit.original === 'string'
+function isEditRecord(value: unknown): value is SelectionEditRecord {
+  const edit = value as Partial<SelectionEditRecord> | null
+  return !!edit && validId(edit.editId) && validId(edit.versionId) && typeof edit.original === 'string'
     && typeof edit.status === 'string' && Object.hasOwn(statusLabels, edit.status)
     && (edit.replacement === undefined || typeof edit.replacement === 'string')
     && (edit.reason === undefined || typeof edit.reason === 'string')
     && (edit.message === undefined || typeof edit.message === 'string')
-    && (edit.appliedVersionId === undefined || typeof edit.appliedVersionId === 'string')
+    && (edit.appliedVersionId === undefined || validId(edit.appliedVersionId))
 }
 
 function isDocument(value: unknown): value is Document {
   return isFileRecord(value) && 'content' in value && typeof value.content === 'string'
 }
 
-function active(edit?: EditRecord) {
+function active(edit?: SelectionEditRecord) {
   return edit?.status === 'QUEUED' || edit?.status === 'RUNNING' || edit?.status === 'CANCELLING'
 }
 
@@ -91,21 +93,55 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
 }
 
-function editPath(route: string, editId: string) {
-  return `${route}/${encodeURIComponent(editId)}`
+function editsPath(projectId: string, versionId: string) {
+  return `/api/v1/projects/${encodeURIComponent(projectId)}/files/versions/${encodeURIComponent(versionId)}/edits`
 }
 
-export function SelectionEdit({ projectId, versionId, ...props }: SelectionEditProps) {
+function editPath(projectId: string, versionId: string, editId: string) {
+  return `${editsPath(projectId, versionId)}/${encodeURIComponent(editId)}`
+}
+
+export function getSelectionEdit(projectId: string, versionId: string, editId: string, signal: AbortSignal) {
+  return request(editPath(projectId, versionId, editId), (value): value is SelectionEditRecord =>
+    isEditRecord(value) && value.editId === editId && value.versionId === versionId, { signal, cache: 'no-store' })
+}
+
+export function applySelectionEdit(projectId: string, versionId: string, editId: string, signal: AbortSignal, expectedPath?: string) {
+  return request(`${editPath(projectId, versionId, editId)}/apply`, (value): value is Document =>
+    isDocument(value) && (expectedPath === undefined || value.path === expectedPath), { method: 'POST', signal })
+}
+
+export function isSelectionEditVersionConflict(error: unknown) {
+  return error instanceof ProjectApiError && error.status === 409
+    && (error.code === 'VERSION' || error.code === 'VERSION_CONFLICT' || error.code === 'REVISION_CONFLICT')
+}
+
+export function SelectionEditPreview({ edit }: { edit: SelectionEditRecord }) {
+  return <>
+    <p>选区原文</p>
+    <pre className="workspace-text" tabIndex={0} aria-label="选区原文" dir="auto">{edit.original}</pre>
+    {edit.status === 'SUCCEEDED' && <>
+      <p>建议替换文本</p>
+      {edit.replacement === undefined ? <p className="form-error" role="alert">未收到替换文本，请重新生成建议。</p>
+        : edit.replacement === '' ? <p className="workspace-note">此建议会删除整个选区。</p>
+        : <pre className="workspace-text" tabIndex={0} aria-label="建议替换文本" dir="auto">{edit.replacement}</pre>}
+      {edit.reason && <p className="workspace-note">修改理由：<bdi>{edit.reason}</bdi></p>}
+    </>}
+  </>
+}
+
+export function SelectionEdit(props: SelectionEditProps) {
+  const { projectId, versionId } = props
   if (!validId(projectId) || !validId(versionId)) return null
-  const route = `/api/v1/projects/${encodeURIComponent(projectId)}/files/versions/${encodeURIComponent(versionId)}/edits`
-  return <VersionSelectionEdit key={route} route={route} {...props} />
+  return <VersionSelectionEdit key={editsPath(projectId, versionId)} {...props} />
 }
 
-function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplied }: Omit<SelectionEditProps, 'projectId' | 'versionId'> & { route: string }) {
+function VersionSelectionEdit({ projectId, versionId, selection, disabled, onApplying, onApplied }: SelectionEditProps) {
+  const route = editsPath(projectId, versionId)
   const id = useId()
   const storageKey = `research.selection-edit:${route}`
   const [editId, setEditId] = useState(() => readSavedEdit(storageKey))
-  const [edit, setEdit] = useState<EditRecord>()
+  const [edit, setEdit] = useState<SelectionEditRecord>()
   const [instruction, setInstruction] = useState('')
   const [pending, setPending] = useState<'create' | 'apply'>()
   const [loadError, setLoadError] = useState('')
@@ -118,7 +154,7 @@ function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplie
   const hasSelection = !!selection?.text && Number.isSafeInteger(selection.startByte)
     && Number.isSafeInteger(selection.endByte) && selection.startByte >= 0 && selectedBytes > 0
   const cleanedInstruction = instruction.trim()
-  const instructionTooLong = encoder.encode(cleanedInstruction).length > instructionLimit
+  const instructionTooLong = encoder.encode(cleanedInstruction).length > selectionEditInstructionLimit
   const generationBlocked = disabled || !!pending || (!!editId && !edit) || active(edit) || conflict
   const canGenerate = !generationBlocked && hasSelection && selectedBytes <= selectionLimit
     && !!cleanedInstruction && !instructionTooLong
@@ -133,9 +169,7 @@ function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplie
 
     async function poll() {
       try {
-        const next = await request(editPath(route, currentId),
-          (value): value is EditRecord => isEditRecord(value) && value.editId === currentId,
-          { signal: requestSignal(controller) })
+        const next = await getSelectionEdit(projectId, versionId, currentId, requestSignal(controller))
         if (controller.signal.aborted) return
         setEdit(next)
         if (active(next)) timer = window.setTimeout(() => void poll(), 2_000)
@@ -149,7 +183,7 @@ function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplie
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [canRead, editId, route])
+  }, [canRead, editId, projectId, versionId])
 
   useEffect(() => () => mutation.current?.abort(), [])
 
@@ -167,7 +201,8 @@ function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplie
         && previous.instruction === cleanedInstruction ? previous
         : { startByte, endByte, instruction: cleanedInstruction, requestId: crypto.randomUUID() }
       attempt.current = input
-      const next = await request(route, isEditRecord, {
+      const next = await request(route, (value): value is SelectionEditRecord =>
+        isEditRecord(value) && value.versionId === versionId, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input), signal: requestSignal(controller),
       })
@@ -193,9 +228,7 @@ function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplie
     onApplying(true)
     setActionError('')
     try {
-      const next = await request(`${editPath(route, edit.editId)}/apply`, isDocument, {
-        method: 'POST', signal: requestSignal(controller),
-      })
+      const next = await applySelectionEdit(projectId, versionId, edit.editId, requestSignal(controller))
       if (controller.signal.aborted) return
       setEdit({ ...edit, appliedVersionId: next.versionId })
       onApplied(next)
@@ -250,17 +283,11 @@ function VersionSelectionEdit({ route, selection, disabled, onApplying, onApplie
     {edit && <div className="workspace-preview">
       <p className="workspace-note" role="status">{edit.appliedVersionId ? '建议已应用' : statusLabels[edit.status]}</p>
       {edit.message && <p className="workspace-note" dir="auto">{edit.message}</p>}
-      <p>选区原文</p>
-      <pre className="workspace-text" tabIndex={0} aria-label="选区原文" dir="auto">{edit.original}</pre>
-      {edit.status === 'SUCCEEDED' && <>
-        <p>建议替换文本</p>
-        {edit.replacement === undefined ? <p className="form-error" role="alert">未收到替换文本，请重新生成建议。</p>
-          : edit.replacement === '' ? <p className="workspace-note">此建议会删除整个选区。</p>
-          : <pre className="workspace-text" tabIndex={0} aria-label="建议替换文本" dir="auto">{edit.replacement}</pre>}
-        {edit.reason && <p className="workspace-note">修改理由：<bdi>{edit.reason}</bdi></p>}
-        {!edit.appliedVersionId && <button className="button primary" type="button" disabled={!canApply}
-          onClick={() => void apply()}>{pending === 'apply' ? '正在应用…' : '应用到稿件'}</button>}
-      </>}
+      <SelectionEditPreview edit={edit} />
+      {edit.status === 'SUCCEEDED' && !edit.appliedVersionId && (
+        <button className="button primary" type="button" disabled={!canApply}
+          onClick={() => void apply()}>{pending === 'apply' ? '正在应用…' : '应用到稿件'}</button>
+      )}
     </div>}
     {conflict && <p className="form-error" role="alert">稿件已有更新，建议仍保留。请重新加载稿件，选中要修改的文字后再生成建议。</p>}
     {actionError && <p className="form-error" role="alert">{actionError}</p>}

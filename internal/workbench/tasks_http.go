@@ -152,6 +152,9 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 	case errors.Is(err, errTaskInputChanged):
 		writeError(w, http.StatusConflict, "TASK_INPUT_CHANGED", taskInputsChangedMessage)
 		return
+	case errors.Is(err, errFixedSelectionScope):
+		writeError(w, http.StatusUnprocessableEntity, "SELECTION_SCOPE_FIXED", "局部改稿可修改 2 KiB 以内的任务说明。要更改范围，请重新引用稿件选区。")
+		return
 	case errors.Is(err, errInvalidCheckInput):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中一份已保存的 Markdown 稿件。")
 		return

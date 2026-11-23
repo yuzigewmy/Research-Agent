@@ -26,7 +26,7 @@ export interface Task {
   revision: number
   status: TaskStatus
   createdAt: string
-  kind?: 'manuscript-check'
+  kind?: 'manuscript-check' | 'selection-edit'
   message?: string
   inputs?: TaskInputVersion[]
   sourceTurnId?: string
@@ -77,12 +77,12 @@ function isTask(value: unknown): value is Task {
     && typeof task.revision === 'number' && Number.isSafeInteger(task.revision) && task.revision >= 1
     && typeof task.status === 'string' && Object.hasOwn(taskStatusLabels, task.status)
     && typeof task.createdAt === 'string' && Number.isFinite(Date.parse(task.createdAt))
-    && (task.kind === undefined || task.kind === 'manuscript-check')
+    && (task.kind === undefined || task.kind === 'manuscript-check' || task.kind === 'selection-edit')
     && (task.message === undefined || typeof task.message === 'string')
     && (task.sourceTurnId === undefined || (typeof task.sourceTurnId === 'string' && task.sourceTurnId.length > 0))
     && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
       && task.inputs.every(isTaskInputVersion)))
-    && (task.kind !== 'manuscript-check' || (task.inputs?.length === 1 && isMarkdownTaskPath(task.inputs[0].path)))
+    && (task.kind === undefined || (task.inputs?.length === 1 && isMarkdownTaskPath(task.inputs[0].path)))
 }
 
 function isTaskPage(value: unknown): value is TaskPage {

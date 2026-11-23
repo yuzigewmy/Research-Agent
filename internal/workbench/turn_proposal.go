@@ -39,12 +39,13 @@ type sendTurnInput struct {
 }
 
 type turnProposal struct {
-	instruction string
-	workflow    *workflowProposalRecord
-	checkInput  *taskInput
+	instruction   string
+	workflow      *workflowProposalRecord
+	checkInput    *taskInput
+	editSelection *manuscriptSelection
 }
 
-func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput) (inference.Tool, error) {
+func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput, selection *manuscriptSelection) (inference.Tool, error) {
 	properties := map[string]any{
 		"instruction": map[string]string{"type": "string", "description": "任务范围、输入和交付要求"},
 	}
@@ -66,21 +67,27 @@ func proposalTool(workflow *workflowProposalRecord, manuscripts []taskInput) (in
 			"type": "string", "enum": ids, "description": "明确要求检查稿件结构时，从 manuscriptVersions 选择对应稿件的 versionId。与 throughStep 互斥。",
 		}
 	}
+	if selection != nil {
+		properties["editSelection"] = map[string]any{
+			"type": "boolean", "enum": []bool{true}, "description": "用户明确要求改写本轮附带的稿件选区时填写 true。只生成该选区的替换建议。此项与区间运行及结构检查互斥。",
+		}
+	}
 	parameters, err := json.Marshal(map[string]any{
 		"type": "object", "required": []string{"instruction"}, "additionalProperties": false, "properties": properties,
 	})
 	return inference.Tool{
 		Name:        "propose_research_task",
-		Description: "为用户明确要求的研究计划、工作流区间或稿件结构检查提出一项待确认建议。",
+		Description: "为用户明确要求的研究计划、工作流区间、稿件结构检查或选区改稿提出一项待确认建议。",
 		Parameters:  parameters,
 	}, err
 }
 
-func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord, manuscripts []taskInput) (turnProposal, error) {
+func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalRecord, manuscripts []taskInput, selection *manuscriptSelection) (turnProposal, error) {
 	var input struct {
 		Instruction    string          `json:"instruction"`
 		ThroughStep    json.RawMessage `json:"throughStep"`
 		CheckVersionID json.RawMessage `json:"checkVersionId"`
+		EditSelection  json.RawMessage `json:"editSelection"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(arguments))
 	decoder.DisallowUnknownFields()
@@ -90,6 +97,14 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 	instruction := strings.TrimSpace(input.Instruction)
 	if !validTaskInstruction(instruction) {
 		return turnProposal{}, errInvalidTaskProposal
+	}
+	if len(input.EditSelection) != 0 {
+		var edit bool
+		if selection == nil || len(input.ThroughStep) != 0 || len(input.CheckVersionID) != 0 ||
+			len(instruction) > maxEditInstructionBytes || json.Unmarshal(input.EditSelection, &edit) != nil || !edit {
+			return turnProposal{}, errInvalidTaskProposal
+		}
+		return turnProposal{instruction: instruction, editSelection: selection}, nil
 	}
 	if len(input.CheckVersionID) != 0 {
 		var id string
@@ -120,17 +135,35 @@ var errInvalidTaskProposal = errors.New("model proposed an invalid research task
 
 func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, error) {
 	kind, inputs := "", "[]"
-	if proposal.checkInput != nil {
-		body, err := json.Marshal([]taskInput{*proposal.checkInput})
+	source := proposal.checkInput
+	selection := proposal.editSelection
+	if source != nil {
+		kind = manuscriptCheckTask
+	}
+	if selection != nil {
+		source = &taskInput{VersionID: selection.VersionID, Path: selection.Path, SHA256: selection.SHA256}
+	}
+	if source != nil {
+		body, err := json.Marshal([]taskInput{*source})
 		if err != nil {
 			return "", err
 		}
-		kind, inputs = manuscriptCheckTask, string(body)
+		inputs = string(body)
 	}
-	var taskID string
-	err := tx.QueryRowContext(ctx, `INSERT INTO tasks (project_id, task_id, instruction, status, created_at, source_turn_id, kind, inputs_json)
-		SELECT project_id, ?, ?, 'PROPOSED', ?, turn_id, ?, ? FROM turns
-		WHERE turn_id = ? AND status = 'RUNNING' AND mode = 'CONFIRM' RETURNING task_id`,
-		rand.Text(), proposal.instruction, time.Now().UTC().Format(createdAtLayout), kind, inputs, turnID).Scan(&taskID)
-	return taskID, err
+	taskID := rand.Text()
+	var projectID string
+	if err := tx.QueryRowContext(ctx, `INSERT INTO tasks
+		(project_id, task_id, instruction, status, created_at, source_turn_id, kind, inputs_json, selection_edit)
+		SELECT project_id, ?, ?, 'PROPOSED', ?, turn_id, ?, ?, ? FROM turns
+		WHERE turn_id = ? AND status = 'RUNNING' AND mode = 'CONFIRM' RETURNING project_id`,
+		taskID, proposal.instruction, time.Now().UTC().Format(createdAtLayout), kind, inputs, selection != nil, turnID).
+		Scan(&projectID); err != nil {
+		return "", err
+	}
+	if selection != nil {
+		if err := insertSelectionEdit(ctx, tx, projectID, taskID, taskID, selection.manuscriptSelectionInput, selection.Text, reviewFindingRef{}); err != nil {
+			return "", err
+		}
+	}
+	return taskID, nil
 }

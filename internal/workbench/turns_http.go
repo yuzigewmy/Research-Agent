@@ -166,7 +166,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 	}
 	var arguments json.RawMessage
 	if turn.Mode == turnModeConfirm {
-		tool, err := proposalTool(workflow, manuscripts)
+		tool, err := proposalTool(workflow, manuscripts, turn.ManuscriptSelection)
 		if err != nil {
 			return turnProposal{}, err
 		}
@@ -183,7 +183,7 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		}
 		return turnProposal{}, nil
 	}
-	proposal, err := parseTurnProposal(arguments, workflow, manuscripts)
+	proposal, err := parseTurnProposal(arguments, workflow, manuscripts, turn.ManuscriptSelection)
 	if err != nil {
 		return turnProposal{}, err
 	}
@@ -194,6 +194,8 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 			message = "请核对助手建议的工作流范围。"
 		case proposal.checkInput != nil:
 			message = "请核对要检查的稿件版本。"
+		case proposal.editSelection != nil:
+			message = "请核对要修改的稿件选区。"
 		}
 		if err := emit(message); err != nil {
 			return turnProposal{}, err

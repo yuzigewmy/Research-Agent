@@ -26,7 +26,7 @@ type turnTaskResult struct {
 func pendingTurnTaskResults(ctx context.Context, tx *sql.Tx, projectID string) ([]turnTaskResult, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT task_id, source_turn_id, instruction FROM tasks
 		WHERE project_id = ? AND source_turn_id IS NOT NULL AND status = 'SUCCEEDED' AND result_synced_turn_id IS NULL
-		ORDER BY ordinal LIMIT ?`, projectID, maxTurnTaskResults)
+		AND `+standaloneTask+` ORDER BY ordinal LIMIT ?`, projectID, maxTurnTaskResults)
 	if err != nil {
 		return nil, err
 	}

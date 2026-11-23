@@ -11,9 +11,13 @@ import (
 
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
 	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck,
-	inputs_json, COALESCE(source_turn_id, ''), automatic_review, kind`
+	inputs_json, COALESCE(source_turn_id, ''), automatic_review,
+	CASE WHEN ` + turnSelectionEdit + ` THEN 'selection-edit' ELSE kind END`
 
 const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0 AND automatic_review = 0`
+const turnSelectionEdit = `selection_edit = 1 AND source_turn_id IS NOT NULL`
+const taskCardFilter = `(` + standaloneTask + ` OR (` + turnSelectionEdit + `))`
+const selectionEditTask = "selection-edit"
 
 const nextTaskQueuePosition = `(SELECT COALESCE(MAX(queued_seq), 0) + 1 FROM tasks
 	WHERE project_id = ? AND status = 'QUEUED')`
@@ -37,8 +41,9 @@ const (
 )
 
 var (
-	errTaskRevision = errors.New("task revision changed")
-	errTaskState    = errors.New("task cannot be confirmed in its current state")
+	errTaskRevision        = errors.New("task revision changed")
+	errTaskState           = errors.New("task cannot be confirmed in its current state")
+	errFixedSelectionScope = errors.New("selection edit scope is fixed")
 )
 
 // Task is the public record of a proposal and its execution.
@@ -139,7 +144,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 
 func (s *Store) listTasks(ctx context.Context, projectID, sourceTurnID string, before int64, limit int) ([]Task, error) {
 	query := `SELECT ` + taskColumns + ` FROM tasks
-		WHERE project_id = ? AND ` + standaloneTask + ` AND (? = 0 OR ordinal < ?)`
+		WHERE project_id = ? AND ` + taskCardFilter + ` AND (? = 0 OR ordinal < ?)`
 	args := []any{projectID, before, before}
 	if sourceTurnID != "" {
 		query += ` AND source_turn_id = ?`
@@ -232,6 +237,9 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 		switch req.Action {
 		case editTask:
 			instruction = req.Instruction
+			if task.Kind == selectionEditTask && (req.InputVersionIDs != nil || len(instruction) > maxEditInstructionBytes) {
+				return Task{}, false, errFixedSelectionScope
+			}
 			if req.InputVersionIDs != nil {
 				inputs, err = resolveTaskInputs(ctx, tx, req.ProjectID, task.Kind, req.InputVersionIDs)
 				if err != nil {
@@ -269,7 +277,7 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 
 func lookupTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (Task, error) {
 	return scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks
-		WHERE project_id = ? AND task_id = ? AND `+standaloneTask, projectID, taskID))
+		WHERE project_id = ? AND task_id = ? AND `+taskCardFilter, projectID, taskID))
 }
 
 func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, error) {

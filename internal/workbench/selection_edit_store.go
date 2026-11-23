@@ -131,13 +131,19 @@ func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID str
 		return selectionEdit{}, false, err
 	}
 	original := doc.Content[start:end]
-	if _, err := tx.ExecContext(ctx, `INSERT INTO selection_edits
-		(project_id, task_id, request_id, source_version_id, start_byte, end_byte, original, review_id, finding_number)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0))`,
-		projectID, id, req.RequestID, doc.VersionID, start, end, original, finding.reviewID, finding.number); err != nil {
+	if err := insertSelectionEdit(ctx, tx, projectID, id, req.RequestID,
+		manuscriptSelectionInput{VersionID: doc.VersionID, StartByte: start, EndByte: end}, original, finding); err != nil {
 		return selectionEdit{}, false, err
 	}
 	return selectionEdit{EditID: id, VersionID: doc.VersionID, Status: taskQueued, Original: original}, true, tx.Commit()
+}
+
+func insertSelectionEdit(ctx context.Context, tx *sql.Tx, projectID, taskID, requestID string, source manuscriptSelectionInput, original string, finding reviewFindingRef) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO selection_edits
+		(project_id, task_id, request_id, source_version_id, start_byte, end_byte, original, review_id, finding_number)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0))`,
+		projectID, taskID, requestID, source.VersionID, source.StartByte, source.EndByte, original, finding.reviewID, finding.number)
+	return err
 }
 
 func (s *Store) applySelectionEdit(ctx context.Context, projectID, versionID, editID string) (WorkspaceDocument, error) {

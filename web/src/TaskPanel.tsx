@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
+import { selectionEditInstructionLimit } from './SelectionEdit'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
+import { TaskSelectionEdit } from './TaskSelectionEdit'
 import {
   changeTask, conversationTurnAnchor, editTask, isMarkdownTaskPath, isTaskActive, listTasks, proposeTask, refreshTasks,
   taskArtifactPath, taskInputLimit, taskInstructionLimit, taskStatusLabels,
@@ -58,10 +60,10 @@ function rebaseInputs(draft: InstructionDraft, latest: TaskInputVersion[], singl
   return [...merged.values()]
 }
 
-function instructionError(instruction: string) {
+function instructionError(instruction: string, limit = taskInstructionLimit) {
   if (!instruction) return '请输入任务说明。'
   if (instruction.includes('\0')) return '说明中不能包含空字符。'
-  if (instructionEncoder.encode(instruction).length > taskInstructionLimit) return '任务说明不能超过 8 KiB。'
+  if (instructionEncoder.encode(instruction).length > limit) return `任务说明不能超过 ${limit / 1024} KiB。`
   return ''
 }
 
@@ -83,7 +85,7 @@ function mergeTasks(current: Task[], incoming: Task[]) {
   )
 }
 
-function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink }: {
+function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink, refreshVersion }: {
   projectId: string
   task: Task
   statusId: string
@@ -91,6 +93,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   pending: string | null
   onAction: (mutation: CardMutation) => Promise<MutationResult | undefined>
   showSourceLink: boolean
+  refreshVersion: number
 }) {
   const [edit, setEdit] = useState<InstructionDraft>()
   const [editError, setEditError] = useState<{ message: string; invalid?: boolean }>()
@@ -98,14 +101,16 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const editField = useRef<HTMLTextAreaElement>(null)
   const proposed = task.status === 'PROPOSED'
   const isManuscriptCheck = task.kind === 'manuscript-check'
+  const isSelectionEdit = task.kind === 'selection-edit'
   const canCancel = proposed || task.status === 'QUEUED' || task.status === 'RUNNING'
   const editing = edit !== undefined
   const saving = pending === `edit:${task.taskId}`
   const outdated = editing && edit.revision !== task.revision
   const currentInputs = task.inputs ?? []
-  const inputsChanged = editing && !sameVersionIds(versionIds(edit.inputs), versionIds(currentInputs))
+  const selectionSource = isSelectionEdit ? currentInputs[0] : undefined
+  const inputsChanged = editing && !isSelectionEdit && !sameVersionIds(versionIds(edit.inputs), versionIds(currentInputs))
   const changed = editing && (edit.text.trim() !== task.instruction || inputsChanged)
-  const inputProblem = edit ? editInputError(edit.inputs, isManuscriptCheck) : ''
+  const inputProblem = edit && !isSelectionEdit ? editInputError(edit.inputs, isManuscriptCheck) : ''
   const editProblem = proposed && outdated
     ? '任务已有新修订。草稿已保留，请核对上方卡片再继续。'
     : editError?.message
@@ -118,7 +123,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
     event.preventDefault()
     if (!edit || !changed || !proposed || outdated || inputProblem || pending !== null) return
     const instruction = edit.text.trim()
-    const message = instructionError(instruction)
+    const message = instructionError(instruction, isSelectionEdit ? selectionEditInstructionLimit : taskInstructionLimit)
     if (message) {
       setEditError({ message, invalid: true })
       editField.current?.focus()
@@ -131,11 +136,12 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
     })
     if (result?.ok) {
       setEdit(undefined)
-      setInputConflict(undefined)
+      if (!isSelectionEdit) setInputConflict(undefined)
     } else if (result) setEditError({ message: result.message })
   }
 
-  const confirmationConflict = proposed && inputConflict?.revision === task.revision ? inputConflict.message : undefined
+  const confirmationConflict = proposed && inputConflict && (isSelectionEdit || inputConflict.revision === task.revision)
+    ? inputConflict.message : undefined
 
   async function confirm() {
     if (editing || confirmationConflict) return
@@ -166,8 +172,13 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       {showSourceLink && task.sourceTurnId && <p className="task-note">
         <a href={`#${encodeURIComponent(conversationTurnAnchor(task.sourceTurnId))}`}>回到原消息</a>
       </p>}
-      {proposed && task.sourceTurnId && !isManuscriptCheck && <p className="task-note">{turnSourceNotice}</p>}
-      <TaskInputSummary projectId={projectId} inputs={task.inputs} />
+      {proposed && task.sourceTurnId && !isManuscriptCheck && !isSelectionEdit && <p className="task-note">{turnSourceNotice}</p>}
+      {selectionSource ? <>
+        <p className="turn-role">局部改稿</p>
+        {proposed && <p className="task-note">确认运行后，模型会收到选区、相邻文字和修改要求。核对建议后可保存为新版本。</p>}
+        <TaskSelectionEdit projectId={projectId} taskId={task.taskId} source={selectionSource}
+          status={task.status} revision={task.revision} refreshVersion={refreshVersion} />
+      </> : <TaskInputSummary projectId={projectId} inputs={task.inputs} />}
       {confirmationConflict && <p className="form-error" role="alert">{confirmationConflict}</p>}
       {edit && <form className="field" onSubmit={(event) => void save(event)} noValidate aria-busy={saving}>
         <label htmlFor={`${statusId}-edit`}>修改任务说明</label>
@@ -178,11 +189,12 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
             setEdit({ ...edit, text: event.currentTarget.value })
             setEditError(undefined)
           }} />
-        <TaskInputVersions projectId={projectId} inputs={edit.inputs} disabled={pending !== null || !proposed}
-          markdownOnly={isManuscriptCheck} onChange={(inputs) => {
-            setEdit({ ...edit, inputs })
-            setEditError(undefined)
-          }} />
+        {isSelectionEdit ? <p className="task-note">修改说明最多 2 KiB。更换范围时请从稿件重新引用选区。</p>
+          : <TaskInputVersions projectId={projectId} inputs={edit.inputs} disabled={pending !== null || !proposed}
+            markdownOnly={isManuscriptCheck} onChange={(inputs) => {
+              setEdit({ ...edit, inputs })
+              setEditError(undefined)
+            }} />}
         {!proposed && <p className="task-note" role="status">任务已离开待确认状态。草稿仍可复制。</p>}
         {editProblem && <p className="form-error" role="alert" id={`${statusId}-edit-error`}>{editProblem}</p>}
         {inputProblem && <p className="form-error" role="alert">{inputProblem}</p>}
@@ -192,7 +204,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
               setEdit({
                 text: edit.text.trim() === edit.baseInstruction ? task.instruction : edit.text,
                 revision: task.revision,
-                inputs: rebaseInputs(edit, currentInputs, isManuscriptCheck),
+                inputs: isSelectionEdit ? currentInputs : rebaseInputs(edit, currentInputs, isManuscriptCheck),
                 baseInstruction: task.instruction,
                 baseInputs: currentInputs,
               })
@@ -234,7 +246,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
           {pending === `cancel:${task.taskId}` ? '正在提交…' : '取消任务'}
         </button>
       </div>}
-      {task.status === 'SUCCEEDED' && <div className="task-actions">
+      {task.status === 'SUCCEEDED' && !isSelectionEdit && <div className="task-actions">
         <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>
           {isManuscriptCheck ? '下载检查报告' : '下载 Markdown'}
         </a>
@@ -419,9 +431,13 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
       const editing = mutation.kind === 'edit'
       const inputChanged = code === 'TASK_INPUT_CHANGED'
       if (inputChanged) {
-        message = mutation.kind === 'confirm'
-          ? '任务所用文件已有新版本。请通过「编辑说明」刷新文件列表并替换旧版本，然后重新确认。'
-          : '所选文件已有新版本。草稿已保留，请刷新文件列表并替换旧版本后再提交。'
+        if (mutation.kind !== 'propose' && mutation.task.kind === 'selection-edit') {
+          message = '稿件已有新版本。请取消此任务，在最新稿件中重新选取文字并发送。'
+        } else {
+          message = mutation.kind === 'confirm'
+            ? '任务所用文件已有新版本。请通过「编辑说明」刷新文件列表并替换旧版本，然后重新确认。'
+            : '所选文件已有新版本。草稿已保留，请刷新文件列表并替换旧版本后再提交。'
+        }
       }
       const refreshConflict = inputChanged || code === 'REVISION_CONFLICT'
         || (editing && (code === 'TASK_STATE_CONFLICT' || code === 'REQUEST_ID_CONFLICT'))
@@ -506,7 +522,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
       {tasks.length > 0 && <ol className="task-list" aria-label="研究计划任务">
         {tasks.map((task) => <TaskCard key={task.taskId} task={task} projectId={projectId}
           statusId={`${panelId}-${task.taskId}`} modelConfigured={configured === true} pending={pending}
-          onAction={mutate} showSourceLink={!sourceTurnId} />)}
+          onAction={mutate} showSourceLink={!sourceTurnId} refreshVersion={reload} />)}
       </ol>}
       {!loading && !queueError && tasks.length === 0 && <p className="task-note">提交提议后，可在此查看任务进度并下载计划。</p>}
       {proposedTaskId && <details>
