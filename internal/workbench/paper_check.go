@@ -9,11 +9,28 @@ import (
 
 var paperHeading = regexp.MustCompile(`^#{1,6}\s+(.+)$`)
 
+// fenceLine 识别行首至少三个连续的反引号或波浪号。
+// length 是这串标记的数量，rest 是其后的文本。
+func fenceLine(line string) (marker byte, length int, rest string, ok bool) {
+	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
+		return 0, 0, "", false
+	}
+	marker = line[0]
+	for length < len(line) && line[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, "", false
+	}
+	return marker, length, line[length:], true
+}
+
 // paperCheck reports structural signals for the supplied Markdown version.
 func paperCheck(source string) string {
 	sections := []struct {
 		name    string
 		aliases []string
+		missing string
 		line    int
 	}{
 		{name: "摘要", aliases: []string{"摘要", "abstract"}},
@@ -21,21 +38,30 @@ func paperCheck(source string) string {
 		{name: "方法或证据", aliases: []string{"方法", "证据", "methods", "methodology", "evidence"}},
 		{name: "结论", aliases: []string{"结论", "结语", "conclusion", "conclusions"}},
 		{name: "局限", aliases: []string{"局限", "不足", "limitations"}},
+		// 只确认标题存在，不判断披露正文。英文别名使用小写，以便和下面的标题归一化比较。
+		{name: "AI 使用披露", aliases: []string{
+			"ai 使用披露", "ai使用披露", "ai 使用声明", "ai使用声明",
+			"人工智能使用声明", "人工智能使用披露",
+			"ai use disclosure", "ai usage disclosure", "artificial intelligence use disclosure",
+		}, missing: "未识别到对应标题。请按投稿要求核对。"},
 	}
 	var placeholders []int
-	var fence string
+	var fenceMarker byte
+	var fenceLen int
 	for index, raw := range strings.Split(source, "\n") {
 		line := strings.TrimSpace(raw)
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			marker := line[:3]
-			if fence == "" {
-				fence = marker
-			} else if fence == marker && strings.Trim(line, marker[:1]) == "" {
-				fence = ""
+		if marker, length, rest, ok := fenceLine(line); ok {
+			// 关闭围栏须为同种标记，数量不短于开头，且标记后只有空白。
+			if fenceLen == 0 {
+				fenceMarker = marker
+				fenceLen = length
+			} else if marker == fenceMarker && length >= fenceLen && strings.TrimSpace(rest) == "" {
+				fenceMarker = 0
+				fenceLen = 0
 			}
 			continue
 		}
-		if fence != "" {
+		if fenceLen != 0 {
 			continue
 		}
 		if match := paperHeading.FindStringSubmatch(line); match != nil && !strings.HasPrefix(line, "# ") {
@@ -57,6 +83,8 @@ func paperCheck(source string) string {
 	for _, section := range sections {
 		if section.line > 0 {
 			fmt.Fprintf(&report, "- %s：已识别，第 %d 行。\n", section.name, section.line)
+		} else if section.missing != "" {
+			fmt.Fprintf(&report, "- %s：%s\n", section.name, section.missing)
 		} else {
 			fmt.Fprintf(&report, "- %s：请核对，未识别到对应标题。\n", section.name)
 		}
