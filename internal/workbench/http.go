@@ -34,6 +34,7 @@ type HandlerConfig struct {
 // NewHandler serves the API and files from a trusted web build directory.
 func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
+	registerModelConnection(mux, config.Model)
 	conversation{store: store, model: config.Model}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model}.register(mux)

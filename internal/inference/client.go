@@ -71,6 +71,11 @@ func New(config Config) (*Client, error) {
 	}, nil
 }
 
+// ModelInfo reports the configured model and reasoning effort for diagnostics.
+func (c *Client) ModelInfo() (model, reasoningEffort string) {
+	return c.model, c.reasoningEffort
+}
+
 type chatTool struct {
 	Type     string `json:"type"`
 	Function Tool   `json:"function"`

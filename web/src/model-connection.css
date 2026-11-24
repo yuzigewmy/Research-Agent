@@ -1,0 +1,14 @@
+.model-connection { margin-block-end: 1.25rem; }
+.model-connection summary { color: var(--green); font-weight: 650; cursor: pointer; }
+.model-connection-body {
+  display: grid;
+  gap: 0.625rem;
+  margin-block-start: 0.625rem;
+  overflow-wrap: anywhere;
+}
+.model-connection-note { color: var(--muted); font-size: 0.875rem; max-inline-size: 65ch; }
+.model-connection-settings { display: flex; flex-wrap: wrap; gap: 0.375rem 1.5rem; }
+.model-connection-settings > div { min-inline-size: 0; }
+.model-connection-settings dt { color: var(--muted); font-size: 0.875rem; }
+.model-connection-body > .button { justify-self: start; }
+.model-connection .button:disabled { cursor: default; opacity: 0.62; }

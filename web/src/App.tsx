@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { CreateProjectForm } from './CreateProjectForm'
+import { ModelConnection } from './ModelConnection'
 import { ProjectDetails } from './ProjectDetails'
 import { ProjectDraftPanel } from './ProjectDraftPanel'
 import { ProjectList, useProjectList } from './ProjectList'
@@ -96,6 +97,7 @@ function Workbench() {
   return (
     <main className="workbench">
       <div className="masthead"><h1>研究工作台</h1></div>
+      <ModelConnection />
       <div className="workbench-grid">
         <section className="project-panel" aria-labelledby="workspace-title">
           <header className="panel-heading">
