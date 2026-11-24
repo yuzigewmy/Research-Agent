@@ -14,6 +14,7 @@ func paperCheck(source string) string {
 	sections := []struct {
 		name    string
 		aliases []string
+		missing string
 		line    int
 	}{
 		{name: "摘要", aliases: []string{"摘要", "abstract"}},
@@ -21,6 +22,12 @@ func paperCheck(source string) string {
 		{name: "方法或证据", aliases: []string{"方法", "证据", "methods", "methodology", "evidence"}},
 		{name: "结论", aliases: []string{"结论", "结语", "conclusion", "conclusions"}},
 		{name: "局限", aliases: []string{"局限", "不足", "limitations"}},
+		// 只确认标题存在，不判断披露正文。英文别名使用小写，以便和下面的标题归一化比较。
+		{name: "AI 使用披露", aliases: []string{
+			"ai 使用披露", "ai使用披露", "ai 使用声明", "ai使用声明",
+			"人工智能使用声明", "人工智能使用披露",
+			"ai use disclosure", "ai usage disclosure", "artificial intelligence use disclosure",
+		}, missing: "未识别到对应标题。请按投稿要求核对。"},
 	}
 	var placeholders []int
 	var fence string
@@ -57,6 +64,8 @@ func paperCheck(source string) string {
 	for _, section := range sections {
 		if section.line > 0 {
 			fmt.Fprintf(&report, "- %s：已识别，第 %d 行。\n", section.name, section.line)
+		} else if section.missing != "" {
+			fmt.Fprintf(&report, "- %s：%s\n", section.name, section.missing)
 		} else {
 			fmt.Fprintf(&report, "- %s：请核对，未识别到对应标题。\n", section.name)
 		}
