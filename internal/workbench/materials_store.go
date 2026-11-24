@@ -157,9 +157,16 @@ func (s *Store) getMaterial(ctx context.Context, projectID, materialID string) (
 		FROM materials WHERE project_id = ? AND material_id = ?`, projectID, materialID))
 }
 
-func (s *Store) listMaterials(ctx context.Context, projectID string, cursor int64, limit int) ([]Material, error) {
-	return s.queryMaterials(ctx, `SELECT `+materialColumns+` FROM materials
-		WHERE project_id = ? AND (? = 0 OR ordinal < ?) ORDER BY ordinal DESC LIMIT ?`, projectID, cursor, cursor, limit)
+func (s *Store) listMaterials(ctx context.Context, projectID, search string, cursor int64, limit int) ([]Material, error) {
+	query := `SELECT ` + materialColumns + ` FROM materials WHERE project_id = ?`
+	args := []any{projectID}
+	if search != "" {
+		query += ` AND instr(name, ?) > 0`
+		args = append(args, search)
+	}
+	query += ` AND (? = 0 OR ordinal < ?) ORDER BY ordinal DESC LIMIT ?`
+	args = append(args, cursor, cursor, limit)
+	return s.queryMaterials(ctx, query, args...)
 }
 
 func (s *Store) queryMaterials(ctx context.Context, query string, args ...any) ([]Material, error) {

@@ -61,9 +61,12 @@ function materialPath(projectId: string, materialId: string) {
   return `${materialsPath(projectId)}/${encodeURIComponent(materialId)}`
 }
 
-export async function listMaterials(projectId: string, signal: AbortSignal, cursor?: string) {
-  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
-  return request(materialsPath(projectId) + query, isMaterialPage, { signal })
+export async function listMaterials(projectId: string, signal: AbortSignal, cursor?: string, q?: string) {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  if (cursor) params.set('cursor', cursor)
+  const query = params.toString()
+  return request(materialsPath(projectId) + (query ? `?${query}` : ''), isMaterialPage, { signal })
 }
 
 export async function uploadMaterial(projectId: string, file: File, signal: AbortSignal) {
