@@ -18,7 +18,7 @@ import (
 
 const (
 	workspaceDatabase      = "projects.sqlite3"
-	workspaceSchemaVersion = 50
+	workspaceSchemaVersion = 51
 	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
@@ -86,7 +86,7 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	if err := migrate(db); err != nil {
+	if err := migrate(db, workspaceSchemaVersion); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB, target int) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -111,7 +111,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > workspaceSchemaVersion {
+	if version < 0 || version > target {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -368,6 +368,11 @@ func migrate(db *sql.DB) error {
 	}
 	if version < 50 {
 		if _, err := tx.Exec(projectTitleSchema); err != nil {
+			return err
+		}
+	}
+	if version < 51 && target >= 51 {
+		if _, err := tx.Exec(experimentComparisonSchema); err != nil {
 			return err
 		}
 	}

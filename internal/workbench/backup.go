@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	backupVersion      = 1
-	backupManifestName = "manifest.json"
-	backupManifestMax  = 16 << 20
+	backupVersion            = 1
+	backupManifestName       = "manifest.json"
+	backupManifestMax        = 16 << 20
+	firstBackupSchemaVersion = 50
 )
 
 type backupFile struct {
@@ -182,10 +183,10 @@ func backupInventory(ctx context.Context, databasePath string) (int, []backupFil
 	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return 0, nil, err
 	}
-	if version != workspaceSchemaVersion {
+	if version < firstBackupSchemaVersion || version > workspaceSchemaVersion {
 		return 0, nil, fmt.Errorf("请用支持第 %d 版资料库的程序恢复此备份。", version)
 	}
-	if err := verifyBackupDatabase(ctx, db); err != nil {
+	if err := verifyBackupDatabase(ctx, db, version); err != nil {
 		return 0, nil, err
 	}
 	rows, err := db.QueryContext(ctx, `SELECT sha256, size FROM materials

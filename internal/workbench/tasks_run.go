@@ -81,6 +81,9 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		if task.automaticReview {
 			deadline = 15 * time.Minute
 		}
+		if task.Kind == experimentComparisonTask {
+			deadline = 5 * time.Second
+		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
 		worker.taskID, worker.stop = task.TaskID, stop
 		workers.mu.Unlock()
@@ -93,6 +96,15 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 				message = "稿件检查未完成。请核对已保存的稿件后重新提出检查。"
 			case focusedResearchTask:
 				message = "聚焦研究未完成。请核对输入和模型连接后重新提出任务。"
+			case experimentComparisonTask:
+				message = "未能完成本地计算。请核对数据文件后重新提交。"
+				var invalid experimentDataError
+				if errors.As(err, &invalid) {
+					message = invalid.Error()
+				}
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					message = "计算超时。请缩小数据范围后重新提交。"
+				}
 			}
 		}
 		if task.workflowRunID != "" && status == taskFailed {
@@ -164,6 +176,7 @@ func (workers *taskWorkers) close() {
 
 type taskResult struct {
 	markdown         string
+	jsonArtifact     string
 	findings         []reviewFinding
 	topicData        string
 	reviewStopReason string
@@ -182,6 +195,11 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	switch {
 	case task.Kind == manuscriptCheckTask:
 		return s.runManuscriptCheck(ctx, projectID, task.Inputs[0])
+	case task.Kind == experimentComparisonTask:
+		if len(task.Inputs) != 1 {
+			return taskResult{}, experimentDataError(errExperimentInput.Error())
+		}
+		return s.runExperimentComparison(ctx, projectID, task.Inputs[0])
 	case task.automaticReview:
 		return s.runAutomaticReview(ctx, model, projectID, task.TaskID)
 	case task.reviewVersionID != "":

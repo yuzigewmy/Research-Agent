@@ -100,6 +100,7 @@ func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 		Instruction     string   `json:"instruction"`
 		InputVersionIDs []string `json:"inputVersionIds"`
 		SourceTurnID    string   `json:"sourceTurnId"`
+		Kind            string   `json:"kind"`
 	}
 	if !readJSON(w, r, &input, 64<<10) {
 		return
@@ -109,8 +110,12 @@ func (api researchTasks) propose(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号和 8 KiB 以内的非空任务说明。")
 		return
 	}
+	if input.Kind != "" && (input.Kind != experimentComparisonTask || input.SourceTurnID != "") {
+		writeError(w, http.StatusBadRequest, "INVALID_TASK_KIND", "请在项目的任务面板提交配对指标对比。")
+		return
+	}
 	api.apply(w, r, taskRequest{ProjectID: r.PathValue("id"), Action: proposeTask, RequestID: input.RequestID,
-		Instruction: input.Instruction, InputVersionIDs: input.InputVersionIDs, SourceTurnID: input.SourceTurnID})
+		Instruction: input.Instruction, InputVersionIDs: input.InputVersionIDs, SourceTurnID: input.SourceTurnID, Kind: input.Kind})
 }
 
 func validTaskInstruction(instruction string) bool {
@@ -173,6 +178,9 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 	case errors.Is(err, errInvalidFocusInput):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中一至四份不同的 Markdown 稿件。")
 		return
+	case errors.Is(err, errExperimentInput):
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", errExperimentInput.Error())
+		return
 	case errors.Is(err, errInvalidTaskInput):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_TASK_INPUT", "请选择此项目中最多四个不同文件的已保存版本。")
 		return
@@ -217,6 +225,10 @@ func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Source-SHA256", artifact.sourceSHA256)
 	case focusedResearchTask:
 		filename = "focused-research.md"
+	case experimentComparisonTask:
+		w.Header().Set("X-Source-SHA256", artifact.sourceSHA256)
+		writeTextAttachment(w, r, "experiment-comparison.json", "application/json", artifact.jsonArtifact)
+		return
 	}
 	writeMarkdown(w, r, filename, artifact.markdown)
 }

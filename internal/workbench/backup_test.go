@@ -183,6 +183,74 @@ func TestWorkspaceBackupRestoresVersionsAndRejectsDamagedObjects(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBackupRestoresSchema50AndOpensWithCurrentVersion(t *testing.T) {
+	ctx, root := t.Context(), t.TempDir()
+	legacy, err := sql.Open("sqlite", filepath.Join(root, "legacy.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.Close()
+	legacy.SetMaxOpenConns(1)
+	if err := migrate(legacy, 50); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{db: legacy, objectsDir: filepath.Join(root, "objects")}
+	if err := os.Mkdir(store.objectsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	project, _, err := store.createProject(ctx, createProjectInput{RequestID: "legacy", Title: "采样历史", TemplateID: "freeform"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := store.saveWorkspaceDocument(ctx, project.ProjectID, "paper/main.md", "", "# 原始稿件\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := taskRequest{ProjectID: project.ProjectID, Action: proposeTask, RequestID: "legacy-check",
+		Kind: manuscriptCheckTask, Instruction: "核对初稿", InputVersionIDs: []string{doc.VersionID}}
+	stored, _, err := store.applyTaskRequest(ctx, proposal, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const markdown = "# 旧版结构报告\n"
+	if _, err := legacy.ExecContext(ctx, `UPDATE tasks SET status = 'SUCCEEDED', markdown = ? WHERE project_id = ? AND task_id = ?`,
+		markdown, project.ProjectID, stored.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	stage := t.TempDir()
+	var archive bytes.Buffer
+	if err := store.writeWorkspaceBackup(ctx, stage, &archive); err != nil {
+		t.Fatal(err)
+	}
+	archivePath, destination := filepath.Join(root, "legacy.zip"), filepath.Join(root, "restored")
+	if err := os.WriteFile(archivePath, archive.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreWorkspace(ctx, archivePath, destination); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	var version int
+	if err := restored.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != workspaceSchemaVersion {
+		t.Fatalf("restored schema was not upgraded: %d (%v)", version, err)
+	}
+	if got, err := restored.getProject(ctx, project.ProjectID); err != nil || got != project {
+		t.Fatalf("legacy project changed after upgrade: %+v (%v)", got, err)
+	}
+	replayed, created, err := restored.applyTaskRequest(ctx, proposal, false)
+	if err != nil || created || replayed.TaskID != stored.TaskID || replayed.Kind != manuscriptCheckTask || replayed.Status != taskSucceeded {
+		t.Fatalf("legacy task receipt changed after upgrade: %+v (%v)", replayed, err)
+	}
+	artifact, err := restored.readTaskArtifact(ctx, project.ProjectID, replayed.TaskID)
+	if err != nil || artifact.markdown != markdown || artifact.sourceSHA256 != doc.SHA256 {
+		t.Fatalf("legacy artifact changed after upgrade: %+v (%v)", artifact, err)
+	}
+}
+
 func TestWorkspaceBackupRejectsIncompleteDatabase(t *testing.T) {
 	ctx, root := t.Context(), t.TempDir()
 	databasePath := filepath.Join(root, "incomplete.sqlite3")

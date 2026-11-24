@@ -44,7 +44,7 @@ func (s *Store) handleListWorkspace(history bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var name string
 		kind := r.URL.Query().Get("kind")
-		if kind != "" && (history || (kind != "diagram" && kind != "markdown" && kind != "html")) {
+		if kind != "" && (history || (kind != "diagram" && kind != "markdown" && kind != "html" && kind != "csv")) {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的文件类型。")
 			return
 		}

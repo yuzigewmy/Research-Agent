@@ -1,0 +1,181 @@
+package workbench
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestExperimentComparisonUsesCompletePairs(t *testing.T) {
+	csv := "\ufeffseed,variant,baseline\n7,4,2\n8,9,\n9,8,4\n10,,100\n"
+	got, err := compareExperimentMetrics(t.Context(), csv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := experimentMetrics{PairedRows: 2, SkippedRows: 2, BaselineMean: "3", VariantMean: "6", MeanDifference: "3"}
+	if got != want {
+		t.Fatalf("paired metrics: got %+v, want %+v", got, want)
+	}
+	for _, test := range []struct{ csv, difference string }{
+		{"baseline,variant\n0,1e40\n0,1e20\n0,1\n0,-1e20\n0,-1e40\n", "0.2"},
+		{"baseline,variant\n9007199254740992,9007199254740993\n", "1"},
+		{"baseline,variant\n1e-400,2e-400\n", "1e-400"},
+		{"baseline,variant\n1,2e+0000\n", "1"},
+	} {
+		metrics, err := compareExperimentMetrics(t.Context(), test.csv)
+		if err != nil || metrics.MeanDifference.String() != test.difference {
+			t.Errorf("expected exact difference %s, got %+v (%v)", test.difference, metrics, err)
+		}
+	}
+	for _, test := range []struct{ csv, message string }{
+		{"baseline,baseline,variant\n1,2,3", "重复"},
+		{"baseline,score\n1,2", "variant"},
+		{"baseline,variant\n1,NaN", "第 2 行"},
+		{"baseline,variant\n1,1e101", "第 2 行"},
+		{"baseline,variant\n1,1e-1000", "第 2 行"},
+		{"baseline,variant,note\n1,2,\xff", "UTF-8"},
+		{"baseline,variant\n1,", "没有完整"},
+		{"baseline,variant\n" + strings.Repeat("1,2\n", 10_001), "10,000"},
+	} {
+		if _, err := compareExperimentMetrics(t.Context(), test.csv); err == nil || !strings.Contains(err.Error(), test.message) {
+			t.Errorf("expected %q in diagnostic, got %v", test.message, err)
+		}
+	}
+	stopped, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := compareExperimentMetrics(stopped, csv); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled calculation returned %v", err)
+	}
+}
+
+func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
+	ctx, directory := t.Context(), t.TempDir()
+	store, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
+	project, _, err := store.createProject(ctx, createProjectInput{RequestID: "study", Title: "水温对比", TemplateID: "experiment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := store.createProject(ctx, createProjectInput{RequestID: "other", Title: "另一项目", TemplateID: "freeform"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := projectsPath + "/" + project.ProjectID + "/tasks"
+	handler := NewHandler(store, nil, HandlerConfig{})
+	request := func(method, route, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(ctx, method, "http://127.0.0.1"+route, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != status {
+			t.Fatalf("%s %s: got %d want %d: %s", method, route, response.Code, status, response.Body)
+		}
+		return response
+	}
+	decodeTask := func(response *httptest.ResponseRecorder) Task {
+		t.Helper()
+		var task Task
+		if err := json.Unmarshal(response.Body.Bytes(), &task); err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+	save := func(previous, rows string) WorkspaceDocument {
+		t.Helper()
+		doc, err := store.saveWorkspaceDocument(ctx, project.ProjectID, "data/readings.csv", previous, "baseline,variant\n"+rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	first := save("", "1,2\n")
+	const proposal = `{"requestId":"compare","kind":"experiment-comparison","instruction":"核对观测差异","inputVersionIds":[%q]}`
+	body := fmt.Sprintf(proposal, first.VersionID)
+	task := decodeTask(request(http.MethodPost, base, body, http.StatusCreated))
+	if task.Kind != experimentComparisonTask || task.Status != taskProposed || len(task.Inputs) != 1 || task.Inputs[0].SHA256 != first.SHA256 {
+		t.Fatalf("unexpected proposal %+v", task)
+	}
+	request(http.MethodPost, projectsPath+"/"+other.ProjectID+"/tasks", body, http.StatusUnprocessableEntity)
+	request(http.MethodPost, base, strings.Replace(body, `"kind":"experiment-comparison",`, "", 1), http.StatusConflict)
+	second := save(first.SHA256, "2,4\n4,8\n9,\n")
+	taskPath := base + "/" + task.TaskID
+	request(http.MethodPost, taskPath+"/confirm", fmt.Sprintf(`{"requestId":"old","expectedRevision":%d}`, task.Revision), http.StatusConflict)
+	task = decodeTask(request(http.MethodPatch, taskPath,
+		fmt.Sprintf(`{"requestId":"edit","expectedRevision":%d,"instruction":"核对观测差异","inputVersionIds":[%q]}`, task.Revision, second.VersionID), http.StatusOK))
+	confirmation := taskRequest{ProjectID: project.ProjectID, TaskID: task.TaskID, RequestID: "confirm", Action: confirmTask, ExpectedRevision: task.Revision}
+	queued, created, err := store.applyTaskRequest(ctx, confirmation, false)
+	if err != nil || !created || queued.Status != taskQueued {
+		t.Fatalf("local calculation was not queued: %+v (%v)", queued, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = NewHandler(store, nil, HandlerConfig{})
+	if err := store.ResumeQueuedTasks(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	store.tasks.wg.Wait()
+	task = decodeTask(request(http.MethodGet, taskPath, "", http.StatusOK))
+	if task.Status != taskSucceeded {
+		t.Fatalf("queued calculation did not resume: %+v", task)
+	}
+	third := save(second.SHA256, "20,80\n")
+	replayed, applied, err := store.applyTaskRequest(ctx, confirmation, false)
+	if err != nil || applied || replayed.TaskID != task.TaskID || replayed.Revision != task.Revision {
+		t.Fatalf("confirmation replay changed the calculation: %+v (%v)", replayed, err)
+	}
+	result := request(http.MethodGet, taskPath+"/artifact", "", http.StatusOK)
+	var report struct {
+		Method  string
+		Input   taskInput
+		Metrics experimentMetrics
+	}
+	if err := json.Unmarshal(result.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	want := experimentMetrics{PairedRows: 2, SkippedRows: 1, BaselineMean: "3", VariantMean: "6", MeanDifference: "3"}
+	if result.Header().Get("Content-Type") != "application/json" || result.Header().Get("X-Source-SHA256") != second.SHA256 ||
+		report.Method != "paired-mean-v1" || report.Input.VersionID != second.VersionID || report.Input.SHA256 != second.SHA256 || report.Metrics != want {
+		t.Fatalf("wrong fixed result: %+v %v", report, result.Header())
+	}
+	request(http.MethodGet, projectsPath+"/"+other.ProjectID+"/tasks/"+task.TaskID+"/artifact", "", http.StatusNotFound)
+
+	body = strings.Replace(fmt.Sprintf(proposal, third.VersionID), `"compare"`, `"stop"`, 1)
+	stopped := decodeTask(request(http.MethodPost, base, body, http.StatusCreated))
+	confirmation = taskRequest{ProjectID: project.ProjectID, TaskID: stopped.TaskID, RequestID: "queue-stopped", Action: confirmTask, ExpectedRevision: stopped.Revision}
+	if _, _, err := store.applyTaskRequest(ctx, confirmation, false); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.claimQueuedTask(ctx, project.ProjectID, false)
+	if err != nil || claimed.TaskID != stopped.TaskID {
+		t.Fatalf("wrong claimed task: %+v (%v)", claimed, err)
+	}
+	stoppedPath := base + "/" + claimed.TaskID
+	request(http.MethodPost, stoppedPath+"/cancel", fmt.Sprintf(`{"requestId":"cancel","expectedRevision":%d}`, claimed.Revision), http.StatusOK)
+	if err := store.finishTask(ctx, project.ProjectID, claimed, taskSucceeded, "", taskResult{jsonArtifact: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled := decodeTask(request(http.MethodGet, stoppedPath, "", http.StatusOK)); cancelled.Status != taskCancelled {
+		t.Fatalf("late output overrode cancellation: %+v", cancelled)
+	}
+	request(http.MethodGet, stoppedPath+"/artifact", "", http.StatusNotFound)
+}

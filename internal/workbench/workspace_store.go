@@ -93,6 +93,8 @@ func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name, kind st
 		query += ` AND (LOWER(path) LIKE '%.md' OR LOWER(path) LIKE '%.markdown')`
 	case "html":
 		query += ` AND (LOWER(path) LIKE '%.html' OR LOWER(path) LIKE '%.htm')`
+	case "csv":
+		query += ` AND LOWER(path) LIKE '%.csv'`
 	}
 	if cursor > 0 {
 		query += ` AND ordinal < ?`

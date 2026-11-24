@@ -19,6 +19,7 @@ const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AN
 const turnSelectionEdit = `selection_edit = 1 AND source_turn_id IS NOT NULL`
 const taskCardFilter = `(` + standaloneTask + ` OR (` + turnSelectionEdit + `))`
 const selectionEditTask = "selection-edit"
+const tasksWithoutModel = `kind IN ('` + manuscriptCheckTask + `', '` + experimentComparisonTask + `')`
 
 const nextTaskQueuePosition = `(SELECT COALESCE(MAX(queued_seq), 0) + 1 FROM tasks
 	WHERE project_id = ? AND status = 'QUEUED')`
@@ -74,6 +75,7 @@ type taskRequest struct {
 	ExpectedRevision                                  int
 	InputVersionIDs                                   []string
 	SourceTurnID                                      string
+	Kind                                              string
 	editModel                                         modelSnapshot
 }
 
@@ -126,6 +128,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 			WHEN review_version_id IS NOT NULL THEN '服务重启中断了评审，可以按原稿版本重试。'
 			WHEN workflow_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
 			WHEN kind = 'manuscript-check' THEN '服务重启中断了稿件检查，可以重新提出检查。'
+			WHEN kind = 'experiment-comparison' THEN '服务重启中断了指标对比，可以用已保存的数据重新提交。'
 			ELSE '服务重启中断了已确认的任务，可以提议一项新任务。'
 		END
 		WHERE status IN ('RUNNING', 'CANCELLING') OR (status = 'QUEUED' AND kind = '' AND ` + standaloneTask + `)`)
@@ -200,7 +203,7 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 			return Task{}, false, errRequestConflict
 		}
 		task, err := lookupTask(ctx, tx, req.ProjectID, taskID)
-		if err == nil && action == proposeTask && task.SourceTurnID != req.SourceTurnID {
+		if err == nil && action == proposeTask && (task.SourceTurnID != req.SourceTurnID || task.Kind != req.Kind) {
 			return Task{}, false, errRequestConflict
 		}
 		return task, false, err
@@ -215,13 +218,13 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 		if err := checkTaskSource(ctx, tx, req.ProjectID, req.SourceTurnID); err != nil {
 			return Task{}, false, err
 		}
-		inputs, err := resolveTaskInputs(ctx, tx, req.ProjectID, "", req.InputVersionIDs)
+		inputs, err := resolveTaskInputs(ctx, tx, req.ProjectID, req.Kind, req.InputVersionIDs)
 		if err != nil {
 			return Task{}, false, err
 		}
-		task, err = scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, inputs_json, source_turn_id)
-			SELECT project_id, ?, ?, 'PROPOSED', ?, ?, NULLIF(?, '') FROM projects WHERE project_id = ? RETURNING `+taskColumns,
-			rand.Text(), req.Instruction, time.Now().UTC().Format(createdAtLayout), inputs, req.SourceTurnID, req.ProjectID))
+		task, err = scanTask(tx.QueryRowContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, inputs_json, source_turn_id, kind)
+			SELECT project_id, ?, ?, 'PROPOSED', ?, ?, NULLIF(?, ''), ? FROM projects WHERE project_id = ? RETURNING `+taskColumns,
+			rand.Text(), req.Instruction, time.Now().UTC().Format(createdAtLayout), inputs, req.SourceTurnID, req.Kind, req.ProjectID))
 		if err != nil {
 			return Task{}, false, err
 		}
@@ -307,7 +310,7 @@ func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, e
 		if task.Status != taskProposed {
 			return "", errTaskState
 		}
-		if !modelConfigured && task.Kind != manuscriptCheckTask {
+		if !modelConfigured && task.Kind != manuscriptCheckTask && task.Kind != experimentComparisonTask {
 			return "", errModelUnavailable
 		}
 		return taskQueued, nil
@@ -335,10 +338,10 @@ func (s *Store) claimQueuedTask(ctx context.Context, projectID string, modelConf
 	}
 	task, err := scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = 'RUNNING', revision = revision + 1
 		WHERE project_id = ? AND status = 'QUEUED' AND ordinal = (
-			SELECT ordinal FROM tasks WHERE project_id = ? AND status = 'QUEUED' AND (? OR kind = ?)
+			SELECT ordinal FROM tasks WHERE project_id = ? AND status = 'QUEUED' AND (? OR `+tasksWithoutModel+`)
 			ORDER BY queued_seq, ordinal LIMIT 1
 		) AND NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = ? AND status IN ('RUNNING', 'CANCELLING'))
-		RETURNING `+taskColumns, projectID, projectID, modelConfigured, manuscriptCheckTask, projectID))
+		RETURNING `+taskColumns, projectID, projectID, modelConfigured, projectID))
 	if errors.Is(err, sql.ErrNoRows) {
 		if commitErr := tx.Commit(); commitErr != nil {
 			return Task{}, commitErr
@@ -377,11 +380,12 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 		status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
 		message = CASE WHEN status = 'RUNNING' THEN ? ELSE '' END,
 		markdown = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END,
+		result_json = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END,
 		review_findings = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '[]' END,
 		workflow_topic_data = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END
 		WHERE project_id = ? AND task_id = ? AND status IN ('RUNNING', 'CANCELLING')
-		RETURNING status`, status, message, status, result.markdown, status, findings, status, result.topicData,
-		projectID, task.TaskID).Scan(&status)
+		RETURNING status`, status, message, status, result.markdown, status, result.jsonArtifact, status, findings,
+		status, result.topicData, projectID, task.TaskID).Scan(&status)
 	if err != nil {
 		return err
 	}
@@ -401,15 +405,16 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 
 type taskArtifact struct {
 	markdown     string
+	jsonArtifact string
 	kind         string
 	sourceSHA256 string
 }
 
 func (s *Store) readTaskArtifact(ctx context.Context, projectID, taskID string) (taskArtifact, error) {
 	var artifact taskArtifact
-	err := s.db.QueryRowContext(ctx, `SELECT markdown, kind,
-		CASE WHEN kind = ? THEN json_extract(inputs_json, '$[0].sha256') ELSE '' END
-		FROM tasks WHERE project_id = ? AND task_id = ? AND `+standaloneTask+` AND status = 'SUCCEEDED'`,
-		manuscriptCheckTask, projectID, taskID).Scan(&artifact.markdown, &artifact.kind, &artifact.sourceSHA256)
+	err := s.db.QueryRowContext(ctx, `SELECT markdown, result_json, kind,
+		CASE WHEN `+tasksWithoutModel+` THEN json_extract(inputs_json, '$[0].sha256') ELSE '' END
+		FROM tasks WHERE project_id = ? AND task_id = ? AND `+standaloneTask+` AND status = 'SUCCEEDED'`, projectID, taskID).
+		Scan(&artifact.markdown, &artifact.jsonArtifact, &artifact.kind, &artifact.sourceSHA256)
 	return artifact, err
 }

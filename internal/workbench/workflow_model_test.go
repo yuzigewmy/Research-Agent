@@ -194,6 +194,11 @@ func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
 		ALTER TABLE projects DROP COLUMN created_title;
 		ALTER TABLE project_patch_requests DROP COLUMN title;
 		ALTER TABLE workflow_runs DROP COLUMN project_title;
+		ALTER TABLE tasks DROP COLUMN result_json;
+		ALTER TABLE tasks RENAME COLUMN kind TO comparison_kind;
+		ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT '' CHECK (kind IN ('', 'manuscript-check', 'focused-research'));
+		UPDATE tasks SET kind = comparison_kind WHERE comparison_kind <> '';
+		ALTER TABLE tasks DROP COLUMN comparison_kind;
 		PRAGMA user_version = 47`); err != nil {
 		t.Fatal(err)
 	}

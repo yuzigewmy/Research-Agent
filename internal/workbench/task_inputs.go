@@ -46,6 +46,10 @@ func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID, kind string, 
 			return "", errInvalidCheckInput
 		}
 		invalidMarkdown = errInvalidCheckInput
+	case experimentComparisonTask:
+		if len(ids) != 1 {
+			return "", errExperimentInput
+		}
 	case focusedResearchTask:
 		if len(ids) == 0 {
 			return "", errInvalidFocusInput
@@ -67,6 +71,9 @@ func resolveTaskInputs(ctx context.Context, tx *sql.Tx, projectID, kind string, 
 		}
 		if invalidMarkdown != nil && !markdownPath(file.Path) {
 			return "", invalidMarkdown
+		}
+		if kind == experimentComparisonTask && !experimentCSVPath(file.Path) {
+			return "", errExperimentInput
 		}
 		if paths[file.Path] {
 			return "", errInvalidTaskInput

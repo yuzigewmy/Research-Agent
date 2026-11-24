@@ -112,14 +112,14 @@ func backupArchiveEntries(archive *zip.Reader, archiveSize int64) (map[string]*z
 	return entries, nil
 }
 
-func verifyBackupDatabase(ctx context.Context, db *sql.DB) error {
+func verifyBackupDatabase(ctx context.Context, db *sql.DB, version int) error {
 	expected, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return err
 	}
 	defer expected.Close()
 	expected.SetMaxOpenConns(1)
-	if err := migrate(expected); err != nil {
+	if err := migrate(expected, version); err != nil {
 		return err
 	}
 	want, err := readBackupSchema(ctx, expected)
