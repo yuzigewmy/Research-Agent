@@ -41,6 +41,21 @@ func (api researchTasks) register(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET "+path+"/{taskId}/artifact", api.artifact)
 	mux.HandleFunc(path+"/{taskId}/artifact", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc("POST "+path+"/{taskId}/artifact/workspace", api.saveComparisonReport)
+	mux.HandleFunc(path+"/{taskId}/artifact/workspace", methodNotAllowed("POST"))
+}
+
+func (api researchTasks) saveComparisonReport(w http.ResponseWriter, r *http.Request) {
+	file, err := api.store.saveComparisonReport(r.Context(), r.PathValue("id"), r.PathValue("taskId"))
+	if errors.Is(err, errWorkspaceConflict) {
+		writeError(w, http.StatusConflict, "REVISION_CONFLICT", "报告的保存位置已有其他内容。请在文本工作区核对该文件。")
+		return
+	}
+	if err != nil {
+		writeWorkspaceError(w, "save comparison report", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, file)
 }
 
 func (api researchTasks) read(w http.ResponseWriter, r *http.Request) {

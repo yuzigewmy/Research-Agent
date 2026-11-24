@@ -101,6 +101,10 @@ export function ProjectDetails({ projectId, taskLink, onUpdated }: {
     refreshWorkflow()
   }
 
+  function addWorkspacePath(path: string) {
+    setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])
+  }
+
   const taskSync = { updates: taskUpdates, onTaskChanged, onReviewAppliedFile: hasWorkflow ? reviewAppliedFile : undefined }
 
   useEffect(() => {
@@ -211,8 +215,8 @@ export function ProjectDetails({ projectId, taskLink, onUpdated }: {
         <WorkflowPanel projectId={project.projectId} templateId={templateId} refreshVersion={workflowRefresh}
           acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
             current?.openId === openId ? undefined : current)}
-          onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
-      <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} />
+          onManuscriptSaved={addWorkspacePath} />}
+      <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} onReportSaved={addWorkspacePath} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
         onManuscriptSelection={addManuscriptSelection} />

@@ -1,4 +1,5 @@
 import { ProjectApiError, request } from './projects'
+import { isFileRecord } from './workspace'
 
 export const taskStatusLabels = {
   PROPOSED: '待确认',
@@ -178,4 +179,8 @@ export function editTask(projectId: string, taskId: string, input: ActionInput &
 
 export function taskArtifactPath(projectId: string, taskId: string) {
   return `${taskPath(projectId, taskId)}/artifact`
+}
+
+export function saveComparisonReport(projectId: string, taskId: string, signal: AbortSignal) {
+  return request(`${taskArtifactPath(projectId, taskId)}/workspace`, isFileRecord, { method: 'POST', signal })
 }

@@ -159,6 +159,41 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 	}
 	request(http.MethodGet, projectsPath+"/"+other.ProjectID+"/tasks/"+task.TaskID+"/artifact", "", http.StatusNotFound)
 
+	publication := taskPath + "/artifact/workspace"
+	request(http.MethodPost, projectsPath+"/"+other.ProjectID+"/tasks/"+task.TaskID+"/artifact/workspace", "", http.StatusNotFound)
+	saveReport := func() WorkspaceFile {
+		t.Helper()
+		var file WorkspaceFile
+		if err := json.Unmarshal(request(http.MethodPost, publication, "", http.StatusOK).Body.Bytes(), &file); err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	file := saveReport()
+	saved, err := store.workspaceVersion(ctx, project.ProjectID, file.VersionID)
+	if err != nil || saved.Path != "experiments/"+task.TaskID+"/comparison.json" || saved.SHA256 != file.SHA256 {
+		t.Fatalf("report was not published in the project: %+v (%v)", saved, err)
+	}
+	published, err := store.readWorkspaceDocument(saved)
+	if err != nil || published.Content != result.Body.String() {
+		t.Fatalf("published report differs from download: %+v (%v)", published, err)
+	}
+	followUp := fmt.Sprintf(`{"requestId":"interpret","instruction":"解释已保存的指标对比","inputVersionIds":[%q]}`, file.VersionID)
+	next := decodeTask(request(http.MethodPost, base, followUp, http.StatusCreated))
+	if len(next.Inputs) != 1 || next.Inputs[0].SHA256 != file.SHA256 {
+		t.Fatalf("follow-up did not pin the published report: %+v", next)
+	}
+	edited, err := store.saveWorkspaceDocument(ctx, project.ProjectID, saved.Path, saved.SHA256, published.Content+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay := saveReport(); replay != file {
+		t.Fatalf("repeat save returned a different published version: %+v", replay)
+	}
+	if latest, err := store.workspaceFile(ctx, project.ProjectID, saved.Path); err != nil || latest.VersionID != edited.VersionID {
+		t.Fatalf("repeat save displaced the user's edit: %+v (%v)", latest, err)
+	}
+
 	body = strings.Replace(fmt.Sprintf(proposal, third.VersionID), `"compare"`, `"stop"`, 1)
 	stopped := decodeTask(request(http.MethodPost, base, body, http.StatusCreated))
 	confirmation = taskRequest{ProjectID: project.ProjectID, TaskID: stopped.TaskID, RequestID: "queue-stopped", Action: confirmTask, ExpectedRevision: stopped.Revision}

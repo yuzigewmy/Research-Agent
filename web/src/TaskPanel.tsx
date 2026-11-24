@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { ExperimentReportHandoff } from './ExperimentReportHandoff'
 import { errorMessage, ProjectApiError } from './projects'
 import { selectionEditInstructionLimit } from './SelectionEdit'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
@@ -95,7 +96,7 @@ function mergeTasks(current: Task[], incoming: Task[]) {
   )
 }
 
-function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink, refreshVersion, onReviewAppliedFile }: {
+function TaskCard({ projectId, task, statusId, modelConfigured, pending, onAction, showSourceLink, refreshVersion, onReviewAppliedFile, onReportSaved }: {
   projectId: string
   task: Task
   statusId: string
@@ -105,6 +106,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   showSourceLink: boolean
   refreshVersion: number
   onReviewAppliedFile?: (file: FileRecord) => void
+  onReportSaved?: (path: string) => void
 }) {
   const [edit, setEdit] = useState<InstructionDraft>()
   const [editError, setEditError] = useState<{ message: string; invalid?: boolean }>()
@@ -279,18 +281,21 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
           {isExperimentComparison ? '下载指标对比报告' : isManuscriptCheck ? '下载检查报告'
             : isFocusedResearch ? '下载聚焦研究报告' : '下载 Markdown'}
         </a>
+        {isExperimentComparison && onReportSaved &&
+          <ExperimentReportHandoff projectId={projectId} taskId={task.taskId} onSaved={onReportSaved} />}
       </div>}
     </li>
   )
 }
 
-export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', proposedTaskId, taskLink, sync }: {
+export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', proposedTaskId, taskLink, sync, onReportSaved }: {
   projectId: string
   sourceTurnId?: string
   initialInstruction?: string
   proposedTaskId?: string
   taskLink?: TaskLink
   sync?: TaskPanelSync
+  onReportSaved?: (path: string) => void
 }) {
   const panelId = useId()
   const [localTasks, setTasks] = useState<Task[]>([])
@@ -619,7 +624,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
         {tasks.map((task) => <TaskCard key={task.taskId} task={task} projectId={projectId}
           statusId={`${panelId}-${task.taskId}`} modelConfigured={configured === true} pending={pending}
           onAction={mutate} showSourceLink={!sourceTurnId} refreshVersion={reload}
-          onReviewAppliedFile={sync?.onReviewAppliedFile} />)}
+          onReviewAppliedFile={sync?.onReviewAppliedFile} onReportSaved={onReportSaved} />)}
       </ol>}
       {!loading && !queueError && tasks.length === 0 && <p className="task-note">提交提议后，可在此查看任务进度并下载计划。</p>}
       {proposedTaskId && <details>
