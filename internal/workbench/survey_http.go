@@ -18,6 +18,7 @@ type surveyCreateInput struct {
 		DuplicateColumns []string                   `json:"duplicateColumns"`
 		CrossTab         *survey.CrossTabOptions    `json:"crossTab"`
 		Reliability      *survey.ReliabilityOptions `json:"reliability"`
+		Sheet            string                     `json:"sheet"`
 		Reviews          []struct {
 			Row    int    `json:"row"`
 			Accept *bool  `json:"accept"`
@@ -35,6 +36,25 @@ func (s *Store) registerSurveys(mux *http.ServeMux) {
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
 	mux.HandleFunc(path+"/{analysisId}", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{analysisId}/download", methodNotAllowed("GET, HEAD"))
+	sheetsPath := projectsPath + "/{id}/materials/{materialId}/survey-sheets"
+	mux.HandleFunc("GET "+sheetsPath, s.handleSurveySheets)
+	mux.HandleFunc(sheetsPath, methodNotAllowed("GET, HEAD"))
+}
+
+func (s *Store) handleSurveySheets(w http.ResponseWriter, r *http.Request) {
+	material, err := s.getMaterial(r.Context(), r.PathValue("id"), r.PathValue("materialId"))
+	if err != nil {
+		writeSurveyError(w, "read survey workbook material", err)
+		return
+	}
+	sheets, err := s.surveyWorkbookSheets(material)
+	if err != nil {
+		writeSurveyError(w, "list survey workbook sheets", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Sheets []string `json:"sheets"`
+	}{Sheets: sheets})
 }
 
 func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +71,7 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 		Reviews:     make([]survey.Review, 0, len(input.Options.Reviews)),
 		CrossTab:    input.Options.CrossTab,
 		Reliability: input.Options.Reliability,
+		Sheet:       input.Options.Sheet,
 	}
 	for _, review := range input.Options.Reviews {
 		if review.Accept == nil {
@@ -124,11 +145,13 @@ func writeSurveyError(w http.ResponseWriter, operation string, err error) {
 	case errors.Is(err, errRequestConflict):
 		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已用于不同的问卷分析设置。")
 	case errors.Is(err, errSurveyFormat):
-		writeError(w, http.StatusUnprocessableEntity, "FORMAT_UNSUPPORTED", "请选择扩展名为 .csv 的问卷资料。")
+		writeError(w, http.StatusUnprocessableEntity, "FORMAT_UNSUPPORTED", "问卷分析支持 CSV 和 XLSX。读取工作表时请选择 XLSX 资料。")
 	case errors.Is(err, errSurveyTooLarge):
 		writeError(w, http.StatusUnprocessableEntity, "CSV_TOO_LARGE", "问卷资料不能超过 8 MiB。")
+	case errors.Is(err, errSurveyWorkbookTooLarge):
+		writeError(w, http.StatusUnprocessableEntity, "WORKBOOK_TOO_LARGE", "问卷工作簿不能超过 8 MiB。")
 	case errors.As(err, &inputError):
-		writeError(w, http.StatusUnprocessableEntity, "SURVEY_INVALID", "无法分析该问卷。请检查 CSV 编码和格式、所选列及复核设置。"+inputError.Error())
+		writeError(w, http.StatusUnprocessableEntity, "SURVEY_INVALID", "无法读取或分析问卷资料。"+inputError.Error())
 	default:
 		writeStoreError(w, operation, err)
 	}

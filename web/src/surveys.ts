@@ -37,6 +37,7 @@ export interface SurveyReliability extends SurveyReliabilityOptions {
 }
 
 export interface SurveyOptions {
+  sheet?: string
   requiredColumns?: string[]
   duplicateColumns?: string[]
   reviews?: SurveyReview[]
@@ -68,6 +69,7 @@ export interface SurveyMetadata extends SurveyCounts {
 
 export interface SurveyRow {
   row: number
+  sourceRow?: number
   status: 'VALID' | 'INVALID' | 'PENDING'
   reasons: string[]
 }
@@ -142,10 +144,15 @@ function isReliabilityOptions(value: unknown): value is SurveyReliabilityOptions
   return isStringList(columns) && columns.length >= 2 && columns.length <= reliabilityItemLimit
 }
 
+function isSheetName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
-  return (options.requiredColumns === undefined || isStringList(options.requiredColumns))
+  return (options.sheet === undefined || isSheetName(options.sheet))
+    && (options.requiredColumns === undefined || isStringList(options.requiredColumns))
     && (options.duplicateColumns === undefined || isStringList(options.duplicateColumns))
     && (options.reviews === undefined || (Array.isArray(options.reviews) && options.reviews.every(isReview)))
     && (options.crossTab === undefined || isCrossTabOptions(options.crossTab))
@@ -155,6 +162,7 @@ function isOptions(value: unknown): value is SurveyOptions {
 function isRow(value: unknown): value is SurveyRow {
   const row = value as Partial<SurveyRow> | null
   return !!row && isCount(row.row) && row.row > 0 && isStringList(row.reasons)
+    && (row.sourceRow === undefined || (isCount(row.sourceRow) && row.sourceRow > 0))
     && (row.status === 'VALID' || row.status === 'INVALID' || row.status === 'PENDING')
 }
 
@@ -217,9 +225,22 @@ function isPage(value: unknown): value is SurveyPage {
     && (page.nextCursor === undefined || typeof page.nextCursor === 'string')
 }
 
-function surveysPath(projectId: string) {
+function projectPath(projectId: string) {
   if (!isId(projectId)) throw new ProjectApiError('项目链接无效。', 400)
-  return `/api/v1/projects/${encodeURIComponent(projectId)}/surveys`
+  return `/api/v1/projects/${encodeURIComponent(projectId)}`
+}
+
+function surveysPath(projectId: string) {
+  return `${projectPath(projectId)}/surveys`
+}
+
+export async function listSurveySheets(projectId: string, materialId: string, signal: AbortSignal) {
+  if (!isId(materialId)) throw new ProjectApiError('资料链接无效。', 400)
+  return request(`${projectPath(projectId)}/materials/${encodeURIComponent(materialId)}/survey-sheets`,
+    (value): value is { sheets: string[] } => {
+      const sheets = (value as { sheets?: unknown } | null)?.sheets
+      return Array.isArray(sheets) && sheets.length > 0 && sheets.every(isSheetName) && new Set(sheets).size === sheets.length
+    }, { signal })
 }
 
 function surveyPath(projectId: string, analysisId: string) {
@@ -237,7 +258,8 @@ export async function readSurvey(projectId: string, analysisId: string, signal: 
 }
 
 export async function analyzeSurvey(projectId: string, input: SurveyInput, signal: AbortSignal) {
-  return request(surveysPath(projectId), (value): value is SurveyRun => isRun(value) && value.materialId === input.materialId, {
+  return request(surveysPath(projectId), (value): value is SurveyRun =>
+    isRun(value) && value.materialId === input.materialId && value.options.sheet === input.options.sheet, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
   })
 }

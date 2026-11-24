@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
-import { analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveys, readSurvey, reliabilityItemLimit, surveyDownloadPath } from './surveys'
+import {
+  analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, readSurvey,
+  reliabilityItemLimit, surveyDownloadPath,
+} from './surveys'
 import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
 import './survey.css'
 
@@ -261,13 +264,14 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
     </div>
     {rulesChanged && <p className="survey-note">请先应用清洗规则，再根据新报告复核。{reviewCount > 0 && '应用后会清空本次复核草稿。'}</p>}
     {visible.length ? <ol className="survey-rows" role="list">
-      {visible.slice(start, end).map(({ row, status, reasons }) => {
+      {visible.slice(start, end).map(({ row, sourceRow, status, reasons }) => {
         const review = drafts[row]
         return <li key={row}>
           <div className="survey-heading">
             <strong>第 {row} 条答卷</strong>
             <span className={`survey-status survey-status-${status.toLowerCase()}`}>{rowLabels[status]}</span>
           </div>
+          {sourceRow !== undefined && <p className="survey-note">工作表第 {sourceRow} 行</p>}
           {reasons.length > 0 && <ul className="survey-reasons">
             {reasons.map((reason, index) => <li key={index} dir="auto">{reason}</li>)}
           </ul>}
@@ -326,6 +330,7 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
   const rulesChanged = ruleNames.some((key) => rules[key].length !== initialRules[key].length
     || rules[key].some((column, index) => column !== initialRules[key][index]))
   const ruleOptions = {
+    sheet: options.sheet,
     requiredColumns: rules.requiredColumns.length ? rules.requiredColumns : undefined,
     duplicateColumns: rules.duplicateColumns.length ? rules.duplicateColumns : undefined,
     crossTab: options.crossTab,
@@ -351,6 +356,7 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
       <time className="survey-note" dateTime={run.createdAt}>{reportDate.format(new Date(run.createdAt))}</time>
       <a className="button outline" href={surveyDownloadPath(projectId, run.analysisId)} download>下载报告 JSON</a>
     </div>
+    {options.sheet && <p className="survey-note">工作表 <bdi>{options.sheet}</bdi></p>}
     <p className="survey-note">原资料 SHA-256 <code>{run.materialSha256}</code></p>
     {newerMaterial && <p className="survey-note">资料列表中有较新的同名文件。当前报告仍基于此摘要对应的旧版资料。</p>}
     <dl className="survey-counts">
@@ -392,8 +398,62 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
   </article>
 }
 
+function SurveyStartControls({ projectId, materialId, workbook, busy, refreshingMaterials, onAnalyze, onRefreshMaterials }: {
+  projectId: string
+  materialId: string
+  workbook: boolean
+  busy: boolean
+  refreshingMaterials: boolean
+  onAnalyze: (options: SurveyOptions) => void
+  onRefreshMaterials: () => void
+}) {
+  const id = useId()
+  const [sheetList, setSheetList] = useState<{ sheets: string[] } | { error: string }>()
+  const [sheet, setSheet] = useState('')
+  const [reload, setReload] = useState(0)
+  const sheets = sheetList && 'sheets' in sheetList ? sheetList.sheets : []
+  const canStart = !busy && !!materialId && (!workbook || sheets.includes(sheet))
+
+  useEffect(() => {
+    if (!workbook) return
+    const controller = new AbortController()
+    void listSurveySheets(projectId, materialId, controller.signal).then((result) => {
+      if (!controller.signal.aborted) setSheetList(result)
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted) setSheetList({ error: errorMessage(cause) })
+    })
+    return () => controller.abort()
+  }, [projectId, materialId, workbook, reload])
+
+  return <>
+    {workbook && <>
+      <div className="field">
+        <label htmlFor={id}>工作表</label>
+        <select id={id} value={sheet} disabled={busy || !sheets.length} onChange={(event) => setSheet(event.currentTarget.value)}>
+          <option value="">请选择工作表</option>
+          {sheets.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+      </div>
+      {!sheetList && <p className="survey-note" role="status">正在加载工作表…</p>}
+      {sheetList && 'error' in sheetList && <div className="survey-actions">
+        <p className="form-error" role="alert">{sheetList.error}</p>
+        <button className="button outline" type="button" disabled={busy} onClick={() => {
+          setSheetList(undefined)
+          setReload((value) => value + 1)
+        }}>重试加载工作表</button>
+      </div>}
+    </>}
+    <div className="survey-actions">
+      <button className="button primary" type="button" disabled={!canStart}
+        onClick={() => onAnalyze(workbook ? { sheet } : {})}>开始分析</button>
+      <button className="button outline" type="button" disabled={refreshingMaterials} onClick={onRefreshMaterials}>刷新文件列表</button>
+    </div>
+  </>
+}
+
 const materialIdOf = (item: { materialId: string }) => item.materialId
 const analysisIdOf = (item: { analysisId: string }) => item.analysisId
+const isWorkbook = (name: string) => name.toLowerCase().endsWith('.xlsx')
 
 export function SurveyPanel({ projectId }: { projectId: string }) {
   return <ProjectSurveys key={projectId} projectId={projectId} />
@@ -405,18 +465,19 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
   const loadReports = useCallback((signal: AbortSignal, cursor?: string) => listSurveys(projectId, signal, cursor), [projectId])
   const materials = useSurveyList(loadMaterials, materialIdOf)
   const reports = useSurveyList(loadReports, analysisIdOf)
-  const csvFiles = materials.items.filter(({ name }) => name.toLowerCase().endsWith('.csv'))
+  const surveyFiles = materials.items.filter(({ name }) => name.toLowerCase().endsWith('.csv') || isWorkbook(name))
   const [materialId, setMaterialId] = useState('')
   const [run, setRun] = useState<SurveyRun>()
   const [busy, setBusy] = useState<SurveyOperation>()
   const [failure, setFailure] = useState<{ kind: SurveyOperation; message: string }>()
   const active = useRef<AbortController | null>(null)
   const attempt = useRef<{ key: string; requestId: string } | null>(null)
-  const currentMaterialId = csvFiles.some((file) => file.materialId === materialId) ? materialId : ''
-  const originalIndex = run ? csvFiles.findIndex((file) => file.materialId === run.materialId) : -1
+  const currentMaterial = surveyFiles.find((file) => file.materialId === materialId)
+  const currentMaterialId = currentMaterial?.materialId ?? ''
+  const originalIndex = run ? surveyFiles.findIndex((file) => file.materialId === run.materialId) : -1
   // Material pages are ordered by upload. The report timestamp is the fallback
   // when the source upload is beyond the pages loaded so far.
-  const newerMaterial = !!run && csvFiles.some((file, index) => file.name === run.materialName
+  const newerMaterial = !!run && surveyFiles.some((file, index) => file.name === run.materialName
     && file.sha256 !== run.materialSha256
     && (originalIndex >= 0 ? index < originalIndex : file.createdAt > run.createdAt))
   useEffect(() => () => active.current?.abort(), [])
@@ -454,23 +515,23 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
   return <section className="survey-panel" aria-labelledby={id}>
     <h4 id={id}>问卷分析</h4>
     <div className="field">
-      <label htmlFor={`${id}-csv`}>已上传的问卷 CSV</label>
-      <select id={`${id}-csv`} value={currentMaterialId} disabled={!!busy || !csvFiles.length}
-        onChange={(event) => setMaterialId(event.target.value)}>
+      <label htmlFor={`${id}-csv`}>
+        {surveyFiles.some(({ name }) => isWorkbook(name)) ? '已上传的问卷 CSV 或 XLSX' : '已上传的问卷 CSV'}
+      </label>
+      <select id={`${id}-csv`} value={currentMaterialId} disabled={!!busy || !surveyFiles.length}
+        onChange={(event) => setMaterialId(event.currentTarget.value)}>
         <option value="">请选择文件</option>
-        {csvFiles.map(({ materialId, name, createdAt }) => (
+        {surveyFiles.map(({ materialId, name, createdAt }) => (
           <option key={materialId} value={materialId}>{name} · {reportDate.format(new Date(createdAt))}</option>
         ))}
       </select>
     </div>
-    <div className="survey-actions">
-      <button className="button primary" type="button" disabled={!!busy || !currentMaterialId}
-        onClick={() => analyze(currentMaterialId, {})}>开始分析</button>
-      <button className="button outline" type="button" disabled={materials.loading} onClick={materials.refresh}>刷新文件列表</button>
-    </div>
+    <SurveyStartControls key={currentMaterialId} projectId={projectId} materialId={currentMaterialId}
+      workbook={!!currentMaterial && isWorkbook(currentMaterial.name)} busy={!!busy} refreshingMaterials={materials.loading}
+      onAnalyze={(options) => analyze(currentMaterialId, options)} onRefreshMaterials={materials.refresh} />
     <ListControls list={materials} label="文件" />
-    {!materials.loading && !materials.error && !csvFiles.length && <p className="survey-note">
-      此页未找到 CSV。上传后可刷新文件列表，有更多文件时可继续加载。
+    {!materials.loading && !materials.error && !surveyFiles.length && <p className="survey-note">
+      此页未找到 CSV 或 XLSX。上传后可刷新文件列表，有更多文件时可继续加载。
     </p>}
     <details className="survey-details">
       <summary>已保存的报告</summary>

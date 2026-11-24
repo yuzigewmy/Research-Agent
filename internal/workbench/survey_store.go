@@ -45,8 +45,9 @@ const (
 )
 
 var (
-	errSurveyFormat   = errors.New("survey source is not a CSV material")
-	errSurveyTooLarge = errors.New("survey source exceeds 8 MiB")
+	errSurveyFormat           = errors.New("unsupported survey source format")
+	errSurveyTooLarge         = errors.New("CSV source exceeds 8 MiB")
+	errSurveyWorkbookTooLarge = errors.New("workbook exceeds 8 MiB")
 )
 
 type surveyAnalysisError struct{ cause error }
@@ -164,36 +165,67 @@ func (s *Store) createSurveyRun(ctx context.Context, projectID, requestID, mater
 		return surveyRun{}, false, err
 	}
 	if inserted == 0 {
-		// A concurrent request may have saved the run while the CSV was being analyzed.
+		// A concurrent request may have saved the run during analysis.
 		run, err = s.replaySurveyRun(ctx, projectID, requestID, materialID, optionsJSON)
 		return run, false, err
 	}
 	return run, true, nil
 }
 
-func (s *Store) analyzeSurveyMaterial(material Material, options survey.Options) (survey.Report, error) {
-	if !strings.EqualFold(filepath.Ext(material.Name), ".csv") {
-		return survey.Report{}, errSurveyFormat
+func (s *Store) openSurveyWorkbook(material Material) (*os.File, error) {
+	if !strings.EqualFold(filepath.Ext(material.Name), ".xlsx") {
+		return nil, errSurveyFormat
 	}
 	if material.Size > maxSurveyBytes {
-		return survey.Report{}, errSurveyTooLarge
+		return nil, errSurveyWorkbookTooLarge
 	}
-	file, err := os.Open(s.materialObject(material.SHA256))
+	return os.Open(s.materialObject(material.SHA256))
+}
+
+func (s *Store) surveyWorkbookSheets(material Material) ([]string, error) {
+	file, err := s.openSurveyWorkbook(material)
 	if err != nil {
-		return survey.Report{}, err
+		return nil, err
 	}
 	defer file.Close()
-	input := &io.LimitedReader{R: file, N: maxSurveyBytes + 1}
-	report, err := survey.Analyze(input, options)
-	if input.N == 0 {
-		return survey.Report{}, errSurveyTooLarge
-	}
-	if err != nil {
-		var fileError *os.PathError
-		if errors.As(err, &fileError) {
+	sheets, err := survey.WorkbookSheets(file, material.Size)
+	return sheets, asSurveyAnalysisError(err)
+}
+
+func (s *Store) analyzeSurveyMaterial(material Material, options survey.Options) (survey.Report, error) {
+	switch strings.ToLower(filepath.Ext(material.Name)) {
+	case ".xlsx":
+		file, err := s.openSurveyWorkbook(material)
+		if err != nil {
 			return survey.Report{}, err
 		}
-		return survey.Report{}, &surveyAnalysisError{cause: err}
+		defer file.Close()
+		report, err := survey.AnalyzeWorkbook(file, material.Size, options)
+		return report, asSurveyAnalysisError(err)
+	case ".csv":
+		if material.Size > maxSurveyBytes {
+			return survey.Report{}, errSurveyTooLarge
+		}
+		file, err := os.Open(s.materialObject(material.SHA256))
+		if err != nil {
+			return survey.Report{}, err
+		}
+		defer file.Close()
+		input := &io.LimitedReader{R: file, N: maxSurveyBytes + 1}
+		report, err := survey.Analyze(input, options)
+		if input.N == 0 {
+			return survey.Report{}, errSurveyTooLarge
+		}
+		return report, asSurveyAnalysisError(err)
+	default:
+		return survey.Report{}, errSurveyFormat
 	}
-	return report, nil
+}
+
+func asSurveyAnalysisError(err error) error {
+	var fileError *os.PathError
+	if err == nil || errors.As(err, &fileError) {
+		return err
+	}
+	return &surveyAnalysisError{cause: err}
 }

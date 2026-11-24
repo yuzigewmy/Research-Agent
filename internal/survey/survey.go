@@ -1,4 +1,4 @@
-// Package survey checks CSV responses and computes baseline descriptive statistics.
+// Package survey cleans survey responses and computes statistics from saved tables.
 package survey
 
 import (
@@ -34,10 +34,11 @@ type Options struct {
 	Reviews          []Review            `json:"reviews,omitempty"`
 	CrossTab         *CrossTabOptions    `json:"crossTab,omitempty"`
 	Reliability      *ReliabilityOptions `json:"reliability,omitempty"`
+	Sheet            string              `json:"sheet,omitempty"`
 }
 
-// Review resolves a pending response. Row is its one-based CSV record number
-// after the header. A rejection sets Accept to false. Reason must be nonblank.
+// Review resolves a pending response by its one-based record number after the header.
+// A rejection sets Accept to false. Reason must be nonblank.
 type Review struct {
 	Row    int    `json:"row"`
 	Accept bool   `json:"accept"`
@@ -61,10 +62,13 @@ type Report struct {
 
 // Row gives one response's quality status and reasons in evaluation order.
 type Row struct {
-	Row     int      `json:"row"`
-	Status  string   `json:"status"`
-	Reasons []string `json:"reasons"`
+	Row       int      `json:"row"`
+	SourceRow int      `json:"sourceRow,omitempty"`
+	Status    string   `json:"status"`
+	Reasons   []string `json:"reasons"`
 }
+
+type readResponse func() (fields []string, sourceRow int, err error)
 
 // Analyze reads UTF-8, comma-separated CSV with a header. Short records have
 // blank trailing fields. Blank lines are skipped and quoted newlines belong to
@@ -73,6 +77,9 @@ type Row struct {
 // CSV uploads can contain up to 10,000 responses, 128 columns and 16 MiB.
 // An input or review error returns no partial report.
 func Analyze(r io.Reader, options Options) (Report, error) {
+	if options.Sheet != "" {
+		return Report{}, errors.New("CSV 资料没有工作表。")
+	}
 	limited := &io.LimitedReader{R: r, N: maxCSVBytes + 1}
 	buffer := bufio.NewReader(limited)
 	prefix, err := buffer.Peek(3)
@@ -95,19 +102,30 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("CSV header: %w", err)
 	}
+	reader.ReuseRecord = true
+	return analyzeResponses(header, func() ([]string, int, error) {
+		fields, err := reader.Read()
+		if limited.N == 0 {
+			return nil, 0, csvSizeError()
+		}
+		return fields, 0, err
+	}, options)
+}
+
+func analyzeResponses(header []string, read readResponse, options Options) (Report, error) {
 	if len(header) > maxColumns {
-		return Report{}, fmt.Errorf("CSV exceeds %d columns", maxColumns)
+		return Report{}, fmt.Errorf("答卷表最多支持 %d 列。", maxColumns)
 	}
 	byName := make(map[string]int, len(header))
 	accumulators := make([]columnSummary, 0, len(header))
 	for i, field := range header {
 		name := strings.TrimSpace(field)
 		if name == "" || len(name) > maxColumnBytes || !utf8.ValidString(name) {
-			return Report{}, fmt.Errorf("CSV column %d requires a nonblank UTF-8 name of at most %d bytes", i+1, maxColumnBytes)
+			return Report{}, fmt.Errorf("第 %d 列需要非空列名，最多 %d 个 UTF-8 字节。", i+1, maxColumnBytes)
 		}
 		key := strings.ToLower(name)
 		if _, exists := byName[key]; exists {
-			return Report{}, fmt.Errorf("CSV column %d repeats an earlier column name", i+1)
+			return Report{}, fmt.Errorf("第 %d 列的列名与前面的列重复。", i+1)
 		}
 		header[i], byName[key] = name, i
 		if !excludeSummary(key) {
@@ -144,33 +162,29 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	_, demo := byName[syntheticColumn]
 	report := Report{Columns: header, Rows: []Row{}, Summaries: make([]Summary, 0, len(accumulators)), Demo: demo}
 	seen := make(map[string]int)
-	reader.ReuseRecord = true
 	for {
-		record, err := reader.Read()
-		if limited.N == 0 {
-			return Report{}, csvSizeError()
-		}
-		if errors.Is(err, io.EOF) {
+		record, sourceRow, err := read()
+		if err == io.EOF {
 			break
 		}
 		row := report.Total + 1
 		if err != nil {
-			return Report{}, fmt.Errorf("CSV response %d: %w", row, err)
+			return Report{}, fmt.Errorf("读取第 %d 条答卷失败。%w", row, err)
 		}
 		if row > maxResponses {
-			return Report{}, fmt.Errorf("CSV exceeds %d responses", maxResponses)
+			return Report{}, fmt.Errorf("最多可分析 %d 条答卷。", maxResponses)
 		}
 		if len(record) > len(header) {
-			return Report{}, fmt.Errorf("CSV response %d has more fields than the header", row)
+			return Report{}, fmt.Errorf("第 %d 条答卷的列数超过表头。", row)
 		}
 		for i, value := range record {
 			if !utf8.ValidString(value) {
-				return Report{}, fmt.Errorf("CSV response %d contains invalid UTF-8", row)
+				return Report{}, fmt.Errorf("第 %d 条答卷包含无效的 UTF-8 字符。", row)
 			}
 			record[i] = strings.TrimSpace(value)
 		}
 
-		result := Row{Row: row, Status: StatusValid, Reasons: []string{}}
+		result := Row{Row: row, SourceRow: sourceRow, Status: StatusValid, Reasons: []string{}}
 		if hasStatus {
 			switch strings.ToLower(fieldAt(record, statusIndex)) {
 			case "held", "hold", "pending":
@@ -234,7 +248,7 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	}
 	for _, review := range options.Reviews {
 		if review.Row > report.Total {
-			return Report{}, fmt.Errorf("review row %d is outside the CSV responses", review.Row)
+			return Report{}, fmt.Errorf("第 %d 条答卷不存在，无法应用复核决定。", review.Row)
 		}
 	}
 	for i := range accumulators {
