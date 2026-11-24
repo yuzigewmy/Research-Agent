@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { CreateProjectForm } from './CreateProjectForm'
 import { ModelConnection } from './ModelConnection'
+import { Notifications } from './Notifications'
 import { ProjectDetails } from './ProjectDetails'
 import { ProjectDraftPanel } from './ProjectDraftPanel'
 import { ProjectList, useProjectList } from './ProjectList'
@@ -9,17 +10,25 @@ import { listProjectTemplates } from './projectTemplates'
 import type { ProjectTemplate } from './projectTemplates'
 import { errorMessage } from './projects'
 import type { Project } from './projects'
+import type { TaskLink } from './tasks'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
-function selectedFromUrl() {
-  return new URLSearchParams(window.location.search).get('project')
+type Selection = { projectId: string | null; taskLink?: TaskLink }
+
+function selectedFromUrl(): Selection {
+  const params = new URLSearchParams(window.location.search)
+  const projectId = params.get('project')
+  const taskId = params.get('task')
+  return { projectId, taskLink: projectId && taskId ? { taskId } : undefined }
 }
 
-function projectUrl(projectId: string | null) {
+function projectUrl(projectId: string | null, taskId?: string) {
   const url = new URL(window.location.href)
   if (projectId === null) url.searchParams.delete('project')
   else url.searchParams.set('project', projectId)
+  if (projectId !== null && taskId) url.searchParams.set('task', taskId)
+  else url.searchParams.delete('task')
   url.hash = ''
   return url.href
 }
@@ -36,7 +45,8 @@ export function App() {
 }
 
 function Workbench() {
-  const [selectedId, setSelectedId] = useState(selectedFromUrl)
+  const [selection, setSelection] = useState(selectedFromUrl)
+  const { projectId: selectedId, taskLink } = selection
   const [catalog, setCatalog] = useState<Catalog>({ kind: 'loading' })
   const list = useProjectList()
   const heading = useRef<HTMLHeadingElement>(null)
@@ -57,13 +67,17 @@ function Workbench() {
     return () => controller.abort()
   }, [creating, catalogLoading])
 
+  const syncSelection = useEffectEvent(() => {
+    const next = selectedFromUrl()
+    if (next.projectId === selectedId && next.taskLink?.taskId === taskLink?.taskId) return
+    focusOnNavigate.current = true
+    setSelection(next)
+  })
+
   useEffect(() => {
-    function syncSelection() {
-      focusOnNavigate.current = true
-      setSelectedId(selectedFromUrl())
-    }
-    window.addEventListener('popstate', syncSelection)
-    return () => window.removeEventListener('popstate', syncSelection)
+    const onPopState = () => syncSelection()
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
   useEffect(() => {
@@ -71,32 +85,37 @@ function Workbench() {
       heading.current?.focus()
       focusOnNavigate.current = false
     }
-  }, [selectedId])
+  }, [selection])
 
-  function navigate(projectId: string | null) {
-    if (projectId === selectedFromUrl()) {
+  function navigate(projectId: string | null, taskId?: string) {
+    const current = selectedFromUrl()
+    const sameSelection = projectId === current.projectId && taskId === current.taskLink?.taskId
+    if (sameSelection && taskId === undefined) {
       heading.current?.focus()
       return
     }
-    window.history.pushState(null, '', projectUrl(projectId))
+    if (!sameSelection) window.history.pushState(null, '', projectUrl(projectId, taskId))
     focusOnNavigate.current = true
-    setSelectedId(projectId)
+    setSelection({ projectId, taskLink: taskId === undefined ? undefined : { taskId } })
   }
 
-  function followProjectLink(event: MouseEvent<HTMLAnchorElement>, projectId: string | null) {
+  function followProjectLink(event: MouseEvent<HTMLAnchorElement>, projectId: string | null, taskId?: string) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
-    navigate(projectId)
+    navigate(projectId, taskId)
   }
 
   function handleCreated(project: Project) {
     list.refresh()
-    if (selectedFromUrl() === null) navigate(project.projectId)
+    if (selectedFromUrl().projectId === null) navigate(project.projectId)
   }
 
   return (
     <main className="workbench">
-      <div className="masthead"><h1>研究工作台</h1></div>
+      <header className="masthead workbench-masthead">
+        <h1>研究工作台</h1>
+        <Notifications hrefFor={projectUrl} onOpen={followProjectLink} />
+      </header>
       <ModelConnection />
       <div className="workbench-grid">
         <section className="project-panel" aria-labelledby="workspace-title">
@@ -119,7 +138,7 @@ function Workbench() {
             <CreateProjectForm templateItems={templateItems} onCreated={handleCreated} />
             <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
           </div>
-          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} onUpdated={list.refresh} />}
+          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} taskLink={taskLink} onUpdated={list.refresh} />}
         </section>
         <ProjectList list={list} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>

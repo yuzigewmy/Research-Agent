@@ -9,7 +9,7 @@ import { ProjectTaskQueue } from './ProjectTaskQueue'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
-import type { Task } from './tasks'
+import type { Task, TaskLink } from './tasks'
 import { WorkflowPanel } from './WorkflowPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import type { Material } from './materials'
@@ -67,7 +67,11 @@ function readManuscriptSelections(key: string): ManuscriptSelection[] {
   }
 }
 
-export function ProjectDetails({ projectId, onUpdated }: { projectId: string; onUpdated: (project: Project) => void }) {
+export function ProjectDetails({ projectId, taskLink, onUpdated }: {
+  projectId: string
+  taskLink?: TaskLink
+  onUpdated: (project: Project) => void
+}) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
   const [retry, setRetry] = useState(0)
   const referenceKey = `research.references.${projectId}`
@@ -208,7 +212,7 @@ export function ProjectDetails({ projectId, onUpdated }: { projectId: string; on
           acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
             current?.openId === openId ? undefined : current)}
           onManuscriptSaved={(path) => setPublishedPaths((paths) => paths.includes(path) ? paths : [path, ...paths])} />}
-      <TaskPanel projectId={project.projectId} sync={taskSync} />
+      <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
         onManuscriptSelection={addManuscriptSelection} />

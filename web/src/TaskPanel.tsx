@@ -5,10 +5,10 @@ import { selectionEditInstructionLimit } from './SelectionEdit'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
 import { TaskSelectionEdit } from './TaskSelectionEdit'
 import {
-  changeTask, conversationTurnAnchor, editTask, isMarkdownTaskPath, isTaskActive, listTasks, proposeTask, refreshTasks,
+  changeTask, conversationTurnAnchor, editTask, getTask, isMarkdownTaskPath, isTaskActive, listTasks, proposeTask, refreshTasks,
   taskArtifactPath, taskInputLimit, taskInstructionLimit, taskStatusLabels,
 } from './tasks'
-import type { ProposalInput, Task, TaskAction, TaskInputVersion, TaskPage } from './tasks'
+import type { ProposalInput, Task, TaskAction, TaskInputVersion, TaskLink, TaskPage } from './tasks'
 import type { FileRecord } from './workspace'
 import './tasks.css'
 
@@ -29,6 +29,7 @@ type CardMutation = { kind: TaskAction; task: Task }
 type Mutation = ({ kind: 'propose' } & TaskFields) | CardMutation
 type ChangeAttempt = { requestId: string; expectedRevision: number } & Partial<TaskFields>
 type MutationResult = { ok: true } | { ok: false; message: string; inputChanged?: boolean }
+type LinkedTaskResult = { link: TaskLink } & ({ kind: 'ready'; task: Task } | { kind: 'error'; message: string })
 type InstructionDraft = {
   text: string
   revision: number
@@ -272,11 +273,12 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   )
 }
 
-export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', proposedTaskId, sync }: {
+export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', proposedTaskId, taskLink, sync }: {
   projectId: string
   sourceTurnId?: string
   initialInstruction?: string
   proposedTaskId?: string
+  taskLink?: TaskLink
   sync?: TaskPanelSync
 }) {
   const panelId = useId()
@@ -287,6 +289,10 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   const [olderPending, setOlderPending] = useState(false)
   const [queueError, setQueueError] = useState('')
   const [reload, setReload] = useState(0)
+  const [linkedResult, setLinkedResult] = useState<LinkedTaskResult>()
+  const [linkedRetry, setLinkedRetry] = useState(0)
+  const linkedTask = linkedResult?.link === taskLink ? linkedResult : undefined
+  const linkedError = useRef<HTMLDivElement>(null)
   const prefill = initialInstruction.trim()
   const prefillTooLong = instructionEncoder.encode(prefill).length > taskInstructionLimit
   const [draft, setDraft] = useState(() => instructionError(prefill) ? '' : prefill)
@@ -303,10 +309,12 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   const sharedUpdates = sync?.updates
   const tasks = useMemo(() => {
     const updates = sourceTurnId ? sharedUpdates?.filter((task) => task.sourceTurnId === sourceTurnId) : sharedUpdates
-    const merged = updates?.length ? mergeTasks(localTasks, updates) : localTasks
-    const proposedTask = proposedTaskId && merged.find((task) => task.taskId === proposedTaskId)
-    return proposedTask ? [proposedTask, ...merged.filter((task) => task.taskId !== proposedTaskId)] : merged
-  }, [localTasks, sharedUpdates, sourceTurnId, proposedTaskId])
+    let merged = updates?.length ? mergeTasks(localTasks, updates) : localTasks
+    if (linkedTask?.kind === 'ready') merged = mergeTasks(merged, [linkedTask.task])
+    const featuredId = proposedTaskId ?? (linkedTask?.kind === 'ready' ? linkedTask.task.taskId : undefined)
+    const featured = featuredId && merged.find((task) => task.taskId === featuredId)
+    return featured ? [featured, ...merged.filter((task) => task.taskId !== featuredId)] : merged
+  }, [localTasks, sharedUpdates, sourceTurnId, proposedTaskId, linkedTask])
   const hasActiveTasks = tasks.some((task) => isTaskActive(task.status))
 
   const onTaskChanged = sync?.onTaskChanged
@@ -334,6 +342,30 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
     })
     return () => controller.abort()
   }, [acceptPage, projectId, proposedTaskId, reload, sourceTurnId])
+
+  useEffect(() => {
+    if (!taskLink) return
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
+    void getTask(projectId, taskLink.taskId, signal).then((task) => {
+      if (!controller.signal.aborted) setLinkedResult({ link: taskLink, kind: 'ready', task })
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      const message = error instanceof ProjectApiError && error.status === 404
+        ? '此项目中找不到链接的任务。'
+        : '无法打开链接的任务，请重试。'
+      setLinkedResult({ link: taskLink, kind: 'error', message })
+    })
+    return () => controller.abort()
+  }, [linkedRetry, projectId, taskLink])
+
+  useEffect(() => {
+    if (linkedTask?.kind === 'ready') {
+      document.getElementById(`${panelId}-${linkedTask.task.taskId}`)?.focus()
+    } else if (linkedTask?.kind === 'error') {
+      linkedError.current?.focus()
+    }
+  }, [linkedTask, panelId])
 
   const poll = useEffectEvent(async (signal: AbortSignal) => {
     const activeIds = tasks.filter((task) => isTaskActive(task.status)).map((task) => task.taskId)
@@ -526,6 +558,14 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
       <h4 id={`${panelId}-heading`}>{sourceTurnId ? '此对话的任务' : '研究计划'}</h4>
       {configured === false && <p className="task-note" role="status">研究模型未配置。研究计划需要配置模型后运行，只读稿件检查可在本机运行。</p>}
       {!proposedTaskId && proposalForm}
+      {taskLink && !linkedTask && <p className="task-note" role="status">正在打开链接的任务…</p>}
+      {linkedTask?.kind === 'error' && <div className="request-error" ref={linkedError} tabIndex={-1}>
+        <p role="alert">{linkedTask.message}</p>
+        <button className="button outline" type="button" onClick={() => {
+          setLinkedResult(undefined)
+          setLinkedRetry((value) => value + 1)
+        }}>重试打开任务</button>
+      </div>}
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {loading && <p className="task-note" role="status">正在读取任务…</p>}
       {queueError && <div className="request-error">

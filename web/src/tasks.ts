@@ -1,4 +1,4 @@
-import { request } from './projects'
+import { ProjectApiError, request } from './projects'
 
 export const taskStatusLabels = {
   PROPOSED: '待确认',
@@ -13,6 +13,7 @@ export const taskStatusLabels = {
 
 export type TaskStatus = keyof typeof taskStatusLabels
 export type TaskAction = 'confirm' | 'cancel'
+export type TaskLink = { taskId: string }
 
 export interface TaskInputVersion {
   versionId: string
@@ -116,6 +117,15 @@ export function listTasks(projectId: string, signal: AbortSignal, cursor?: strin
   const suffix = query.size ? `?${query}` : ''
   return request(tasksPath(projectId) + suffix, (value): value is TaskPage =>
     isTaskPage(value) && (!sourceTurnId || value.items.every((task) => task.sourceTurnId === sourceTurnId)), { signal })
+}
+
+export async function getTask(projectId: string, taskId: string, signal: AbortSignal) {
+  // URL parsing collapses dot segments before the request is sent.
+  if ([projectId, taskId].some((id) => !id || id === '.' || id === '..')) {
+    throw new ProjectApiError('任务链接无效。', 400)
+  }
+  return request(taskPath(projectId, taskId), (value): value is Task =>
+    isTask(value) && value.taskId === taskId, { cache: 'no-store', signal })
 }
 
 // Poll the latest page, then look up known active tasks that have moved into history.

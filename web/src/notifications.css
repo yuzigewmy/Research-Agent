@@ -1,0 +1,45 @@
+.workbench-masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.notifications { position: relative; }
+.notifications > summary::-webkit-details-marker { display: none; }
+.notification-history {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: calc(100% + 0.5rem);
+  inset-inline-end: 0;
+  display: grid;
+  gap: 0.75rem;
+  inline-size: min(27rem, calc(100vw - 2rem));
+  max-block-size: min(28rem, 55dvh);
+  overflow: auto;
+  padding: 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.notification-list { display: grid; gap: 0.75rem; margin: 0; padding: 0; list-style: none; }
+.notification-list li { display: grid; gap: 0.375rem; min-inline-size: 0; }
+.notification-list li + li { padding-block-start: 0.75rem; border-block-start: 1px solid var(--line); }
+.notification-meta { color: var(--muted); font-size: 0.875rem; overflow-wrap: anywhere; }
+.notification-instruction {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.notification-actions { display: flex; flex-wrap: wrap; gap: 0.375rem 0.75rem; }
+.notification-actions button[aria-disabled='true'] { opacity: 0.62; cursor: wait; }
+
+@media (max-width: 34rem) {
+  .notifications { position: static; }
+  .workbench-masthead { position: relative; }
+  .notification-history { inset-inline: 0; inline-size: auto; }
+}
