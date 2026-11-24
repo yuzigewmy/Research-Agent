@@ -213,6 +213,12 @@ function ReportReliability({ summaries, result, busy, error, onCalculate }: {
 
 type DraftReview = { accept: boolean; reason: string }
 
+function positiveRowNumber(value: string) {
+  if (!/^\d+$/.test(value) || value.length > 15) return undefined
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined
+}
+
 function ReportRows({ rows, busy, rulesChanged, onReview }: {
   rows: SurveyRow[]
   busy: boolean
@@ -220,14 +226,46 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
   onReview: (reviews: SurveyReview[]) => void
 }) {
   const filterId = useId()
+  const rowQueryId = useId()
   const [filter, setFilter] = useState<SurveyRow['status'] | 'all'>('all')
+  const [rowQuery, setRowQuery] = useState('')
+  const [rowNumber, setRowNumber] = useState<number>()
+  const [rowQueryError, setRowQueryError] = useState('')
   const [page, setPage] = useState(0)
   const [drafts, setDrafts] = useState<Record<number, DraftReview>>({})
   const [error, setError] = useState('')
-  const visible = filter === 'all' ? rows : rows.filter((row) => row.status === filter)
+  const statusRows = filter === 'all' ? rows : rows.filter((row) => row.status === filter)
+  const visible = rowQueryError ? [] : rowNumber === undefined ? statusRows
+    : statusRows.filter((row) => row.row === rowNumber || row.sourceRow === rowNumber)
   const start = page * rowPageSize
   const end = Math.min(start + rowPageSize, visible.length)
   const reviewCount = Object.keys(drafts).length
+
+  function applyRowQuery(raw: string) {
+    const text = raw.trim()
+    setRowQuery(text)
+    setPage(0)
+    if (text === '') {
+      setRowNumber(undefined)
+      setRowQueryError('')
+      return
+    }
+    const number = positiveRowNumber(text)
+    if (number === undefined) {
+      setRowNumber(undefined)
+      setRowQueryError('请输入正整数。')
+      return
+    }
+    setRowNumber(number)
+    setRowQueryError('')
+  }
+
+  function clearRowQuery() {
+    setRowQuery('')
+    setRowNumber(undefined)
+    setRowQueryError('')
+    setPage(0)
+  }
 
   function updateReview(row: number, review?: DraftReview) {
     setDrafts((current) => {
@@ -264,6 +302,19 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
         <option value="VALID">有效</option>
       </select>
     </div>
+    <form className="field" role="search" aria-label="答卷定位" onSubmit={(event) => {
+      event.preventDefault()
+      applyRowQuery(rowQuery)
+    }}>
+      <label htmlFor={rowQueryId}>按答卷序号或原行号定位</label>
+      <div className="survey-row-search">
+        <input id={rowQueryId} type="search" inputMode="numeric" value={rowQuery} autoComplete="off"
+          onChange={(event) => setRowQuery(event.currentTarget.value)} />
+        <button className="button outline" type="submit">定位</button>
+        {(rowQuery || rowNumber !== undefined) && <button className="button outline" type="button" onClick={clearRowQuery}>清除</button>}
+      </div>
+    </form>
+    <p className="survey-note">可输入报告里的答卷序号，或 XLSX 工作表原行号。两种编号对应不同答卷时会同时列出。</p>
     {rulesChanged && <p className="survey-note">请先应用清洗规则，再根据新报告复核。{reviewCount > 0 && '应用后会清空本次复核草稿。'}</p>}
     {visible.length ? <ol className="survey-rows" role="list">
       {visible.slice(start, end).map(({ row, sourceRow, status, reasons }) => {
@@ -297,7 +348,8 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
           </div>}
         </li>
       })}
-    </ol> : <p className="survey-note">暂无符合此筛选条件的答卷。</p>}
+    </ol> : rowQueryError ? <p className="form-error" role="alert">{rowQueryError}</p>
+      : <p className="survey-note">{rowNumber === undefined ? '暂无符合此筛选条件的答卷。' : '没有匹配的答卷。'}</p>}
     {visible.length > 0 && <div className="survey-actions">
       <p className="survey-note" role="status">显示 {start + 1} 至 {end} 条，共 {visible.length} 条</p>
       {visible.length > rowPageSize && <>
