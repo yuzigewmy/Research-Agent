@@ -14,8 +14,9 @@ type surveyCreateInput struct {
 	RequestID  string `json:"requestId"`
 	MaterialID string `json:"materialId"`
 	Options    struct {
-		RequiredColumns  []string `json:"requiredColumns"`
-		DuplicateColumns []string `json:"duplicateColumns"`
+		RequiredColumns  []string                `json:"requiredColumns"`
+		DuplicateColumns []string                `json:"duplicateColumns"`
+		CrossTab         *survey.CrossTabOptions `json:"crossTab"`
 		Reviews          []struct {
 			Row    int    `json:"row"`
 			Accept *bool  `json:"accept"`
@@ -46,7 +47,7 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 	}
 	options := survey.Options{
 		RequiredColumns: input.Options.RequiredColumns, DuplicateColumns: input.Options.DuplicateColumns,
-		Reviews: make([]survey.Review, 0, len(input.Options.Reviews)),
+		Reviews: make([]survey.Review, 0, len(input.Options.Reviews)), CrossTab: input.Options.CrossTab,
 	}
 	for _, review := range input.Options.Reviews {
 		if review.Accept == nil {

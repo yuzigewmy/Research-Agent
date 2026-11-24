@@ -6,10 +6,29 @@ export interface SurveyReview {
   reason: string
 }
 
+export interface SurveyCrossTabOptions {
+  rowColumn: string
+  columnColumn: string
+}
+
+export interface SurveyCrossTab extends SurveyCrossTabOptions {
+  included: number
+  missing: number
+  rowLabels: string[]
+  columnLabels: string[]
+  counts: number[][]
+  rowTotals: number[]
+  columnTotals: number[]
+}
+
+export const crossTabCategoryLimit = 20
+export const crossTabLabelByteLimit = 128
+
 export interface SurveyOptions {
   requiredColumns?: string[]
   duplicateColumns?: string[]
   reviews?: SurveyReview[]
+  crossTab?: SurveyCrossTabOptions
 }
 
 export interface SurveyInput {
@@ -57,6 +76,7 @@ export interface SurveyReport extends SurveyCounts {
   columns: string[]
   rows: SurveyRow[]
   summaries: SurveySummary[]
+  crossTab?: SurveyCrossTab
 }
 
 export interface SurveyRun extends SurveyMetadata {
@@ -97,12 +117,19 @@ function isReview(value: unknown): value is SurveyReview {
   return !!review && isCount(review.row) && review.row > 0 && typeof review.accept === 'boolean' && typeof review.reason === 'string'
 }
 
+function isCrossTabOptions(value: unknown): value is SurveyCrossTabOptions {
+  const options = value as Partial<SurveyCrossTabOptions> | null
+  return !!options && typeof options.rowColumn === 'string' && typeof options.columnColumn === 'string'
+    && options.rowColumn.length > 0 && options.columnColumn.length > 0 && options.rowColumn !== options.columnColumn
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
   return (options.requiredColumns === undefined || isStringList(options.requiredColumns))
     && (options.duplicateColumns === undefined || isStringList(options.duplicateColumns))
     && (options.reviews === undefined || (Array.isArray(options.reviews) && options.reviews.every(isReview)))
+    && (options.crossTab === undefined || isCrossTabOptions(options.crossTab))
 }
 
 function isRow(value: unknown): value is SurveyRow {
@@ -124,11 +151,31 @@ function isSummary(value: unknown): value is SurveySummary {
     && Array.isArray(summary.frequencies) && summary.frequencies.every(isFrequency)
 }
 
+function isCrossTabLabels(value: unknown): value is string[] {
+  return isStringList(value) && value.length <= crossTabCategoryLimit
+}
+
+function isCountList(value: unknown, length: number): value is number[] {
+  return Array.isArray(value) && value.length === length && value.every(isCount)
+}
+
+function isCrossTab(value: unknown): value is SurveyCrossTab {
+  const tab = value as Partial<SurveyCrossTab> | null
+  if (!tab) return false
+  const { included, missing, rowLabels, columnLabels, counts, rowTotals, columnTotals } = tab
+  return isCrossTabOptions(tab) && isCount(included) && isCount(missing)
+    && isCrossTabLabels(rowLabels) && isCrossTabLabels(columnLabels)
+    && Array.isArray(counts) && counts.length === rowLabels.length
+    && counts.every((row) => isCountList(row, columnLabels.length))
+    && isCountList(rowTotals, rowLabels.length) && isCountList(columnTotals, columnLabels.length)
+}
+
 function isReport(value: unknown): value is SurveyReport {
   const report = value as Partial<SurveyReport> | null
   return !!report && isStringList(report.columns)
     && Array.isArray(report.rows) && report.rows.every(isRow)
-    && Array.isArray(report.summaries) && report.summaries.every(isSummary) && isCounts(report)
+    && Array.isArray(report.summaries) && report.summaries.every(isSummary)
+    && (report.crossTab === undefined || isCrossTab(report.crossTab)) && isCounts(report)
 }
 
 function isRun(value: unknown): value is SurveyRun {
@@ -162,7 +209,7 @@ export async function readSurvey(projectId: string, analysisId: string, signal: 
 }
 
 export async function analyzeSurvey(projectId: string, input: SurveyInput, signal: AbortSignal) {
-  return request(surveysPath(projectId), isRun, {
+  return request(surveysPath(projectId), (value): value is SurveyRun => isRun(value) && value.materialId === input.materialId, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
   })
 }

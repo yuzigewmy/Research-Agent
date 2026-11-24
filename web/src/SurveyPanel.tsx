@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
-import { analyzeSurvey, listSurveys, readSurvey, surveyDownloadPath } from './surveys'
-import type { SurveyOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
+import { analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveys, readSurvey, surveyDownloadPath } from './surveys'
+import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
 import './survey.css'
 
 const reportDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
@@ -11,6 +11,7 @@ const rowPageSize = 20
 const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
+type SurveyOperation = 'analyze' | 'read' | 'cross-tab'
 
 function useSurveyList<T>(load: (signal: AbortSignal, cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>, idOf: (item: T) => string) {
   const [page, setPage] = useState<{ items: T[]; nextCursor?: string }>({ items: [] })
@@ -81,6 +82,78 @@ function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid
         </div>)}
       </dl>}
     </> : <p className="survey-note">此报告没有可汇总的列。</p>}
+  </section>
+}
+
+function CrossTabTable({ tab }: { tab: SurveyCrossTab }) {
+  return <div className="survey-cross-tab-table" role="region" aria-label="交叉统计表" tabIndex={0}>
+    <table>
+      <caption><bdi>{tab.rowColumn}</bdi> × <bdi>{tab.columnColumn}</bdi>（次数）</caption>
+      <thead><tr>
+        <th scope="col" dir="auto">{tab.rowColumn}</th>
+        {tab.columnLabels.map((label) => <th key={label} scope="col" dir="auto">{label}</th>)}
+        <th scope="col">行合计</th>
+      </tr></thead>
+      <tbody>{tab.rowLabels.map((label, rowIndex) => <tr key={label}>
+        <th scope="row" dir="auto">{label}</th>
+        {tab.columnLabels.map((column, columnIndex) => <td key={column}>{tab.counts[rowIndex][columnIndex]}</td>)}
+        <td className="survey-cross-tab-total">{tab.rowTotals[rowIndex]}</td>
+      </tr>)}</tbody>
+      <tfoot><tr>
+        <th scope="row">列合计</th>
+        {tab.columnLabels.map((column, index) => <td key={column}>{tab.columnTotals[index]}</td>)}
+        <td>{tab.included}</td>
+      </tr></tfoot>
+    </table>
+  </div>
+}
+
+function ReportCrossTab({ summaries, result, busy, error, onCalculate }: {
+  summaries: SurveySummary[]
+  result?: SurveyCrossTab
+  busy: boolean
+  error?: string
+  onCalculate: (options: SurveyCrossTabOptions) => void
+}) {
+  const id = useId()
+  const [rowColumn, setRowColumn] = useState(result?.rowColumn ?? '')
+  const [columnColumn, setColumnColumn] = useState(result?.columnColumn ?? '')
+  const columns = summaries.map(({ column }) => column)
+  const canCalculate = !busy && columns.includes(rowColumn) && columns.includes(columnColumn) && rowColumn !== columnColumn
+
+  return <section className="survey-section" aria-labelledby={`${id}-heading`}>
+    <h6 id={`${id}-heading`}>交叉统计</h6>
+    {columns.length >= 2 ? <>
+      <div className="survey-cross-tab-fields">
+        <div className="field">
+          <label htmlFor={`${id}-row`}>行分类</label>
+          <select id={`${id}-row`} value={rowColumn} disabled={busy}
+            onChange={(event) => setRowColumn(event.currentTarget.value)}>
+            <option value="">请选择字段</option>
+            {columns.map((column) => <option key={column} value={column} disabled={column === columnColumn}>{column}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-column`}>列分类</label>
+          <select id={`${id}-column`} value={columnColumn} disabled={busy}
+            onChange={(event) => setColumnColumn(event.currentTarget.value)}>
+            <option value="">请选择字段</option>
+            {columns.map((column) => <option key={column} value={column} disabled={column === rowColumn}>{column}</option>)}
+          </select>
+        </div>
+      </div>
+      <p className="survey-note" id={`${id}-help`}>
+        计算沿用当前报告已应用的清洗规则和复核决定。每个字段最多 {crossTabCategoryLimit} 类，类别名称最多 {crossTabLabelByteLimit} 个 UTF-8 字节。
+      </p>
+      <button className="button outline" type="button" disabled={!canCalculate}
+        aria-describedby={error ? `${id}-help ${id}-error` : `${id}-help`}
+        onClick={() => onCalculate({ rowColumn, columnColumn })}>计算交叉统计</button>
+    </> : <p className="survey-note">至少需要两个可统计字段。</p>}
+    {error && <p className="form-error" id={`${id}-error`} role="alert">{error}</p>}
+    {result && <>
+      <p className="survey-note" role="status">完整配对 {result.included} 份。有效答卷中任一字段缺失 {result.missing} 份。</p>
+      <CrossTabTable tab={result} />
+    </>}
   </section>
 }
 
@@ -183,11 +256,13 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
   </section>
 }
 
-function SurveyAnalysis({ projectId, run, busy, onAnalyze }: {
+function SurveyAnalysis({ projectId, run, busy, newerMaterial, crossTabError, onAnalyze }: {
   projectId: string
   run: SurveyRun
   busy: boolean
-  onAnalyze: (materialId: string, options: SurveyOptions) => void
+  newerMaterial: boolean
+  crossTabError?: string
+  onAnalyze: (options: SurveyOptions, kind?: 'cross-tab') => void
 }) {
   const { report, options } = run
   const heading = useRef<HTMLHeadingElement>(null)
@@ -204,6 +279,7 @@ function SurveyAnalysis({ projectId, run, busy, onAnalyze }: {
   const ruleOptions = {
     requiredColumns: rules.requiredColumns.length ? rules.requiredColumns : undefined,
     duplicateColumns: rules.duplicateColumns.length ? rules.duplicateColumns : undefined,
+    crossTab: options.crossTab,
   }
 
   useEffect(() => { heading.current?.focus() }, [])
@@ -225,6 +301,8 @@ function SurveyAnalysis({ projectId, run, busy, onAnalyze }: {
       <time className="survey-note" dateTime={run.createdAt}>{reportDate.format(new Date(run.createdAt))}</time>
       <a className="button outline" href={surveyDownloadPath(projectId, run.analysisId)} download>下载报告 JSON</a>
     </div>
+    <p className="survey-note">原资料 SHA-256 <code>{run.materialSha256}</code></p>
+    {newerMaterial && <p className="survey-note">资料列表中有较新的同名文件。当前报告仍基于此摘要对应的旧版资料。</p>}
     <dl className="survey-counts">
       <div><dt>总答卷</dt><dd>{report.total}</dd></div>
       <div><dt>有效</dt><dd>{report.valid}</dd></div>
@@ -248,12 +326,14 @@ function SurveyAnalysis({ projectId, run, busy, onAnalyze }: {
           </table>
         </div>
         <button className="button outline" type="button" disabled={busy || !rulesChanged}
-          onClick={() => onAnalyze(run.materialId, ruleOptions)}>应用清洗规则</button>
+          onClick={() => onAnalyze(ruleOptions)}>应用清洗规则</button>
       </div>
     </details>
     <ReportSummary summaries={report.summaries} valid={report.valid} />
+    <ReportCrossTab summaries={report.summaries} result={report.crossTab} busy={busy} error={crossTabError}
+      onCalculate={(crossTab) => onAnalyze({ ...options, crossTab }, 'cross-tab')} />
     <ReportRows rows={report.rows} busy={busy} rulesChanged={rulesChanged} onReview={(reviews) => {
-      onAnalyze(run.materialId, { ...options, reviews: [...(options.reviews ?? []), ...reviews].sort((a, b) => a.row - b.row) })
+      onAnalyze({ ...options, reviews: [...(options.reviews ?? []), ...reviews].sort((a, b) => a.row - b.row) })
     }} />
   </article>
 }
@@ -274,41 +354,47 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
   const csvFiles = materials.items.filter(({ name }) => name.toLowerCase().endsWith('.csv'))
   const [materialId, setMaterialId] = useState('')
   const [run, setRun] = useState<SurveyRun>()
-  const [busy, setBusy] = useState<'analyze' | 'read'>()
-  const [error, setError] = useState('')
+  const [busy, setBusy] = useState<SurveyOperation>()
+  const [failure, setFailure] = useState<{ kind: SurveyOperation; message: string }>()
   const active = useRef<AbortController | null>(null)
   const attempt = useRef<{ key: string; requestId: string } | null>(null)
   const currentMaterialId = csvFiles.some((file) => file.materialId === materialId) ? materialId : ''
+  const originalIndex = run ? csvFiles.findIndex((file) => file.materialId === run.materialId) : -1
+  // Material pages are ordered by upload. The report timestamp is the fallback
+  // when the source upload is beyond the pages loaded so far.
+  const newerMaterial = !!run && csvFiles.some((file, index) => file.name === run.materialName
+    && file.sha256 !== run.materialSha256
+    && (originalIndex >= 0 ? index < originalIndex : file.createdAt > run.createdAt))
   useEffect(() => () => active.current?.abort(), [])
 
-  async function open(kind: 'analyze' | 'read', request: (signal: AbortSignal) => Promise<SurveyRun>) {
+  async function open(kind: SurveyOperation, request: (signal: AbortSignal) => Promise<SurveyRun>) {
     if (active.current) return
     const controller = new AbortController()
     active.current = controller
     setBusy(kind)
-    setError('')
+    setFailure(undefined)
     try {
       const next = await request(controller.signal)
       if (controller.signal.aborted) return
       setRun(next)
-      if (kind === 'analyze') {
+      if (kind !== 'read') {
         attempt.current = null
         reports.refresh()
       }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(errorMessage(cause))
+      if (!controller.signal.aborted) setFailure({ kind, message: errorMessage(cause) })
     } finally {
       active.current = null
       if (!controller.signal.aborted) setBusy(undefined)
     }
   }
 
-  function analyze(materialId: string, options: SurveyOptions) {
+  function analyze(materialId: string, options: SurveyOptions, kind: 'analyze' | 'cross-tab' = 'analyze') {
     if (active.current) return
     const key = JSON.stringify({ materialId, options })
     if (attempt.current?.key !== key) attempt.current = { key, requestId: crypto.randomUUID() }
     const { requestId } = attempt.current
-    void open('analyze', (signal) => analyzeSurvey(projectId, { requestId, materialId, options }, signal))
+    void open(kind, (signal) => analyzeSurvey(projectId, { requestId, materialId, options }, signal))
   }
 
   return <section className="survey-panel" aria-labelledby={id}>
@@ -352,8 +438,12 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
         {!reports.loading && !reports.error && !reports.items.length && <p className="survey-note">暂无保存的报告。</p>}
       </div>
     </details>
-    {busy && <p className="survey-note" role="status">{busy === 'analyze' ? '正在分析并保存报告…' : '正在打开报告…'}</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}
-    {run && <SurveyAnalysis key={run.analysisId} run={run} projectId={projectId} busy={!!busy} onAnalyze={analyze} />}
+    {busy && <p className="survey-note" role="status">
+      {busy === 'cross-tab' ? '正在计算交叉统计…' : busy === 'analyze' ? '正在分析并保存报告…' : '正在打开报告…'}
+    </p>}
+    {failure && failure.kind !== 'cross-tab' && <p className="form-error" role="alert">{failure.message}</p>}
+    {run && <SurveyAnalysis key={run.analysisId} run={run} projectId={projectId} busy={!!busy} newerMaterial={newerMaterial}
+      crossTabError={failure?.kind === 'cross-tab' ? failure.message : undefined}
+      onAnalyze={(options, kind) => analyze(run.materialId, options, kind)} />}
   </section>
 }

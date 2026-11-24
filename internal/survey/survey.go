@@ -29,9 +29,10 @@ const (
 // Empty column lists disable the respective check. Column names are matched
 // case-insensitively after trimming whitespace.
 type Options struct {
-	RequiredColumns  []string `json:"requiredColumns,omitempty"`
-	DuplicateColumns []string `json:"duplicateColumns,omitempty"`
-	Reviews          []Review `json:"reviews,omitempty"`
+	RequiredColumns  []string         `json:"requiredColumns,omitempty"`
+	DuplicateColumns []string         `json:"duplicateColumns,omitempty"`
+	Reviews          []Review         `json:"reviews,omitempty"`
+	CrossTab         *CrossTabOptions `json:"crossTab,omitempty"`
 }
 
 // Review resolves a pending response. Row is its one-based CSV record number
@@ -52,6 +53,7 @@ type Report struct {
 	Pending   int       `json:"pending"`
 	Rows      []Row     `json:"rows"`
 	Summaries []Summary `json:"summaries"`
+	CrossTab  *CrossTab `json:"crossTab,omitempty"`
 	Demo      bool      `json:"demo"`
 }
 
@@ -121,6 +123,13 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	reviews, err := collectReviews(options.Reviews)
 	if err != nil {
 		return Report{}, err
+	}
+	var crossTab *crossTabAccumulator
+	if options.CrossTab != nil {
+		crossTab, err = newCrossTab(*options.CrossTab, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
 	}
 	statusIndex, hasStatus := byName[qualityColumn]
 	_, demo := byName[syntheticColumn]
@@ -195,6 +204,11 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 		switch result.Status {
 		case StatusValid:
 			report.Valid++
+			if crossTab != nil {
+				if err := crossTab.add(record); err != nil {
+					return Report{}, err
+				}
+			}
 			for i := range accumulators {
 				accumulators[i].add(record)
 			}
@@ -213,6 +227,9 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	}
 	for i := range accumulators {
 		report.Summaries = append(report.Summaries, accumulators[i].finish(report.Valid))
+	}
+	if crossTab != nil {
+		report.CrossTab = crossTab.finish()
 	}
 	return report, nil
 }

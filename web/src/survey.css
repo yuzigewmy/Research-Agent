@@ -64,6 +64,23 @@
 .survey-rules :is(th, td):not(:first-child) { inline-size: 3.5rem; text-align: center; }
 .survey-rules input { inline-size: 1rem; block-size: 1rem; accent-color: var(--green); }
 
+.survey-cross-tab-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.625rem;
+}
+.survey-cross-tab-fields .field { min-inline-size: 0; }
+.survey-cross-tab-table { min-inline-size: 0; overflow: auto; border: 1px solid var(--line); }
+.survey-cross-tab-table table { min-inline-size: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.survey-cross-tab-table :is(caption, th, td) { padding: 0.3125rem 0.625rem; }
+.survey-cross-tab-table caption, .survey-cross-tab-table th:first-child { text-align: start; }
+.survey-cross-tab-table :is(thead, tfoot) { background: var(--background); }
+.survey-cross-tab-table th { min-inline-size: 4rem; max-inline-size: 12rem; }
+.survey-cross-tab-table td { text-align: end; }
+.survey-cross-tab-table tbody tr { border-block-start: 1px solid var(--line); }
+.survey-cross-tab-table tfoot { border-block-start: 1px solid var(--line); }
+.survey-cross-tab-table tfoot td, .survey-cross-tab-total { font-weight: 650; }
+
 .survey-frequencies { display: grid; gap: 0.125rem; font-size: 0.875rem; }
 .survey-frequencies > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.625rem; }
 .survey-frequencies dd { color: var(--muted); white-space: nowrap; }

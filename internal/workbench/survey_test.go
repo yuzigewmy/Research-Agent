@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,7 +34,14 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return project.ProjectID
 	}
 	first, second := create("Water samples"), create("Field notes")
-	csv, _, err := store.saveMaterial(ctx, first, "samples.CSV", strings.NewReader("Score,_quality_status,__synthetic__\n8,,true\n3,held,true\n"))
+	csv, _, err := store.saveMaterial(ctx, first, "samples.CSV", strings.NewReader(`Score,Station,Choice,_quality_status,__synthetic__
+8,North,Yes,,true
+7,North,No,,true
+3,South,Yes,held,true
+4,South,,,true
+1,South,No,held,true
+5,North,Yes,invalid,true
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +65,7 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return res
 	}
 	base := projectsPath + "/" + first + "/surveys"
-	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"reviews":[{"row":2,"accept":true,"reason":"Confirmed"}]}}`, csv.MaterialID)
+	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"}}}`, csv.MaterialID)
 	created := request(http.MethodPost, base, body, http.StatusCreated).Body.String()
 	var run struct {
 		AnalysisID     string        `json:"analysisId"`
@@ -68,9 +76,22 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		Demo           bool          `json:"demo"`
 		Report         survey.Report `json:"report"`
 	}
-	if err := json.Unmarshal([]byte(created), &run); err != nil || run.AnalysisID == "" || run.Valid != 2 || !run.Demo ||
-		!run.Report.Demo || run.Report.Valid != 2 || run.MaterialID != csv.MaterialID || run.MaterialName != csv.Name || run.MaterialSHA256 != csv.SHA256 {
+	if err := json.Unmarshal([]byte(created), &run); err != nil || run.AnalysisID == "" || run.Valid != 4 || !run.Demo ||
+		!run.Report.Demo || run.Report.Valid != 4 || run.Report.Pending != 1 || run.Report.Invalid != 1 ||
+		run.MaterialID != csv.MaterialID || run.MaterialName != csv.Name || run.MaterialSHA256 != csv.SHA256 {
 		t.Fatalf("unexpected analysis receipt %s (%v)", created, err)
+	}
+	want := &survey.CrossTab{
+		CrossTabOptions: survey.CrossTabOptions{RowColumn: "Station", ColumnColumn: "Choice"},
+		Included:        3, Missing: 1, RowLabels: []string{"North", "South"}, ColumnLabels: []string{"No", "Yes"},
+		Counts: [][]int{{1, 1}, {0, 1}}, RowTotals: []int{2, 1}, ColumnTotals: []int{1, 2},
+	}
+	if !reflect.DeepEqual(run.Report.CrossTab, want) {
+		t.Fatalf("unexpected cross-tab: got %+v, want %+v", run.Report.CrossTab, want)
+	}
+	newCSV, _, err := store.saveMaterial(ctx, first, csv.Name, strings.NewReader("Score,Station,Choice\n9,East,Yes\n9,East,Yes\n"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -81,6 +102,18 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		t.Fatalf("replay changed the saved run: %s", replay)
 	}
 	request(http.MethodPost, base, strings.Replace(body, "Confirmed", "Amended", 1), http.StatusConflict)
+	newBody := fmt.Sprintf(`{"requestId":"analysis-2","materialId":%q,"options":{"crossTab":{"rowColumn":"Station","columnColumn":"Choice"}}}`, newCSV.MaterialID)
+	var replacement struct {
+		AnalysisID     string        `json:"analysisId"`
+		MaterialSHA256 string        `json:"materialSha256"`
+		Report         survey.Report `json:"report"`
+	}
+	updated := request(http.MethodPost, base, newBody, http.StatusCreated).Body.Bytes()
+	if err := json.Unmarshal(updated, &replacement); err != nil || replacement.AnalysisID == run.AnalysisID ||
+		replacement.MaterialSHA256 != newCSV.SHA256 || replacement.Report.CrossTab == nil ||
+		!reflect.DeepEqual(replacement.Report.CrossTab.Counts, [][]int{{2}}) {
+		t.Fatalf("same-name material did not produce a separate report: %s (%v)", updated, err)
+	}
 	request(http.MethodPost, base, fmt.Sprintf(`{"requestId":"broken","materialId":%q}`, bad.MaterialID), http.StatusUnprocessableEntity)
 	request(http.MethodPost, projectsPath+"/"+second+"/surveys", body, http.StatusNotFound)
 	request(http.MethodGet, projectsPath+"/"+second+"/surveys/"+run.AnalysisID, "", http.StatusNotFound)

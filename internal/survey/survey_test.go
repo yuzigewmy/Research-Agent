@@ -2,6 +2,7 @@ package survey
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -77,5 +78,36 @@ func TestAnalyze(t *testing.T) {
 	freq := got.Summaries[0].Frequencies
 	if len(freq) != 20 || freq[0] != (Frequency{Value: "z", Count: 2}) || freq[1].Value != "a" || freq[19].Value != "s" || got.Summaries[0].Answered != 28 {
 		t.Fatalf("unexpected capped frequencies or answer count: %+v", got.Summaries[0])
+	}
+}
+
+func TestAnalyzeCrossTabCategories(t *testing.T) {
+	axis := CrossTabOptions{RowColumn: "Station", ColumnColumn: "Choice"}
+	options := Options{CrossTab: &axis}
+	report, err := Analyze(strings.NewReader("Station,Choice\nNorth,\n,Yes\n"), options)
+	if err != nil || report.CrossTab == nil || report.CrossTab.Included != 0 || report.CrossTab.Missing != 2 ||
+		report.CrossTab.RowLabels == nil || report.CrossTab.ColumnLabels == nil || report.CrossTab.Counts == nil {
+		t.Fatalf("unexpected report without complete pairs: %+v (%v)", report.CrossTab, err)
+	}
+
+	var many strings.Builder
+	many.WriteString("Station,Choice\n")
+	for n := 0; n <= crossTabLevelLimit; n++ {
+		fmt.Fprintf(&many, "%d,Yes\n", n)
+	}
+	for _, tt := range []struct {
+		name, csv string
+		axes      CrossTabOptions
+	}{
+		{"repeated column", "Station,Choice\nNorth,Yes\n", CrossTabOptions{"Station", " station "}},
+		{"identifier column", "Station,Email\nNorth,example@example.test\n", CrossTabOptions{"Station", "Email"}},
+		{"too many categories", many.String(), axis},
+		{"long category", "Station,Choice\n" + strings.Repeat("北", 43) + ",Yes\n", axis},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Analyze(strings.NewReader(tt.csv), Options{CrossTab: &tt.axes}); err == nil {
+				t.Fatal("accepted an unsupported cross-tab")
+			}
+		})
 	}
 }
