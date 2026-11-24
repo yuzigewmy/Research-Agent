@@ -6,3 +6,13 @@
   color: var(--muted);
   font-size: 0.875rem;
 }
+.workspace-storage {
+  display: grid;
+  gap: 0.5rem;
+  margin-block: 0.625rem;
+  overflow-wrap: anywhere;
+}
+.workspace-storage dl { display: flex; flex-wrap: wrap; gap: 0.375rem 1.5rem; }
+.workspace-storage-path { flex-basis: 100%; }
+.workspace-storage dt { color: var(--muted); font-size: 0.875rem; }
+.workspace-storage > .button { justify-self: start; }
