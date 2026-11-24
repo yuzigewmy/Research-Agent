@@ -18,7 +18,10 @@ import (
 func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var input struct{ Messages []inference.Message }
+		var input struct {
+			Messages []inference.Message `json:"messages"`
+			Model    string              `json:"model"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			http.Error(w, "invalid model request", http.StatusBadRequest)
 			return
@@ -44,6 +47,9 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 		if !strings.Contains(text, "3\t在河流上游观测。") {
 			http.Error(w, "expected original numbered text", http.StatusBadRequest)
 			return
+		}
+		if input.Model != "fixture-review" {
+			t.Errorf("simulated review used model %q", input.Model)
 		}
 		quote := "在河流上游观测。"
 		if calls.Add(1) == 1 {
@@ -72,7 +78,7 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(store, nil, HandlerConfig{Model: model})
+	handler := NewHandler(store, nil, HandlerConfig{Model: model, ReviewModelName: "fixture-review"})
 	versions := "http://127.0.0.1" + projectsPath + "/" + project.ProjectID + "/files/versions/"
 	send := func(method, url, body string, want int) string {
 		t.Helper()
@@ -101,6 +107,9 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 	}
 	const start = `{"target":"水文学期刊"}`
 	review := decode(request(http.MethodPost, "", start, http.StatusAccepted))
+	if review.Model != "fixture-review" || review.ReasoningEffort != "" {
+		t.Fatalf("unexpected simulated review model receipt: %+v", review)
+	}
 	detail := "/" + review.ReviewID
 	wait := func(want string) manuscriptReview {
 		t.Helper()

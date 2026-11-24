@@ -23,13 +23,20 @@ func TestAutomaticReviewResumesSavedRoundAndPreservesOriginal(t *testing.T) {
 	const revised = "# 河流观测\n" + newLine + "\n所有记录来自同一组站点。\n"
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var input struct{ Messages []inference.Message }
+		var input struct {
+			Messages        []inference.Message `json:"messages"`
+			Model           string              `json:"model"`
+			ReasoningEffort string              `json:"reasoning_effort"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input.Messages) == 0 {
 			http.Error(w, "missing automatic review input", http.StatusBadRequest)
 			return
 		}
 		prompt := input.Messages[len(input.Messages)-1].Content
 		call := calls.Add(1)
+		if input.Model != "fixture-review" || input.ReasoningEffort != "max" {
+			t.Errorf("review call %d used model %q and effort %q", call, input.Model, input.ReasoningEffort)
+		}
 		finish := "stop"
 		var output string
 		switch call {
@@ -66,17 +73,17 @@ func TestAutomaticReviewResumesSavedRoundAndPreservesOriginal(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 	var handler http.Handler
-	open := func() *Store {
+	open := func(reviewModel, effort string) *Store {
 		t.Helper()
 		store, err := Open(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = store.Close() })
-		handler = NewHandler(store, nil, HandlerConfig{Model: model})
+		handler = NewHandler(store, nil, HandlerConfig{Model: model, ReviewModelName: reviewModel, ReviewReasoningEffort: effort})
 		return store
 	}
-	store := open()
+	store := open("fixture-review", "max")
 	project, _, err := store.createProject(ctx, createProjectInput{RequestID: "river", Title: "河流观测", TemplateID: "paper"})
 	if err != nil {
 		t.Fatal(err)
@@ -112,14 +119,15 @@ func TestAutomaticReviewResumesSavedRoundAndPreservesOriginal(t *testing.T) {
 	}
 	type review struct {
 		ReviewID, Target, SourceSHA256, Status, StopReason, Report string
+		Model, ReasoningEffort                                     string
 		Revision, MaxRounds, TargetScore                           int
 		Rounds                                                     []round
 	}
 	start := fmt.Sprintf(`{"requestId":"review","target":%q,"maxRounds":3,"targetScore":6}`, target)
 	var started, replayed review
 	request(http.MethodPost, base, start, http.StatusAccepted, &started)
-	if started.ReviewID == "" {
-		t.Fatal("missing automatic review receipt")
+	if started.ReviewID == "" || started.Model != "fixture-review" || started.ReasoningEffort != "max" {
+		t.Fatalf("unexpected automatic review receipt: %+v", started)
 	}
 	request(http.MethodPost, base, start, http.StatusOK, &replayed)
 	if replayed.ReviewID != started.ReviewID {
@@ -148,12 +156,23 @@ func TestAutomaticReviewResumesSavedRoundAndPreservesOriginal(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	open()
+	store = open("fixture-review-new", "low")
 	restored := waitFor(taskFailed)
-	if restored.Revision != failed.Revision || len(restored.Rounds) != 1 || restored.Rounds[0].VersionID != failed.Rounds[0].VersionID {
+	if restored.Model != started.Model || restored.ReasoningEffort != started.ReasoningEffort ||
+		restored.Revision != failed.Revision || len(restored.Rounds) != 1 || restored.Rounds[0].VersionID != failed.Rounds[0].VersionID {
 		t.Fatalf("reopening changed the failed review: %+v", restored)
 	}
 	retry := fmt.Sprintf(`{"requestId":"retry","expectedRevision":%d}`, restored.Revision)
+	moved, err := inference.New(inference.Config{BaseURL: upstream.URL + "/changed", Model: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredHandler := handler
+	handler = NewHandler(store, nil, HandlerConfig{Model: moved})
+	if response := request(http.MethodPost, detail+"/retry", retry, http.StatusConflict, nil); !strings.Contains(response.Body.String(), `"code":"REVIEW_MODEL_CONNECTION_CHANGED"`) {
+		t.Fatalf("unexpected retry error: %s", response.Body)
+	}
+	handler = restoredHandler
 	request(http.MethodPost, detail+"/retry", retry, http.StatusAccepted, nil)
 	completed := waitFor(taskSucceeded)
 	if completed.ReviewID != started.ReviewID || completed.Target != target || completed.SourceSHA256 != file.SHA256 ||

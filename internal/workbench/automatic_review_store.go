@@ -57,6 +57,7 @@ type automaticReviewRound struct {
 type automaticReview struct {
 	ReviewID string `json:"reviewId"`
 	automaticReviewOptions
+	modelSnapshot
 	Status        string                 `json:"status"`
 	Revision      int                    `json:"revision"`
 	SourceSHA256  string                 `json:"sourceSha256"`
@@ -71,7 +72,8 @@ type automaticReview struct {
 }
 
 const automaticReviewColumns = `t.ordinal, t.task_id, t.instruction, t.status, t.revision, t.created_at, t.message,
-	a.max_rounds, a.target_score, a.criteria, a.stop_reason, a.source_version_id, a.working_version_id, v.sha256`
+	a.max_rounds, a.target_score, a.criteria, a.stop_reason, a.source_version_id, a.working_version_id, v.sha256,
+	t.model_name, t.reasoning_effort, t.model_connection`
 
 const automaticReviewJoin = ` FROM automatic_reviews a JOIN tasks t ON t.project_id = a.project_id AND t.task_id = a.task_id
 	JOIN workspace_versions v ON v.version_id = a.source_version_id WHERE a.project_id = ?`
@@ -81,7 +83,7 @@ func scanAutomaticReview(row interface{ Scan(...any) error }) (automaticReview, 
 	var rounds []byte
 	err := row.Scan(&review.ordinal, &review.ReviewID, &review.Target, &review.Status, &review.Revision, &review.CreatedAt,
 		&review.Message, &review.MaxRounds, &review.TargetScore, &review.Criteria, &review.StopReason, &review.sourceVersion,
-		&review.workVersion, &review.SourceSHA256, &review.Report, &rounds)
+		&review.workVersion, &review.SourceSHA256, &review.Model, &review.ReasoningEffort, &review.connection, &review.Report, &rounds)
 	if err == nil {
 		err = json.Unmarshal(rounds, &review.Rounds)
 	}
@@ -111,7 +113,7 @@ func (s *Store) listAutomaticReviews(ctx context.Context, projectID, versionID s
 	return items, rows.Err()
 }
 
-func (s *Store) startAutomaticReview(ctx context.Context, projectID, versionID, requestID string, options automaticReviewOptions, modelReady bool) (automaticReview, bool, error) {
+func (s *Store) startAutomaticReview(ctx context.Context, projectID, versionID, requestID string, options automaticReviewOptions, model modelSnapshot) (automaticReview, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return automaticReview{}, false, err
@@ -128,12 +130,14 @@ func (s *Store) startAutomaticReview(ctx context.Context, projectID, versionID, 
 	if !errors.Is(err, sql.ErrNoRows) {
 		return automaticReview{}, false, err
 	}
-	if !modelReady {
+	if model.Model == "" {
 		return automaticReview{}, false, errModelUnavailable
 	}
 	id := rand.Text()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, queued_seq, automatic_review)
-		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, 1)`, projectID, id, options.Target, time.Now().UTC().Format(createdAtLayout), projectID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, queued_seq, automatic_review,
+		model_name, reasoning_effort, model_connection)
+		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, 1, ?, ?, ?)`, projectID, id, options.Target,
+		time.Now().UTC().Format(createdAtLayout), projectID, model.Model, model.ReasoningEffort, model.connection); err != nil {
 		return automaticReview{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO automatic_reviews
@@ -148,7 +152,7 @@ func (s *Store) startAutomaticReview(ctx context.Context, projectID, versionID, 
 	return review, true, tx.Commit()
 }
 
-func (s *Store) retryAutomaticReview(ctx context.Context, projectID, versionID, id, requestID string, revision int, modelReady bool) (automaticReview, bool, error) {
+func (s *Store) retryAutomaticReview(ctx context.Context, projectID, versionID, id, requestID string, revision int, model modelSnapshot) (automaticReview, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return automaticReview{}, false, err
@@ -180,8 +184,8 @@ func (s *Store) retryAutomaticReview(ctx context.Context, projectID, versionID, 
 	if !canRetryReview(review.Status) {
 		return automaticReview{}, false, errManuscriptReviewState
 	}
-	if !modelReady {
-		return automaticReview{}, false, errModelUnavailable
+	if err := review.checkReviewRetry(model); err != nil {
+		return automaticReview{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO task_requests(project_id, task_id, request_id, action, expected_revision)
 		VALUES (?, ?, ?, ?, ?)`, projectID, id, requestID, retryAutomaticReview, revision); err != nil {

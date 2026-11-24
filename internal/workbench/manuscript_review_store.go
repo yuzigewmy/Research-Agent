@@ -16,7 +16,8 @@ const manuscriptReviewSchema = `
 	PRAGMA user_version = 14;
 `
 
-const manuscriptReviewColumns = `ordinal, task_id, instruction, status, revision, created_at, message`
+const manuscriptReviewColumns = `ordinal, task_id, instruction, status, revision, created_at, message,
+	model_name, reasoning_effort, model_connection`
 const retryManuscriptReview = "retry-review"
 
 var errManuscriptReviewState = errors.New("review cannot be retried in its current state")
@@ -26,6 +27,7 @@ func canRetryReview(status string) bool {
 }
 
 type manuscriptReview struct {
+	modelSnapshot
 	ReviewID     string          `json:"reviewId"`
 	Target       string          `json:"target"`
 	Status       string          `json:"status"`
@@ -41,7 +43,8 @@ type manuscriptReview struct {
 func scanManuscriptReview(row interface{ Scan(...any) error }, file WorkspaceFile) (manuscriptReview, error) {
 	review := manuscriptReview{SourceSHA256: file.SHA256}
 	var findings []byte
-	if err := row.Scan(&review.ordinal, &review.ReviewID, &review.Target, &review.Status, &review.Revision, &review.CreatedAt, &review.Message, &review.Report, &findings); err != nil {
+	if err := row.Scan(&review.ordinal, &review.ReviewID, &review.Target, &review.Status, &review.Revision, &review.CreatedAt,
+		&review.Message, &review.Model, &review.ReasoningEffort, &review.connection, &review.Report, &findings); err != nil {
 		return manuscriptReview{}, err
 	}
 	if len(findings) != 0 {
@@ -76,7 +79,7 @@ func getManuscriptReview(ctx context.Context, db workspaceQuery, projectID strin
 		WHERE project_id = ? AND review_version_id = ? AND task_id = ?`, projectID, file.VersionID, id), file)
 }
 
-func (s *Store) startManuscriptReview(ctx context.Context, projectID string, file WorkspaceFile, target string, modelReady bool) (manuscriptReview, bool, error) {
+func (s *Store) startManuscriptReview(ctx context.Context, projectID string, file WorkspaceFile, target string, model modelSnapshot) (manuscriptReview, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return manuscriptReview{}, false, err
@@ -87,20 +90,21 @@ func (s *Store) startManuscriptReview(ctx context.Context, projectID string, fil
 	if !errors.Is(err, sql.ErrNoRows) {
 		return review, false, err
 	}
-	if !modelReady {
+	if model.Model == "" {
 		return manuscriptReview{}, false, errModelUnavailable
 	}
 	review, err = scanManuscriptReview(tx.QueryRowContext(ctx, `INSERT INTO tasks
-		(project_id, task_id, instruction, status, created_at, queued_seq, review_version_id)
-		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, ?) RETURNING `+manuscriptReviewColumns+`, markdown, review_findings`,
-		projectID, rand.Text(), target, time.Now().UTC().Format(createdAtLayout), projectID, file.VersionID), file)
+		(project_id, task_id, instruction, status, created_at, queued_seq, review_version_id, model_name, reasoning_effort, model_connection)
+		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, ?, ?, ?, ?) RETURNING `+manuscriptReviewColumns+`, markdown, review_findings`,
+		projectID, rand.Text(), target, time.Now().UTC().Format(createdAtLayout), projectID, file.VersionID,
+		model.Model, model.ReasoningEffort, model.connection), file)
 	if err != nil {
 		return manuscriptReview{}, false, err
 	}
 	return review, true, tx.Commit()
 }
 
-func (s *Store) retryManuscriptReview(ctx context.Context, projectID string, file WorkspaceFile, id, requestID string, revision int, modelReady bool) (manuscriptReview, bool, error) {
+func (s *Store) retryManuscriptReview(ctx context.Context, projectID string, file WorkspaceFile, id, requestID string, revision int, model modelSnapshot) (manuscriptReview, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return manuscriptReview{}, false, err
@@ -129,8 +133,8 @@ func (s *Store) retryManuscriptReview(ctx context.Context, projectID string, fil
 	if !canRetryReview(review.Status) {
 		return manuscriptReview{}, false, errManuscriptReviewState
 	}
-	if !modelReady {
-		return manuscriptReview{}, false, errModelUnavailable
+	if err := review.checkReviewRetry(model); err != nil {
+		return manuscriptReview{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO task_requests (project_id, task_id, request_id, action, expected_revision)
 		VALUES (?, ?, ?, ?, ?)`, projectID, id, requestID, retryManuscriptReview, revision); err != nil {

@@ -84,7 +84,7 @@ func (api manuscriptReviews) createAutomaticReview(w http.ResponseWriter, r *htt
 		return
 	}
 	projectID := r.PathValue("id")
-	review, created, err := api.store.startAutomaticReview(r.Context(), projectID, file.VersionID, input.RequestID, input.automaticReviewOptions, api.model != nil)
+	review, created, err := api.store.startAutomaticReview(r.Context(), projectID, file.VersionID, input.RequestID, input.automaticReviewOptions, api.reviewModel)
 	api.respondAutomaticReview(w, projectID, review, created, err)
 }
 
@@ -102,7 +102,7 @@ func (api manuscriptReviews) retryAutomaticReview(w http.ResponseWriter, r *http
 	}
 	projectID := r.PathValue("id")
 	review, applied, err := api.store.retryAutomaticReview(r.Context(), projectID, r.PathValue("versionId"), r.PathValue("reviewId"),
-		input.RequestID, input.ExpectedRevision, api.model != nil)
+		input.RequestID, input.ExpectedRevision, api.reviewModel)
 	api.respondAutomaticReview(w, projectID, review, applied, err)
 }
 

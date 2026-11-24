@@ -20,6 +20,8 @@ type Review = {
   revision: number
   sourceSha256: string
   createdAt: string
+  model?: string
+  reasoningEffort?: string
   message?: string
   report?: string
   findings?: ReviewFinding[]
@@ -50,6 +52,8 @@ function isReview(value: unknown, sourceSha256: string, reviewId?: string): valu
     && typeof review.revision === 'number' && Number.isSafeInteger(review.revision) && review.revision >= 1
     && review.sourceSha256 === sourceSha256
     && typeof review.createdAt === 'string' && Number.isFinite(Date.parse(review.createdAt))
+    && (review.model === undefined || typeof review.model === 'string')
+    && (review.reasoningEffort === undefined || typeof review.reasoningEffort === 'string')
     && (review.message === undefined || typeof review.message === 'string')
     && (review.report === undefined || typeof review.report === 'string')
     && (review.findings === undefined || (Array.isArray(review.findings) && review.findings.every(isReviewFinding)))
@@ -269,14 +273,16 @@ function VersionReviews({ route, projectId, sourceSha256, dirty, revisionActions
       showReview(review.reviewId, isActive(review))
     } catch (error) {
       if (controller.signal.aborted) return
+      let message = errorMessage(error)
       if (retry && error instanceof ProjectApiError && error.status === 409) {
         retryAttempt.current = undefined
-        setRetryConflict(retry.reviewId)
-        setActionError({ action, message: '评审状态已更新，请重新查询后再试。' })
-      } else {
-        setActionError({ action, message: errorMessage(error) })
-        if (error instanceof ProjectApiError && error.code === 'MODEL_UNAVAILABLE') setConfigured(false)
+        if (error.code !== 'REVIEW_MODEL_CONNECTION_CHANGED') {
+          setRetryConflict(retry.reviewId)
+          message = '评审状态已更新，请重新查询后再试。'
+        }
       }
+      setActionError({ action, message })
+      if (error instanceof ProjectApiError && error.code === 'MODEL_UNAVAILABLE') setConfigured(false)
     } finally {
       mutation.current = null
       if (!controller.signal.aborted) setPending(undefined)
@@ -334,6 +340,9 @@ function VersionReviews({ route, projectId, sourceSha256, dirty, revisionActions
     <div id={`${id}-detail`} hidden={!selection}>
       {selection && <div className="workspace-preview">
         {selected && <p className="workspace-note" role="status"><bdi>{selected.target}</bdi> · {statusLabels[selected.status]}</p>}
+        {selected?.model && <p className="workspace-note">
+          审稿模型 <bdi>{selected.model}</bdi> · 推理档 <bdi>{selected.reasoningEffort || '默认'}</bdi>
+        </p>}
         {selected?.message && <p className="workspace-note" dir="auto">{selected.message}</p>}
         {loadingDetail && <p className="workspace-note" role="status">正在查询评审…</p>}
         {detailError && <p className="form-error" role="alert">{detailError}</p>}

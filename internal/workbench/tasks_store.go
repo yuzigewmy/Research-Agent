@@ -12,7 +12,8 @@ import (
 const taskColumns = `ordinal, task_id, instruction, revision, status, created_at, message,
 	COALESCE(workflow_run_id, ''), COALESCE(workflow_step, 0), COALESCE(review_version_id, ''), selection_edit, finding_recheck,
 	inputs_json, COALESCE(source_turn_id, ''), automatic_review,
-	CASE WHEN ` + turnSelectionEdit + ` THEN 'selection-edit' ELSE kind END`
+	CASE WHEN ` + turnSelectionEdit + ` THEN 'selection-edit' ELSE kind END,
+	model_name, reasoning_effort, model_connection`
 
 const standaloneTask = `workflow_run_id IS NULL AND review_version_id IS NULL AND selection_edit = 0 AND finding_recheck = 0 AND automatic_review = 0`
 const turnSelectionEdit = `selection_edit = 1 AND source_turn_id IS NOT NULL`
@@ -56,6 +57,7 @@ type Task struct {
 	selectionEdit   bool
 	findingRecheck  bool
 	inputsJSON      string
+	model           modelSnapshot
 	TaskID          string      `json:"taskId"`
 	Instruction     string      `json:"instruction"`
 	Revision        int         `json:"revision"`
@@ -133,7 +135,8 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	if err := row.Scan(&t.ordinal, &t.TaskID, &t.Instruction, &t.Revision, &t.Status, &t.CreatedAt, &t.Message,
 		&t.workflowRunID, &t.workflowStep, &t.reviewVersionID, &t.selectionEdit, &t.findingRecheck,
-		&t.inputsJSON, &t.SourceTurnID, &t.automaticReview, &t.Kind); err != nil {
+		&t.inputsJSON, &t.SourceTurnID, &t.automaticReview, &t.Kind,
+		&t.model.Model, &t.model.ReasoningEffort, &t.model.connection); err != nil {
 		return Task{}, err
 	}
 	if err := json.Unmarshal([]byte(t.inputsJSON), &t.Inputs); err != nil {

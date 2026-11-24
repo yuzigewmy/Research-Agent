@@ -28,6 +28,8 @@ type HandlerConfig struct {
 	Model                   *inference.Client
 	WorkflowModelName       string
 	WorkflowReasoningEffort string
+	ReviewModelName         string
+	ReviewReasoningEffort   string
 	WordPython              string
 	SoftwarePDFFont         string
 	literature              literatureSource
@@ -50,7 +52,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerSurveys(mux)
 	store.registerQuestionnaires(mux)
 	store.registerEngineeringPreview(mux)
-	manuscriptReviews{store: store, model: config.Model}.register(mux)
+	manuscriptReviews{store: store, model: config.Model,
+		reviewModel: snapshotModel(config.Model, config.ReviewModelName, config.ReviewReasoningEffort)}.register(mux)
 	selectionEdits{store: store, model: config.Model}.register(mux)
 	findingRechecks{store: store, model: config.Model}.register(mux)
 	source := config.literature

@@ -129,6 +129,9 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 				message = "模型未返回有效的复查结论，可重试。"
 			}
 		}
+		if errors.Is(err, errReviewModelConnection) {
+			message = errReviewModelConnection.Error()
+		}
 		stop()
 		saveCtx, stopSave := context.WithTimeout(context.Background(), taskDBLimit)
 		err = s.finishTask(saveCtx, projectID, task, status, message, result)
@@ -167,6 +170,12 @@ type taskResult struct {
 }
 
 func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
+	if task.model.Model != "" {
+		if task.model.connection != model.ConnectionFingerprint() {
+			return taskResult{}, errReviewModelConnection
+		}
+		model = model.ForModel(task.model.Model, task.model.ReasoningEffort)
+	}
 	switch {
 	case task.Kind == manuscriptCheckTask:
 		return s.runManuscriptCheck(ctx, projectID, task.Inputs[0])

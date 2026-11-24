@@ -14,8 +14,9 @@ import (
 )
 
 type manuscriptReviews struct {
-	store *Store
-	model *inference.Client
+	store       *Store
+	model       *inference.Client
+	reviewModel modelSnapshot
 }
 
 func (api manuscriptReviews) register(mux *http.ServeMux) {
@@ -102,7 +103,7 @@ func (api manuscriptReviews) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := r.PathValue("id")
-	review, created, err := api.store.startManuscriptReview(r.Context(), projectID, file, target, api.model != nil)
+	review, created, err := api.store.startManuscriptReview(r.Context(), projectID, file, target, api.reviewModel)
 	api.respond(w, projectID, review, created, err)
 }
 
@@ -152,7 +153,7 @@ func (api manuscriptReviews) retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := r.PathValue("id")
-	review, saved, err := api.store.retryManuscriptReview(r.Context(), projectID, file, r.PathValue("reviewId"), input.RequestID, input.ExpectedRevision, api.model != nil)
+	review, saved, err := api.store.retryManuscriptReview(r.Context(), projectID, file, r.PathValue("reviewId"), input.RequestID, input.ExpectedRevision, api.reviewModel)
 	api.respond(w, projectID, review, saved, err)
 }
 

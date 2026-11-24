@@ -79,7 +79,7 @@ python -m venv .local/word
 $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 ```
 
-## 连接对话模型
+## 配置模型连接
 
 工作台只连接用户自行配置的模型服务，不提供平台计费、充值、余额或账单。启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求在运行环境设置 `RESEARCH_MODEL_API_KEY`。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。项目和已有会话可离线浏览。一个数据目录运行一个服务实例。
 
@@ -88,3 +88,5 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。默认对话的 8192 token 上限包含推理和正文。
 
 在同一个模型服务上提供工作流备选模型时，设置 `RESEARCH_WORKFLOW_MODEL_NAME`，并按需设置 `RESEARCH_WORKFLOW_MODEL_REASONING_EFFORT`。重启服务后，可在启动工作流前选择模型。运行记录保存该模型和推理档位，后续步骤、续跑和重跑都使用这份配置。部署端可轮换凭据。若服务地址已改动，恢复启动本轮时的地址后即可继续。
+
+设置 `RESEARCH_REVIEW_MODEL_NAME` 和可选的 `RESEARCH_REVIEW_MODEL_REASONING_EFFORT` 后，新建的模拟评审和多轮审稿使用同一服务上的专用模型。评审详情显示提交时的模型及推理档。重试继续使用这份配置。未设置审稿模型时，新评审使用默认模型。

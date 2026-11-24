@@ -38,6 +38,8 @@ interface AutoReview extends ReviewOptions {
   revision: number
   sourceSha256: string
   createdAt: string
+  model?: string
+  reasoningEffort?: string
   message?: string
   stopReason?: keyof typeof stopLabels
   report?: string
@@ -72,7 +74,8 @@ function isReview(value: unknown, sha256: string, reviewId?: string): value is A
     && typeof review.status === 'string' && Object.hasOwn(statusLabels, review.status)
     && integerInRange(review.revision, 1, Number.MAX_SAFE_INTEGER)
     && typeof review.createdAt === 'string' && Number.isFinite(Date.parse(review.createdAt))
-    && [review.criteria, review.message, review.report].every((text) => text === undefined || typeof text === 'string')
+    && [review.criteria, review.message, review.report, review.model, review.reasoningEffort]
+      .every((text) => text === undefined || typeof text === 'string')
     && (review.stopReason === undefined || (typeof review.stopReason === 'string' && Object.hasOwn(stopLabels, review.stopReason)))
     && (review.rounds === undefined || (Array.isArray(review.rounds) && review.rounds.length <= review.maxRounds
       && review.rounds.every(isRound)))
@@ -349,7 +352,7 @@ export function AutomaticReview({ projectId, versionId, sourceSha256, dirty }: {
       if (controller.signal.aborted) return false
       if (error instanceof ProjectApiError && error.status === 409) {
         delete attempts.current[action]
-        if (retry) selectReview(retry)
+        if (retry && error.code !== 'REVIEW_MODEL_CONNECTION_CHANGED') selectReview(retry)
       }
       setActionError({ action, message: errorMessage(error) })
       if (error instanceof ProjectApiError && error.code === 'MODEL_UNAVAILABLE') setConfigured(false)
@@ -392,6 +395,9 @@ export function AutomaticReview({ projectId, versionId, sourceSha256, dirty }: {
           {selected.rounds && <> · 已审 {selected.rounds.length} / {selected.maxRounds} 轮</>}
           {' · 目标 '}{selected.targetScore} / 10
         </p>
+        {selected.model && <p className="workspace-note">
+          审稿模型 <bdi>{selected.model}</bdi> · 推理档 <bdi>{selected.reasoningEffort || '默认'}</bdi>
+        </p>}
         {selected.criteria && <p className="workspace-note turn-content">补充评审标准 <bdi>{selected.criteria}</bdi></p>}
         {selected.message && <p className="workspace-note" dir="auto">{selected.message}</p>}
         {selected.stopReason && <p className="workspace-note">结束原因 · {stopLabels[selected.stopReason]}</p>}

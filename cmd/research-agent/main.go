@@ -68,6 +68,8 @@ func run(address, dataDir, webDir string) error {
 		Model:                   model,
 		WorkflowModelName:       os.Getenv("RESEARCH_WORKFLOW_MODEL_NAME"),
 		WorkflowReasoningEffort: os.Getenv("RESEARCH_WORKFLOW_MODEL_REASONING_EFFORT"),
+		ReviewModelName:         os.Getenv("RESEARCH_REVIEW_MODEL_NAME"),
+		ReviewReasoningEffort:   os.Getenv("RESEARCH_REVIEW_MODEL_REASONING_EFFORT"),
 		WordPython:              os.Getenv("RESEARCH_WORD_PYTHON"),
 		SoftwarePDFFont:         os.Getenv("RESEARCH_PDF_FONT"),
 	})
