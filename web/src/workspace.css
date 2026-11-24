@@ -93,6 +93,11 @@
 }
 
 textarea.workspace-text { resize: vertical; }
+.field.workspace-text-zoom { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.field.workspace-text-zoom select { inline-size: auto; }
+textarea.workspace-text[data-text-zoom='85'] { font-size: 0.796875rem; }
+textarea.workspace-text[data-text-zoom='115'] { font-size: 1.078125rem; }
+textarea.workspace-text[data-text-zoom='130'] { font-size: 1.21875rem; }
 textarea.workspace-text[readonly], pre.workspace-text { background: var(--background); }
 pre.workspace-text { max-block-size: 16rem; overflow: auto; border-color: var(--line); }
 

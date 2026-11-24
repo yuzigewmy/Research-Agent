@@ -17,6 +17,23 @@ const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', time
 const encoder = new TextEncoder()
 const markdownExtension = /\.(md|markdown)$/i
 const manuscriptSizeLimit = 64 * 1024
+const textZoomOptions = ['85', '100', '115', '130'] as const
+const textZoomKey = 'research-agent.workspace.text-zoom'
+type TextZoom = typeof textZoomOptions[number]
+
+function isTextZoom(value: string | null): value is TextZoom {
+  return textZoomOptions.some((option) => option === value)
+}
+
+function savedTextZoom(): TextZoom {
+  try {
+    const value = localStorage.getItem(textZoomKey)
+    if (isTextZoom(value)) return value
+  } catch {
+    // 本地存储不可用时使用默认字号。
+  }
+  return '100'
+}
 
 async function readManuscript(file: File) {
   let content: string
@@ -212,6 +229,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const [template, setTemplate] = useState<ResearchDocumentTemplate>()
   const [document, setDocument] = useState<Document>()
   const [draft, setDraft] = useState('')
+  const [editorZoom, setEditorZoom] = useState(savedTextZoom)
   const [selection, setSelection] = useState<SelectionEditRange>()
   const [applying, setApplying] = useState(false)
   const [history, setHistory] = useState(false)
@@ -482,8 +500,23 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
         <label htmlFor={`${id}-text`}>文件内容 <bdi>{document.path}</bdi></label>
         <span className="workspace-note" role="status">{dirty ? '有未保存的修改' : '已保存'}</span>
       </div>
+      <div className="field workspace-text-zoom">
+        <label htmlFor={`${id}-text-zoom`}>文字大小</label>
+        <select id={`${id}-text-zoom`} value={editorZoom} onChange={(event) => {
+          const zoom = event.currentTarget.value
+          if (!isTextZoom(zoom)) return
+          setEditorZoom(zoom)
+          try {
+            localStorage.setItem(textZoomKey, zoom)
+          } catch {
+            // 本地存储不可用时，保留本次字号选择。
+          }
+        }}>
+          {textZoomOptions.map((zoom) => <option key={zoom} value={zoom}>{zoom}%</option>)}
+        </select>
+      </div>
       <textarea className="workspace-text" id={`${id}-text`} ref={editor} rows={9} dir="auto" spellCheck={false}
-        value={draft} readOnly={locked} onSelect={(event) => selectText(event.currentTarget)} onChange={(event) => {
+        data-text-zoom={editorZoom} value={draft} readOnly={locked} onSelect={(event) => selectText(event.currentTarget)} onChange={(event) => {
           setDraft(event.currentTarget.value)
           setSelection(undefined)
         }} />
