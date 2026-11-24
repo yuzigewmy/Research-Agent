@@ -226,6 +226,7 @@ interface WorkflowModelOption {
 
 export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
+  projectTitle?: string
   revision: number
   checkpoints: boolean
   model?: string
@@ -456,6 +457,7 @@ function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
     && typeof run.checkpoints === 'boolean'
+    && (run.projectTitle === undefined || typeof run.projectTitle === 'string')
     && (run.model === undefined || typeof run.model === 'string')
     && (run.reasoningEffort === undefined || typeof run.reasoningEffort === 'string')
     && (run.confirmEachStep === undefined || typeof run.confirmEachStep === 'boolean')

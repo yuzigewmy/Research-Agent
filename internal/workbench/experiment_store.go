@@ -92,6 +92,7 @@ type WorkflowScope struct {
 type WorkflowRun struct {
 	RunID               string            `json:"runId"`
 	WorkflowKey         string            `json:"workflowKey"`
+	ProjectTitle        string            `json:"projectTitle,omitempty"`
 	Revision            int               `json:"revision"`
 	Status              string            `json:"status"`
 	Checkpoints         bool              `json:"checkpoints"`
@@ -174,13 +175,13 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
 		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json, COALESCE(w.range_source_turn_id, ''),
-		COALESCE(t.mode, ''), w.model_id, w.model_name, w.reasoning_effort, w.model_connection, w.step_models_json
+		COALESCE(t.mode, ''), w.model_id, w.model_name, w.reasoning_effort, w.model_connection, w.step_models_json, w.project_title
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
 		LEFT JOIN turns t ON t.turn_id = w.range_source_turn_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.templateCheckpoints, &run.CreatedAt, &run.step,
 			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic,
-			&run.optionsJSON, &run.rangeSourceTurnID, &mode, &run.modelID, &run.Model, &run.ReasoningEffort, &run.modelConnection, &stepModelsJSON)
+			&run.optionsJSON, &run.rangeSourceTurnID, &mode, &run.modelID, &run.Model, &run.ReasoningEffort, &run.modelConnection, &stepModelsJSON, &run.ProjectTitle)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -295,8 +296,8 @@ func (s *Store) applyWorkflow(ctx context.Context, projectID, action string, req
 }
 
 func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string, req workflowRequest, modelReady bool) (WorkflowRun, bool, error) {
-	var template string
-	if err := tx.QueryRowContext(ctx, `SELECT template_id FROM projects WHERE project_id = ?`, projectID).Scan(&template); err != nil {
+	var template, title string
+	if err := tx.QueryRowContext(ctx, `SELECT template_id, title FROM projects WHERE project_id = ?`, projectID).Scan(&template, &title); err != nil {
 		return WorkflowRun{}, false, err
 	}
 	key := projectWorkflowKey(template)
@@ -474,10 +475,10 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_runs
 			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json,
-			 range_end, range_source_turn_id, model_id, model_name, reasoning_effort, model_connection, step_models_json)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?)`, current.RunID, projectID, checkpoints,
+			 range_end, range_source_turn_id, model_id, model_name, reasoning_effort, model_connection, step_models_json, project_title)
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?)`, current.RunID, projectID, checkpoints,
 			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID,
-			modelID, model.Model, model.ReasoningEffort, model.connection, string(stepModelsJSON)); err != nil {
+			modelID, model.Model, model.ReasoningEffort, model.connection, string(stepModelsJSON), title); err != nil {
 			return WorkflowRun{}, false, err
 		}
 	case workflowPause, workflowCancel:

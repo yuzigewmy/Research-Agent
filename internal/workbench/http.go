@@ -149,8 +149,8 @@ func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Title = strings.TrimSpace(input.Title)
-	if input.Title == "" || utf8.RuneCountInString(input.Title) > 200 || strings.ContainsRune(input.Title, 0) {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "title must contain 1 to 200 characters and no null characters")
+	if !validProjectTitle(input.Title) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "研究题目须为 1 至 200 个字符，且不能包含空字符。")
 		return
 	}
 	if !validProjectTemplate(input.TemplateID) {

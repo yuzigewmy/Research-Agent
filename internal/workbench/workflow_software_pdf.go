@@ -65,8 +65,8 @@ func (api workflows) softwareIdentificationPDF(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var title, options string
-	if err := api.store.db.QueryRowContext(ctx, `SELECT p.title, w.options_json FROM workflow_runs w
-		JOIN projects p ON p.project_id = w.project_id WHERE w.project_id = ? AND w.run_id = ? AND w.workflow_key IN (?, ?)`,
+	if err := api.store.db.QueryRowContext(ctx, `SELECT project_title, options_json FROM workflow_runs
+		WHERE project_id = ? AND run_id = ? AND workflow_key IN (?, ?)`,
 		projectID, runID, softwareRegistrationWorkflowV1, softwareRegistrationWorkflow).Scan(&title, &options); err != nil {
 		writeWorkflowArtifactError(w, err)
 		return

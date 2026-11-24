@@ -107,7 +107,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 49 {
+	if version < 0 || version > 50 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -362,6 +362,11 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if version < 50 {
+		if _, err := tx.Exec(projectTitleSchema); err != nil {
+			return err
+		}
+	}
 	if err := recoverDraftPlans(tx); err != nil {
 		return err
 	}
@@ -383,9 +388,9 @@ func (s *Store) createProject(ctx context.Context, input createProjectInput) (Pr
 		Status: projectReady, Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout), DefaultTurnMode: turnModeChat,
 	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO projects (project_id, title, template_id, status, revision, created_at, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (request_id) DO NOTHING
-	`, project.ProjectID, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID)
+		INSERT INTO projects (project_id, title, created_title, template_id, status, revision, created_at, request_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (request_id) DO NOTHING
+	`, project.ProjectID, project.Title, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID)
 	if err != nil {
 		return Project{}, false, err
 	}
@@ -397,15 +402,13 @@ func (s *Store) createProject(ctx context.Context, input createProjectInput) (Pr
 		return project, true, nil
 	}
 
-	// A retry reads the immutable intent stored by the winning insert.
-	project, err = scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE request_id = ?`, input.RequestID))
-	if err != nil {
-		return Project{}, false, err
-	}
-	if project.Title != input.Title || project.TemplateID != input.TemplateID {
+	// Compare the original create request even after the research title changes.
+	project, err = scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects
+		WHERE request_id = ? AND created_title = ? AND template_id = ?`, input.RequestID, input.Title, input.TemplateID))
+	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, false, errRequestConflict
 	}
-	return project, false, nil
+	return project, false, err
 }
 
 func (s *Store) getProject(ctx context.Context, id string) (Project, error) {

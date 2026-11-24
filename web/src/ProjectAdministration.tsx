@@ -8,11 +8,12 @@ interface ProjectAdministrationProps {
   onUpdated: (project: Project) => void
 }
 
-type Operation = 'save' | 'save-mode' | 'archive' | 'restore' | 'refresh'
+type Operation = 'save' | 'save-title' | 'save-mode' | 'archive' | 'restore' | 'refresh'
 type Feedback = { kind: 'success' | 'error'; message: string } | { kind: 'conflict'; refreshError?: string }
 
 const successMessages: Record<Operation, string> = {
   save: '显示名已保存。',
+  'save-title': '研究题目已保存。',
   'save-mode': '默认协作方式已保存。',
   archive: '项目已归档。',
   restore: '项目已恢复。',
@@ -22,15 +23,21 @@ const successMessages: Record<Operation, string> = {
 export function ProjectAdministration({ project, onUpdated }: ProjectAdministrationProps) {
   const id = useId()
   const [draft, setDraft] = useState<string>()
+  const [titleDraft, setTitleDraft] = useState<string>()
   const [modeDraft, setModeDraft] = useState<TurnMode>()
   const [pending, setPending] = useState<Operation>()
   const [feedback, setFeedback] = useState<Feedback>()
   const operation = useRef<AbortController | null>(null)
   const attempt = useRef<UpdateProject | undefined>(undefined)
   const nameInput = useRef<HTMLInputElement>(null)
+  const titleInput = useRef<HTMLInputElement>(null)
   const refreshButton = useRef<HTMLButtonElement>(null)
   const name = draft ?? project.displayName
   const dirty = name.trim() !== project.displayName
+  const title = titleDraft ?? project.title
+  const trimmedTitle = title.trim()
+  const titleDirty = trimmedTitle !== project.title
+  const titleInvalid = !trimmedTitle || Array.from(trimmedTitle).length > 200 || trimmedTitle.includes('\0')
   const savedMode = project.defaultTurnMode ?? 'CHAT'
   const mode = modeDraft ?? savedMode
   const modeDirty = mode !== savedMode
@@ -52,7 +59,7 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
       let next: Project
       if (changes) {
         const previous = attempt.current
-        const input = previous?.expectedRevision === project.revision &&
+        const input = previous?.expectedRevision === project.revision && previous.title === changes.title &&
           previous.displayName === changes.displayName && previous.status === changes.status &&
           previous.defaultTurnMode === changes.defaultTurnMode
           ? previous
@@ -65,8 +72,11 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
       if (controller.signal.aborted) return
       attempt.current = undefined
       if (kind === 'save' || !dirty) setDraft(undefined)
+      if (kind === 'save-title' || !titleDirty || trimmedTitle === next.title) setTitleDraft(undefined)
       if (kind === 'save-mode' || !modeDirty || mode === (next.defaultTurnMode ?? 'CHAT')) setModeDraft(undefined)
-      if (kind === 'refresh' && document.activeElement === refreshButton.current) nameInput.current?.focus()
+      if (kind === 'refresh' && document.activeElement === refreshButton.current) {
+        (titleDirty ? titleInput : nameInput).current?.focus()
+      }
       onUpdated(next)
       setFeedback({ kind: 'success', message: successMessages[kind] })
     } catch (error) {
@@ -106,6 +116,26 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
         <p className="project-management-help" id={`${id}-help`}>
           {dirty && project.displayName && <>当前显示名为 <bdi>{project.displayName}</bdi>。 </>}
           留空时显示研究题目。
+        </p>
+      </form>
+      <form className="field" onSubmit={(event) => {
+        event.preventDefault()
+        if (!writesBlocked && titleDirty && !titleInvalid) void run('save-title', { title: trimmedTitle })
+      }}>
+        <label htmlFor={`${id}-title`}>研究题目</label>
+        <div className="project-name-controls">
+          <input id={`${id}-title`} ref={titleInput} type="text" value={title} readOnly={pending !== undefined}
+            required aria-invalid={titleDirty && titleInvalid ? true : undefined} aria-describedby={`${id}-title-help`}
+            onChange={(event) => {
+              setTitleDraft(event.currentTarget.value)
+              if (!hasConflict) setFeedback(undefined)
+            }} />
+          <button className="button outline" type="submit" aria-disabled={writesBlocked || !titleDirty || titleInvalid}>
+            {pending === 'save-title' ? '正在保存…' : '保存研究题目'}
+          </button>
+        </div>
+        <p className="project-management-help" id={`${id}-title-help`}>
+          {titleDirty && titleInvalid ? '请填写 1 至 200 个字符。' : '新工作流采用最新研究题目。续跑沿用本轮的题目。'}
         </p>
       </form>
       <form className="field" onSubmit={(event) => {

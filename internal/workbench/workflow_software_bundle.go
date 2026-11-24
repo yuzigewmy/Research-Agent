@@ -63,10 +63,7 @@ func (s *Store) readSoftwareBundle(ctx context.Context, projectID, runID string,
 	}
 
 	manifest := softwareBundleManifest{RunID: runID, Revision: revision, WorkflowKey: run.WorkflowKey,
-		Version: run.Software.Version, Omitted: make([]string, 0, 2)}
-	if err := tx.QueryRowContext(ctx, `SELECT title FROM projects WHERE project_id = ?`, projectID).Scan(&manifest.Title); err != nil {
-		return softwareBundleManifest{}, nil, err
-	}
+		Title: run.ProjectTitle, Version: run.Software.Version, Omitted: make([]string, 0, 2)}
 	artifacts := make([]softwareBundleArtifact, 0, len(run.Steps))
 	// Read the selected revision and all its bodies from the same database snapshot.
 	for index, step := range run.Steps {

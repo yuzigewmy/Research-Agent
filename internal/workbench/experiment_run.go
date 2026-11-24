@@ -34,17 +34,18 @@ type workflowOutputError struct{ err error }
 
 func (e workflowOutputError) Error() string { return e.err.Error() }
 
-func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, project Project, task Task, input string) (taskResult, error) {
+func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, project Project, task Task) (taskResult, error) {
 	projectID := project.ProjectID
 	var key, evidence, options, sourceTurnID string
 	var modelName, reasoningEffort, connection, stepModelsJSON string
 	var selectedNumber int
 	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number,
-		COALESCE(range_source_turn_id, ''), model_name, reasoning_effort, model_connection, step_models_json
+		COALESCE(range_source_turn_id, ''), model_name, reasoning_effort, model_connection, step_models_json, project_title
 		FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
-		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID, &modelName, &reasoningEffort, &connection, &stepModelsJSON); err != nil {
+		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID, &modelName, &reasoningEffort, &connection, &stepModelsJSON, &project.Title); err != nil {
 		return taskResult{}, err
 	}
+	input := researchTaskInput(project, task.Instruction)
 	stages := workflowStages[key]
 	stage := stages[task.workflowStep]
 	var stepModels workflowStepModels

@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,12 +21,16 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 	}
 	requests := make(chan modelRequest, 3)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request modelRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || r.Header.Get("Authorization") != "Bearer "+credential {
+		var payload struct {
+			modelRequest
+			Messages []inference.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || r.Header.Get("Authorization") != "Bearer "+credential ||
+			len(payload.Messages) != 2 || !strings.HasPrefix(payload.Messages[1].Content, `项目标题："河流采样"`) {
 			http.Error(w, "invalid fixture request", http.StatusBadRequest)
 			return
 		}
-		requests <- request
+		requests <- payload.modelRequest
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"# 采样方案\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
@@ -90,8 +95,14 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 	var started WorkflowRun
 	if err := json.Unmarshal(request(http.MethodPost, "", start, http.StatusCreated), &started); err != nil ||
 		started.Status != taskQueued || started.Model != "fixture-workflow" || started.ReasoningEffort != "max" ||
-		len(started.Steps) != 3 || started.Steps[0].Model != "fixture-chat" || started.Steps[0].ReasoningEffort != "low" || started.Steps[1].Model != "" {
+		started.ProjectTitle != project.Title || len(started.Steps) != 3 || started.Steps[0].Model != "fixture-chat" || started.Steps[0].ReasoningEffort != "low" || started.Steps[1].Model != "" {
 		t.Fatalf("unexpected workflow start receipt: %+v (%v)", started, err)
+	}
+	if _, err := store.patchProject(ctx, project.ProjectID, patchProjectInput{
+		RequestID: "rename", ExpectedRevision: project.Revision,
+		Title: projectPatchField{sql.NullString{String: "流域采样", Valid: true}},
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -179,7 +190,11 @@ func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER notify_task_status; DROP TABLE task_notifications;
-		ALTER TABLE workflow_requests DROP COLUMN requested_model_id; PRAGMA user_version = 47`); err != nil {
+		ALTER TABLE workflow_requests DROP COLUMN requested_model_id;
+		ALTER TABLE projects DROP COLUMN created_title;
+		ALTER TABLE project_patch_requests DROP COLUMN title;
+		ALTER TABLE workflow_runs DROP COLUMN project_title;
+		PRAGMA user_version = 47`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -193,7 +208,7 @@ func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
 	for _, modelID := range []string{"", defaultModelID} {
 		request.ModelID = modelID
 		replayed, applied, err := reopened.applyWorkflow(ctx, project.ProjectID, workflowStart, request, false)
-		if err != nil || applied || replayed.RunID != original.RunID || replayed.Revision != original.Revision {
+		if err != nil || applied || replayed.RunID != original.RunID || replayed.Revision != original.Revision || replayed.ProjectTitle != project.Title {
 			t.Fatalf("legacy replay with model %q changed: %+v (%v)", modelID, replayed, err)
 		}
 	}

@@ -200,17 +200,10 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	if err != nil {
 		return taskResult{}, err
 	}
-	input := fmt.Sprintf("项目标题：%q\n项目类型：%q", project.Title, project.TemplateID)
-	if project.Goal != "" {
-		input += fmt.Sprintf("\n研究目标：%q", project.Goal)
-	}
-	if project.Deliverables != "" {
-		input += fmt.Sprintf("\n预期交付物：%q", project.Deliverables)
-	}
-	input += "\n任务要求：\n" + task.Instruction
 	if task.workflowRunID != "" {
-		return s.generateWorkflowResult(ctx, model, project, task, input)
+		return s.generateWorkflowResult(ctx, model, project, task)
 	}
+	input := researchTaskInput(project, task.Instruction)
 	if task.SourceTurnID != "" {
 		source, err := s.taskTurnContext(ctx, projectID, task.SourceTurnID)
 		if err != nil {
@@ -234,6 +227,17 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	}
 	markdown, err := streamTaskMarkdown(ctx, model, researchPlanPrompt, input)
 	return taskResult{markdown: markdown}, err
+}
+
+func researchTaskInput(project Project, instruction string) string {
+	input := fmt.Sprintf("项目标题：%q\n项目类型：%q", project.Title, project.TemplateID)
+	if project.Goal != "" {
+		input += fmt.Sprintf("\n研究目标：%q", project.Goal)
+	}
+	if project.Deliverables != "" {
+		input += fmt.Sprintf("\n预期交付物：%q", project.Deliverables)
+	}
+	return input + "\n任务要求：\n" + instruction
 }
 
 func streamTaskMarkdown(ctx context.Context, model *inference.Client, prompt, input string) (string, error) {

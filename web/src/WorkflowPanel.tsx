@@ -61,12 +61,14 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
 }
 
-function WorkflowRunModel({ run }: { run: WorkflowRun }) {
-  if (!run.model && !run.reasoningEffort) return null
-  return <p className="workflow-note">
-    {run.model && <>本轮模型 <bdi>{run.model}</bdi> · </>}
-    推理档 <bdi>{run.reasoningEffort || '默认'}</bdi>
-  </p>
+function WorkflowRunContext({ run }: { run: WorkflowRun }) {
+  return <>
+    {run.projectTitle && <p className="workflow-note">本轮研究题目 <bdi>{run.projectTitle}</bdi></p>}
+    {(run.model || run.reasoningEffort) && <p className="workflow-note">
+      {run.model && <>本轮模型 <bdi>{run.model}</bdi> · </>}
+      推理档 <bdi>{run.reasoningEffort || '默认'}</bdi>
+    </p>}
+  </>
 }
 
 function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWordConfigured }: {
@@ -587,7 +589,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       </p>}
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
-      {run && <WorkflowRunModel run={run} />}
+      {run && <WorkflowRunContext run={run} />}
       {run && <WorkflowProposalSummary run={run} />}
       {run && <WorkflowCourseSummary run={run} />}
       {run && <WorkflowSoftwareSummary run={run} />}
@@ -809,7 +811,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId}
         renderSteps={(historicalRun) => <>
           <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
-          <WorkflowRunModel run={historicalRun} />
+          <WorkflowRunContext run={historicalRun} />
           <WorkflowProposalSummary run={historicalRun} />
           <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSoftwareSummary run={historicalRun} />

@@ -116,4 +116,28 @@ func TestProjectLifecycle(t *testing.T) {
 	if conflict.Error.Code != "REQUEST_ID_CONFLICT" {
 		t.Fatalf("wrong mode replay conflict: %+v", conflict.Error)
 	}
+
+	request(http.MethodPatch, path, `{"requestId":"empty-title","expectedRevision":4,"title":" "}`, http.StatusBadRequest, &conflict)
+	request(http.MethodPatch, path, `{"requestId":"revise-title","expectedRevision":3,"title":"流域水温观测"}`, http.StatusConflict, &conflict)
+	if conflict.Error.Code != "REVISION_CONFLICT" {
+		t.Fatalf("wrong stale title error: %+v", conflict.Error)
+	}
+	const reviseTitle = `{"requestId":"revise-title","expectedRevision":4,"title":"  流域水温观测  "}`
+	var titled observedProject
+	request(http.MethodPatch, path, reviseTitle, http.StatusOK, &titled)
+	if titled.Title != "流域水温观测" || titled.DisplayName != restored.DisplayName || titled.Revision != 5 {
+		t.Fatalf("unexpected updated title: %+v", titled)
+	}
+	request(http.MethodPatch, path, reviseTitle, http.StatusOK, &current)
+	if current != titled {
+		t.Fatalf("title request replay changed the project: %+v", current)
+	}
+	request(http.MethodPatch, path, strings.Replace(reviseTitle, "流域水温观测", "对照实验", 1), http.StatusConflict, &conflict)
+	request(http.MethodPost, projectsPath, `{"requestId":"create","title":"河流基线","templateId":"experiment"}`, http.StatusOK, &current)
+	if current != titled {
+		t.Fatalf("original creation request did not recover the renamed project: %+v", current)
+	}
+	request(http.MethodPost, projectsPath, `{"requestId":"create","title":"流域水温观测","templateId":"experiment"}`, http.StatusConflict, &conflict)
+	assertList("q="+url.QueryEscape(titled.Title), titled)
+	assertList("q=" + url.QueryEscape(created.Title))
 }

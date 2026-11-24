@@ -70,10 +70,11 @@ export interface ProjectFilters {
 }
 
 export type ProjectChanges = {
+  title?: string
   displayName?: string
   status?: ProjectStatus
   defaultTurnMode?: TurnMode
-} & ({ displayName: string } | { status: ProjectStatus } | { defaultTurnMode: TurnMode })
+} & ({ title: string } | { displayName: string } | { status: ProjectStatus } | { defaultTurnMode: TurnMode })
 
 export type UpdateProject = ProjectChanges & { requestId: string; expectedRevision: number }
 

@@ -212,8 +212,8 @@ func (s *Store) changeProjectDraft(ctx context.Context, id, action string, req d
 		}
 		draft.ProjectID = rand.Text()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO projects
-			(project_id, request_id, title, template_id, goal, deliverables, status, revision, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, 'READY', 1, ?)`, draft.ProjectID, rand.Text(), draft.Title, draft.TemplateID, draft.Goal, draft.Deliverables, stamp); err != nil {
+			(project_id, request_id, title, created_title, template_id, goal, deliverables, status, revision, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'READY', 1, ?)`, draft.ProjectID, rand.Text(), draft.Title, draft.Title, draft.TemplateID, draft.Goal, draft.Deliverables, stamp); err != nil {
 			return projectDraft{}, false, err
 		}
 		if err := publishDraftMaterials(ctx, tx, draft.DraftID, draft.ProjectID); err != nil {

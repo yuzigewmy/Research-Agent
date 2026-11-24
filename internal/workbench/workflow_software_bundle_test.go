@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -78,7 +79,17 @@ func TestSoftwareWorkflowBundleBindsFilesToCompletedRevision(t *testing.T) {
 	if err != nil || completed.RunID != run.RunID || completed.Status != workflowDone {
 		t.Fatalf("expected a completed registration run: %+v (%v)", completed, err)
 	}
-	pending := start(registration, "pending", nil)
+	updated, err := store.patchProject(ctx, registration.ProjectID, patchProjectInput{
+		RequestID: "rename-software", ExpectedRevision: registration.Revision,
+		Title: projectPatchField{sql.NullString{String: "流域观测记录软件", Valid: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := start(updated, "pending", nil)
+	if pending.ProjectTitle != updated.Title {
+		t.Fatalf("new run used a previous title: %+v", pending)
+	}
 	paperRun := start(paper, "paper", nil)
 	for _, key := range []string{"outline", "manuscript", "structure"} {
 		finish(paper, paperRun, key, "# Paper "+key+"\n")
