@@ -15,8 +15,9 @@ import (
 const taskInstructionLimit = 8 << 10
 
 type researchTasks struct {
-	store *Store
-	model *inference.Client
+	store     *Store
+	model     *inference.Client
+	editModel modelSnapshot
 }
 
 type taskPage struct {
@@ -144,6 +145,7 @@ func (api researchTasks) change(action string) http.HandlerFunc {
 }
 
 func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskRequest) {
+	req.editModel = api.editModel
 	task, applied, err := api.store.applyTaskRequest(r.Context(), req, api.model != nil)
 	switch {
 	case errors.Is(err, errInvalidTaskSource):

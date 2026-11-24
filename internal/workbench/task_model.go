@@ -14,7 +14,10 @@ const taskModelSchema = `
 	PRAGMA user_version = 45;
 `
 
-var errReviewModelConnection = errors.New("请恢复提交本次审稿时的模型服务地址，再重试。")
+var (
+	errReviewModelConnection = errors.New("请恢复提交本次审稿时的模型服务地址，再重试。")
+	errEditModelConnection   = errors.New("改稿任务使用的模型服务地址已变更。请核对当前连接后重新生成建议。")
+)
 
 const defaultModelID = "default"
 

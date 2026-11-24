@@ -11,8 +11,9 @@ import (
 )
 
 type selectionEdits struct {
-	store *Store
-	model *inference.Client
+	store     *Store
+	model     *inference.Client
+	editModel modelSnapshot
 }
 
 func (api selectionEdits) register(mux *http.ServeMux) {
@@ -49,7 +50,7 @@ func (api selectionEdits) create(w http.ResponseWriter, r *http.Request) {
 		writeSelectionEditError(w, err)
 		return
 	}
-	edit, created, err := api.store.queueSelectionEdit(ctx, projectID, doc, input, api.model != nil)
+	edit, created, err := api.store.queueSelectionEdit(ctx, projectID, doc, input, api.editModel)
 	if err != nil {
 		writeSelectionEditError(w, err)
 		return

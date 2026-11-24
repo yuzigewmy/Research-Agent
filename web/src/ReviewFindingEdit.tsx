@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { FindingRecheck } from './FindingRecheck'
+import { EditModelReceipt } from './SelectionEdit'
 import { errorMessage, ProjectApiError, request } from './projects'
 import { isFileRecord } from './workspace'
 import type { Document } from './workspace'
@@ -14,6 +15,8 @@ export type FindingEdit = {
   versionId: string
   status: keyof typeof editLabels
   original: string
+  model?: string
+  reasoningEffort?: string
   replacement?: string
   reason?: string
   message?: string
@@ -45,7 +48,8 @@ function isFindingEdit(value: unknown): value is FindingEdit {
   const edit = value as Partial<FindingEdit> | null
   return !!edit && isId(edit.editId) && isId(edit.versionId) && typeof edit.original === 'string'
     && typeof edit.status === 'string' && Object.hasOwn(editLabels, edit.status)
-    && [edit.replacement, edit.reason, edit.message].every((text) => text === undefined || typeof text === 'string')
+    && [edit.replacement, edit.reason, edit.message, edit.model, edit.reasoningEffort]
+      .every((text) => text === undefined || typeof text === 'string')
     && (edit.appliedVersionId === undefined || isId(edit.appliedVersionId))
 }
 
@@ -251,6 +255,7 @@ export function ReviewFindingEdit({ projectId, reviewId, route, finding, expande
     {revisionActions?.disabled && pending !== 'apply' && <p className="workspace-note">请在编辑器就绪且稿件已保存时生成或应用修订。</p>}
     {edit && <>
       <p className="workspace-note" role="status">{edit.appliedVersionId ? '修订已应用' : editLabels[edit.status]}</p>
+      <EditModelReceipt model={edit.model} reasoningEffort={edit.reasoningEffort} />
       {edit.message && <p className="workspace-note" dir="auto">{edit.message}</p>}
       {edit.status === 'SUCCEEDED' && <>
         <p className="workspace-note">修订原文</p>

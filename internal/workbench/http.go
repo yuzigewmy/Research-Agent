@@ -32,6 +32,8 @@ type HandlerConfig struct {
 	WorkflowReasoningEffort     string
 	ReviewModelName             string
 	ReviewReasoningEffort       string
+	EditModelName               string
+	EditReasoningEffort         string
 	WordPython                  string
 	SoftwarePDFFont             string
 	literature                  literatureSource
@@ -40,12 +42,13 @@ type HandlerConfig struct {
 // NewHandler serves the API and files from a trusted web build directory.
 func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
+	editModel := snapshotModel(config.Model, config.EditModelName, config.EditReasoningEffort)
 	registerModelConnection(mux, config.Model)
-	conversation{store: store, model: config.Model,
+	conversation{store: store, model: config.Model, editModel: editModel,
 		modelOptions: configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort),
 	}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
-	researchTasks{store: store, model: config.Model}.register(mux)
+	researchTasks{store: store, model: config.Model, editModel: editModel}.register(mux)
 	store.registerTaskQueue(mux)
 	workflows{store: store, model: config.Model,
 		modelOptions:    configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort),
@@ -56,9 +59,9 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerSurveys(mux)
 	store.registerQuestionnaires(mux)
 	store.registerEngineeringPreview(mux)
-	manuscriptReviews{store: store, model: config.Model,
+	manuscriptReviews{store: store, model: config.Model, editModel: editModel,
 		reviewModel: snapshotModel(config.Model, config.ReviewModelName, config.ReviewReasoningEffort)}.register(mux)
-	selectionEdits{store: store, model: config.Model}.register(mux)
+	selectionEdits{store: store, model: config.Model, editModel: editModel}.register(mux)
 	findingRechecks{store: store, model: config.Model}.register(mux)
 	source := config.literature
 	if source == nil {

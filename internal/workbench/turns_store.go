@@ -64,6 +64,7 @@ type TurnEvent struct {
 	WorkflowProposal *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 	proposal         turnProposal
 	workflowModel    modelOption
+	editModel        modelSnapshot
 	queued           bool
 }
 
@@ -295,7 +296,7 @@ func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e *TurnEven
 			}
 			workflowJSON, e.queued = string(body), queued
 		case e.proposal.instruction != "":
-			taskID, queued, err := insertTurnProposal(ctx, tx, turnID, e.proposal)
+			taskID, queued, err := insertTurnProposal(ctx, tx, turnID, e.proposal, e.editModel)
 			if err != nil {
 				return 0, err
 			}

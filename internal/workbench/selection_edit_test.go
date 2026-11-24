@@ -17,8 +17,13 @@ func TestSelectionEditAppliesOnceToItsSavedVersion(t *testing.T) {
 	const selected = "待删除🌊。"
 	const source = "# 河流\r\n" + selected + "保留原样。\r\n"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var input struct{ Messages []inference.Message }
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil ||
+		var input struct {
+			Messages        []inference.Message `json:"messages"`
+			Model           string              `json:"model"`
+			ReasoningEffort string              `json:"reasoning_effort"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || len(input.Messages) != 2 ||
+			input.Model != "fixture-edit" || input.ReasoningEffort != "high" ||
 			!strings.Contains(input.Messages[1].Content, `"selected":"`+selected+`"`) {
 			http.Error(w, "unexpected selection", http.StatusBadRequest)
 			return
@@ -31,12 +36,14 @@ func TestSelectionEditAppliesOnceToItsSavedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(t.TempDir())
+	directory := t.TempDir()
+	store, err := Open(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
+	editModel := snapshotModel(model, "fixture-edit", "high")
 	project, _, err := store.createProject(ctx, createProjectInput{RequestID: "project", Title: "河流记录", TemplateID: "paper"})
 	if err != nil {
 		t.Fatal(err)
@@ -49,12 +56,25 @@ func TestSelectionEditAppliesOnceToItsSavedVersion(t *testing.T) {
 	input := selectionEditInput{RequestID: "edit", StartByte: start, EndByte: start + len(selected), Instruction: "删除这段文字。"}
 	broken := input
 	broken.StartByte++
-	if _, _, err := store.queueSelectionEdit(ctx, project.ProjectID, base, broken, true); !errors.Is(err, errSelectionRange) {
+	if _, _, err := store.queueSelectionEdit(ctx, project.ProjectID, base, broken, editModel); !errors.Is(err, errSelectionRange) {
 		t.Fatalf("split UTF-8 accepted: %v", err)
 	}
-	queued, created, err := store.queueSelectionEdit(ctx, project.ProjectID, base, input, true)
-	if err != nil || !created || queued.Original != selected {
+	queued, created, err := store.queueSelectionEdit(ctx, project.ProjectID, base, input, editModel)
+	if err != nil || !created || queued.Original != selected || queued.Model != "fixture-edit" || queued.ReasoningEffort != "high" {
 		t.Fatalf("queue returned %+v, %t, %v", queued, created, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store = reopened
+	changed := snapshotModel(model, "fixture-new-edit", "low")
+	if replay, created, err := store.queueSelectionEdit(ctx, project.ProjectID, base, input, changed); err != nil || created ||
+		replay.EditID != queued.EditID || replay.Model != queued.Model || replay.ReasoningEffort != queued.ReasoningEffort {
+		t.Fatalf("reopened edit receipt changed: %+v, %t, %v", replay, created, err)
 	}
 	task, err := store.claimQueuedTask(ctx, project.ProjectID, true)
 	if err != nil || !task.selectionEdit || task.TaskID != queued.EditID {

@@ -69,8 +69,10 @@ func TestConversationBatchEditAppliesEachManuscriptIndependently(t *testing.T) {
 	var proposals, executions atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
-			Messages []inference.Message
-			Tools    []struct{ Function inference.Tool }
+			Messages        []inference.Message
+			Model           string
+			ReasoningEffort string `json:"reasoning_effort"`
+			Tools           []struct{ Function inference.Tool }
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Messages) == 0 {
 			http.Error(w, "missing model input", http.StatusBadRequest)
@@ -89,6 +91,9 @@ func TestConversationBatchEditAppliesEachManuscriptIndependently(t *testing.T) {
 		}
 
 		executions.Add(1)
+		if request.Model != "fixture-edit" || request.ReasoningEffort != "high" {
+			t.Errorf("confirmed edit used model %q and reasoning effort %q", request.Model, request.ReasoningEffort)
+		}
 		var input struct {
 			Instruction string
 			Edits       []struct{ VersionID, Path, Before, Selected, After string }
@@ -193,6 +198,7 @@ func TestConversationBatchEditAppliesEachManuscriptIndependently(t *testing.T) {
 	}
 	confirm := fmt.Sprintf(`{"requestId":"approve-edits","expectedRevision":%d}`, task.Revision)
 	confirmPath := "/tasks/" + task.TaskID + "/confirm"
+	handler = NewHandler(store, nil, HandlerConfig{Model: model, EditModelName: "fixture-edit", EditReasoningEffort: "high"})
 	request(http.MethodPost, confirmPath, confirm, http.StatusAccepted, nil)
 	var finished Task
 	for {

@@ -27,6 +27,7 @@ type conversation struct {
 	store        *Store
 	model        *inference.Client
 	modelOptions []modelOption
+	editModel    modelSnapshot
 }
 
 func (c conversation) register(mux *http.ServeMux) {
@@ -92,7 +93,7 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 
 func (c conversation) reply(ctx context.Context, model *inference.Client, project Project, turn Turn) {
 	proposal, generateErr := c.generate(ctx, model, project, turn)
-	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposal: proposal}
+	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposal: proposal, editModel: c.editModel}
 	if proposal.workflow != nil {
 		event.workflowModel = defaultWorkflowModel(c.model)
 	}

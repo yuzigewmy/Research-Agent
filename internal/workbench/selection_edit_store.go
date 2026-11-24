@@ -49,6 +49,7 @@ type EditSuggestion struct {
 }
 
 type selectionEdit struct {
+	modelSnapshot
 	EditID           string `json:"editId"`
 	VersionID        string `json:"versionId"`
 	Status           string `json:"status"`
@@ -66,7 +67,7 @@ type selectionEdit struct {
 
 const selectEdit = `SELECT t.task_id, t.status, e.original, t.message, COALESCE(e.applied_version_id, ''),
 	e.source_version_id, t.instruction, e.start_byte, e.end_byte, t.markdown,
-	COALESCE(e.review_id, ''), COALESCE(e.finding_number, 0)
+	COALESCE(e.review_id, ''), COALESCE(e.finding_number, 0), t.model_name, t.reasoning_effort
 	FROM selection_edits e JOIN tasks t ON t.project_id = e.project_id AND t.task_id = e.task_id
 	WHERE e.project_id = ?`
 
@@ -74,7 +75,8 @@ func scanSelectionEdit(row interface{ Scan(...any) error }) (selectionEdit, erro
 	var edit selectionEdit
 	var output string
 	if err := row.Scan(&edit.EditID, &edit.Status, &edit.Original, &edit.Message, &edit.AppliedVersionID,
-		&edit.VersionID, &edit.instruction, &edit.startByte, &edit.endByte, &output, &edit.finding.reviewID, &edit.finding.number); err != nil {
+		&edit.VersionID, &edit.instruction, &edit.startByte, &edit.endByte, &output, &edit.finding.reviewID, &edit.finding.number,
+		&edit.Model, &edit.ReasoningEffort); err != nil {
 		return selectionEdit{}, err
 	}
 	if edit.Status == taskSucceeded {
@@ -94,11 +96,11 @@ func readSelectionEdit(ctx context.Context, db workspaceQuery, projectID, versio
 	return edit, err
 }
 
-func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, modelReady bool) (selectionEdit, bool, error) {
-	return s.queueSelectionEditWithFinding(ctx, projectID, doc, req, reviewFindingRef{}, modelReady)
+func (s *Store) queueSelectionEdit(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, model modelSnapshot) (selectionEdit, bool, error) {
+	return s.queueSelectionEditWithFinding(ctx, projectID, doc, req, reviewFindingRef{}, model)
 }
 
-func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, finding reviewFindingRef, modelReady bool) (selectionEdit, bool, error) {
+func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID string, doc WorkspaceDocument, req selectionEditInput, finding reviewFindingRef, model modelSnapshot) (selectionEdit, bool, error) {
 	start, end := req.StartByte, req.EndByte
 	if !validSelectionRange(doc.Content, start, end) {
 		return selectionEdit{}, false, errSelectionRange
@@ -119,7 +121,7 @@ func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID str
 	if !errors.Is(err, sql.ErrNoRows) {
 		return selectionEdit{}, false, err
 	}
-	if !modelReady {
+	if model.Model == "" {
 		return selectionEdit{}, false, errModelUnavailable
 	}
 	if finding.reviewID != "" {
@@ -132,9 +134,10 @@ func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID str
 		}
 	}
 	id := rand.Text()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, queued_seq, selection_edit)
-		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, 1)`, projectID, id, req.Instruction,
-		time.Now().UTC().Format(createdAtLayout), projectID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks(project_id, task_id, instruction, status, created_at, queued_seq, selection_edit,
+		model_name, reasoning_effort, model_connection)
+		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, 1, ?, ?, ?)`, projectID, id, req.Instruction,
+		time.Now().UTC().Format(createdAtLayout), projectID, model.Model, model.ReasoningEffort, model.connection); err != nil {
 		return selectionEdit{}, false, err
 	}
 	original := doc.Content[start:end]
@@ -142,7 +145,7 @@ func (s *Store) queueSelectionEditWithFinding(ctx context.Context, projectID str
 		manuscriptSelectionInput{VersionID: doc.VersionID, StartByte: start, EndByte: end}, original, finding); err != nil {
 		return selectionEdit{}, false, err
 	}
-	return selectionEdit{EditID: id, VersionID: doc.VersionID, Status: taskQueued, Original: original}, true, tx.Commit()
+	return selectionEdit{modelSnapshot: model, EditID: id, VersionID: doc.VersionID, Status: taskQueued, Original: original}, true, tx.Commit()
 }
 
 func insertSelectionEdit(ctx context.Context, tx *sql.Tx, projectID, taskID, requestID string, source manuscriptSelectionInput, original string, finding reviewFindingRef) error {

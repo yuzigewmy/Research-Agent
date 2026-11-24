@@ -38,6 +38,8 @@ export type SelectionEditRecord = {
   versionId: string
   status: keyof typeof statusLabels
   original: string
+  model?: string
+  reasoningEffort?: string
   replacement?: string
   reason?: string
   unchanged?: boolean
@@ -60,6 +62,8 @@ function isEditRecord(value: unknown): value is SelectionEditRecord {
     && typeof edit.status === 'string' && Object.hasOwn(statusLabels, edit.status)
     && (edit.replacement === undefined || typeof edit.replacement === 'string')
     && (edit.reason === undefined || typeof edit.reason === 'string')
+    && (edit.model === undefined || typeof edit.model === 'string')
+    && (edit.reasoningEffort === undefined || typeof edit.reasoningEffort === 'string')
     && (edit.unchanged === undefined || typeof edit.unchanged === 'boolean')
     && (edit.message === undefined || typeof edit.message === 'string')
     && (edit.appliedVersionId === undefined || validId(edit.appliedVersionId))
@@ -118,8 +122,15 @@ export function isSelectionEditVersionConflict(error: unknown) {
     && (error.code === 'VERSION' || error.code === 'VERSION_CONFLICT' || error.code === 'REVISION_CONFLICT')
 }
 
+export function EditModelReceipt({ model, reasoningEffort }: { model?: string; reasoningEffort?: string }) {
+  return model ? <p className="workspace-note">
+    改稿模型 <bdi>{model}</bdi> · 推理档 <bdi>{reasoningEffort || '默认'}</bdi>
+  </p> : null
+}
+
 export function SelectionEditPreview({ edit }: { edit: SelectionEditRecord }) {
   return <>
+    <EditModelReceipt model={edit.model} reasoningEffort={edit.reasoningEffort} />
     <p>选区原文</p>
     <pre className="workspace-text" tabIndex={0} aria-label="选区原文" dir="auto">{edit.original}</pre>
     {edit.status === 'SUCCEEDED' && <>

@@ -43,7 +43,7 @@ func (api manuscriptReviews) createFindingEdit(w http.ResponseWriter, r *http.Re
 	}
 	projectID := r.PathValue("id")
 	ref := reviewFindingRef{reviewID: r.PathValue("reviewId"), number: number}
-	edit, created, err := api.store.queueReviewFindingEdit(r.Context(), projectID, source, input.BaseVersionID, input.RequestID, ref, api.model != nil)
+	edit, created, err := api.store.queueReviewFindingEdit(r.Context(), projectID, source, input.BaseVersionID, input.RequestID, ref, api.editModel)
 	if errors.Is(err, errFindingAnchor) {
 		writeError(w, http.StatusUnprocessableEntity, "FINDING_LOCATION_AMBIGUOUS", "当前稿件中无法唯一定位意见摘录。请在编辑器手动选中要修改的文字。")
 		return
@@ -62,7 +62,7 @@ func (api manuscriptReviews) createFindingEdit(w http.ResponseWriter, r *http.Re
 	writeJSON(w, status, edit)
 }
 
-func (s *Store) queueReviewFindingEdit(ctx context.Context, projectID string, source WorkspaceFile, baseVersionID, requestID string, ref reviewFindingRef, modelReady bool) (selectionEdit, bool, error) {
+func (s *Store) queueReviewFindingEdit(ctx context.Context, projectID string, source WorkspaceFile, baseVersionID, requestID string, ref reviewFindingRef, model modelSnapshot) (selectionEdit, bool, error) {
 	review, err := getManuscriptReview(ctx, s.db, projectID, source, ref.reviewID)
 	if err != nil {
 		return selectionEdit{}, false, err
@@ -97,7 +97,7 @@ func (s *Store) queueReviewFindingEdit(ctx context.Context, projectID string, so
 	return s.queueSelectionEditWithFinding(ctx, projectID, doc, selectionEditInput{
 		RequestID: requestID, StartByte: start, EndByte: start + len(finding.Quote),
 		Instruction: "针对评审意见修改选定文字。\n发现：" + finding.Finding + "\n修改建议：" + finding.Suggestion,
-	}, ref, modelReady)
+	}, ref, model)
 }
 
 func findingOffset(original, base string, finding reviewFinding) (int, error) {

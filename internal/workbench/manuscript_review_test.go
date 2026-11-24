@@ -39,6 +39,9 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 			return
 		}
 		if strings.Contains(text, `"selected":"在河流上游观测。"`) {
+			if input.Model != "fixture-edit" {
+				t.Errorf("targeted revision used model %q", input.Model)
+			}
 			calls.Add(1)
 			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
 				`{"replacement":"在河流上游观测，采样日期待补。","reason":"标明缺少的取样时间。"}`)
@@ -158,7 +161,7 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 		t.Fatalf("download changed or repeated the model request: %q, %d calls", report, calls.Load())
 	}
 
-	handler = NewHandler(store, nil, HandlerConfig{Model: model})
+	handler = NewHandler(store, nil, HandlerConfig{Model: model, EditModelName: "fixture-edit"})
 	const editRequestID = "revise-finding"
 	editPath := detail + "/findings/1/edits"
 	decodeEdit := func(body string) selectionEdit {
@@ -171,7 +174,8 @@ func TestManuscriptReviewRetriesAgainstOriginalVersion(t *testing.T) {
 	}
 	job := fmt.Sprintf(`{"requestId":%q,"baseVersionId":%q}`, editRequestID, newer.VersionID)
 	queued := decodeEdit(request(http.MethodPost, editPath, job, http.StatusAccepted))
-	if replay := decodeEdit(request(http.MethodPost, editPath, job, http.StatusOK)); queued.EditID != replay.EditID {
+	if replay := decodeEdit(request(http.MethodPost, editPath, job, http.StatusOK)); queued.EditID != replay.EditID ||
+		queued.Model != "fixture-edit" || replay.Model != queued.Model {
 		t.Fatalf("edit receipt changed: %+v, %+v", queued, replay)
 	}
 	deadline := time.Now().Add(4 * time.Second)

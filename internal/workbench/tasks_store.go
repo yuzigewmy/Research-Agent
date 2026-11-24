@@ -74,6 +74,7 @@ type taskRequest struct {
 	ExpectedRevision                                  int
 	InputVersionIDs                                   []string
 	SourceTurnID                                      string
+	editModel                                         modelSnapshot
 }
 
 const tasksSchema = `
@@ -237,6 +238,7 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 
 	if nextStatus != "" {
 		instruction, inputs, message := task.Instruction, task.inputsJSON, task.Message
+		model := task.model
 		switch req.Action {
 		case editTask:
 			instruction = req.Instruction
@@ -261,11 +263,16 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 				}
 			}
 			message = ""
+			if task.selectionEdit {
+				model = req.editModel
+			}
 		}
 		task, err = scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = ?, instruction = ?, inputs_json = ?, message = ?, revision = revision + 1,
+			model_name = ?, reasoning_effort = ?, model_connection = ?,
 			queued_seq = CASE WHEN ? = 'QUEUED' THEN `+nextTaskQueuePosition+` ELSE queued_seq END
 			WHERE project_id = ? AND task_id = ? AND revision = ? RETURNING `+taskColumns,
-			nextStatus, instruction, inputs, message, nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
+			nextStatus, instruction, inputs, message, model.Model, model.ReasoningEffort, model.connection,
+			nextStatus, req.ProjectID, req.ProjectID, task.TaskID, req.ExpectedRevision))
 		if err != nil {
 			return Task{}, false, err
 		}

@@ -148,7 +148,7 @@ func parseTurnProposal(arguments json.RawMessage, workflow *workflowProposalReco
 
 var errInvalidTaskProposal = errors.New("model proposed an invalid research task")
 
-func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal) (string, bool, error) {
+func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal turnProposal, editModel modelSnapshot) (string, bool, error) {
 	kind, inputs := "", "[]"
 	selections := proposal.editSelections
 	var sources []taskInput
@@ -198,6 +198,10 @@ func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal
 	if kind == focusedResearchTask || (mode != turnModeConfirmSteps && mode != turnModeAuto) {
 		return taskID, false, nil
 	}
-	queued, err := queueTurnTask(ctx, tx, projectID, taskID)
+	var model modelSnapshot
+	if len(selections) != 0 {
+		model = editModel
+	}
+	queued, err := queueTurnTask(ctx, tx, projectID, taskID, model)
 	return taskID, queued, err
 }

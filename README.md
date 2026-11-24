@@ -92,3 +92,5 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 在同一个模型服务上提供工作流备选模型时，设置 `RESEARCH_WORKFLOW_MODEL_NAME`，并按需设置 `RESEARCH_WORKFLOW_MODEL_REASONING_EFFORT`。重启服务后，可在启动工作流前选择本轮模型，并在「步骤模型」中为指定步骤单独选模。其余步骤沿用本轮模型。续跑和重跑使用启动时保存的配置。部署端可轮换凭据。若服务地址已改动，恢复启动本轮时的地址后即可继续。
 
 设置 `RESEARCH_REVIEW_MODEL_NAME` 和可选的 `RESEARCH_REVIEW_MODEL_REASONING_EFFORT` 后，新建的模拟评审和多轮审稿使用同一服务上的专用模型。评审详情显示提交时的模型及推理档。重试继续使用这份配置。未设置审稿模型时，新评审使用默认模型。
+
+设置 `RESEARCH_EDIT_MODEL_NAME` 和可选的 `RESEARCH_EDIT_MODEL_REASONING_EFFORT` 后，编辑器选区、对话改稿任务及评审意见的定向修订使用同一服务上的专用模型。任务入队时保存模型与推理档，刷新后可在建议详情中查看。

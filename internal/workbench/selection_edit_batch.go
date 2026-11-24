@@ -45,10 +45,11 @@ func readBatchSelectionEdit(ctx context.Context, db workspaceQuery, projectID, v
 	edit := selectionEdit{EditID: taskID, VersionID: versionID, batch: true}
 	var output string
 	err := db.QueryRowContext(ctx, `SELECT t.status, t.message, e.original, e.start_byte, e.end_byte,
-		COALESCE(e.applied_version_id, ''), t.markdown
+		COALESCE(e.applied_version_id, ''), t.markdown, t.model_name, t.reasoning_effort
 		FROM batch_selection_edits e JOIN tasks t ON t.project_id = e.project_id AND t.task_id = e.task_id
 		WHERE e.project_id = ? AND e.task_id = ? AND e.source_version_id = ?`, projectID, taskID, versionID).
-		Scan(&edit.Status, &edit.Message, &edit.Original, &edit.startByte, &edit.endByte, &edit.AppliedVersionID, &output)
+		Scan(&edit.Status, &edit.Message, &edit.Original, &edit.startByte, &edit.endByte, &edit.AppliedVersionID, &output,
+			&edit.Model, &edit.ReasoningEffort)
 	if err != nil || edit.Status != taskSucceeded {
 		return edit, err
 	}

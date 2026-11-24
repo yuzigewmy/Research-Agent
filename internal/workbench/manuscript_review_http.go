@@ -17,6 +17,7 @@ type manuscriptReviews struct {
 	store       *Store
 	model       *inference.Client
 	reviewModel modelSnapshot
+	editModel   modelSnapshot
 }
 
 func (api manuscriptReviews) register(mux *http.ServeMux) {

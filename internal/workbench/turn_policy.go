@@ -50,9 +50,11 @@ func workflowCheckpoints(enabled bool, mode string) bool {
 	return enabled || mode == turnModeConfirmAll || mode == turnModeAuto
 }
 
-func queueTurnTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (bool, error) {
-	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'QUEUED', queued_seq = `+nextTaskQueuePosition+`
-		WHERE project_id = ? AND task_id = ? AND NOT `+changedTaskInputs, projectID, projectID, taskID)
+func queueTurnTask(ctx context.Context, tx *sql.Tx, projectID, taskID string, model modelSnapshot) (bool, error) {
+	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'QUEUED', queued_seq = `+nextTaskQueuePosition+`,
+		model_name = ?, reasoning_effort = ?, model_connection = ?
+		WHERE project_id = ? AND task_id = ? AND NOT `+changedTaskInputs,
+		projectID, model.Model, model.ReasoningEffort, model.connection, projectID, taskID)
 	if err != nil {
 		return false, err
 	}
