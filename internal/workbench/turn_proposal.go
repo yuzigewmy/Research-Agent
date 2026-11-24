@@ -195,13 +195,15 @@ func insertTurnProposal(ctx context.Context, tx *sql.Tx, turnID string, proposal
 		}
 	}
 	// The conversation has seen only version metadata. Reading these excerpts needs approval.
-	if kind == focusedResearchTask || (mode != turnModeConfirmSteps && mode != turnModeAuto) {
-		return taskID, false, nil
+	if kind != focusedResearchTask && (mode == turnModeConfirmSteps || mode == turnModeAuto) {
+		var model modelSnapshot
+		if len(selections) != 0 {
+			model = editModel
+		}
+		queued, err := queueTurnTask(ctx, tx, projectID, taskID, model)
+		if err != nil || queued {
+			return taskID, queued, err
+		}
 	}
-	var model modelSnapshot
-	if len(selections) != 0 {
-		model = editModel
-	}
-	queued, err := queueTurnTask(ctx, tx, projectID, taskID, model)
-	return taskID, queued, err
+	return taskID, false, insertProposalNotification(ctx, tx, projectID, taskID)
 }

@@ -59,6 +59,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model, editModel: editModel}.register(mux)
 	store.registerTaskQueue(mux)
+	store.registerNotifications(mux)
 	workflows{store: store, model: config.Model, models: flowModels,
 		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)

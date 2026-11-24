@@ -225,6 +225,9 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 		if err != nil {
 			return Task{}, false, err
 		}
+		if err := insertProposalNotification(ctx, tx, req.ProjectID, task.TaskID); err != nil {
+			return Task{}, false, err
+		}
 	} else {
 		task, err = lookupTask(ctx, tx, req.ProjectID, req.TaskID)
 		if err != nil {
@@ -285,8 +288,8 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 	return task, true, tx.Commit()
 }
 
-func lookupTask(ctx context.Context, tx *sql.Tx, projectID, taskID string) (Task, error) {
-	return scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks
+func lookupTask(ctx context.Context, db workspaceQuery, projectID, taskID string) (Task, error) {
+	return scanTask(db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks
 		WHERE project_id = ? AND task_id = ? AND `+taskCardFilter, projectID, taskID))
 }
 

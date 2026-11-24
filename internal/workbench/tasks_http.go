@@ -31,8 +31,9 @@ func (api researchTasks) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path, api.list)
 	mux.HandleFunc("POST "+path, api.propose)
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
+	mux.HandleFunc("GET "+path+"/{taskId}", api.read)
 	mux.HandleFunc("PATCH "+path+"/{taskId}", api.edit)
-	mux.HandleFunc(path+"/{taskId}", methodNotAllowed("PATCH"))
+	mux.HandleFunc(path+"/{taskId}", methodNotAllowed("GET, HEAD, PATCH"))
 	for _, action := range []string{confirmTask, cancelTask} {
 		mutation := path + "/{taskId}/" + action
 		mux.HandleFunc("POST "+mutation, api.change(action))
@@ -40,6 +41,15 @@ func (api researchTasks) register(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET "+path+"/{taskId}/artifact", api.artifact)
 	mux.HandleFunc(path+"/{taskId}/artifact", methodNotAllowed("GET, HEAD"))
+}
+
+func (api researchTasks) read(w http.ResponseWriter, r *http.Request) {
+	task, err := lookupTask(r.Context(), api.store.db, r.PathValue("id"), r.PathValue("taskId"))
+	if err != nil {
+		writeTaskError(w, "read research task", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (api researchTasks) list(w http.ResponseWriter, r *http.Request) {

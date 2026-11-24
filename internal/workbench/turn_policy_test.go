@@ -212,6 +212,14 @@ func TestTurnPolicyRunsChecksButRequiresWorkflowConfirmation(t *testing.T) {
 	if task := checkTask(replay); task.Status != taskSucceeded || task.Revision != completed.Revision {
 		t.Fatalf("replay changed the completed check: %+v", task)
 	}
+	var notices notificationPage
+	inbox := httptest.NewRecorder()
+	handler.ServeHTTP(inbox, httptest.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1"+notificationsPath, nil))
+	if err := json.Unmarshal(inbox.Body.Bytes(), &notices); inbox.Code != http.StatusOK || err != nil || len(notices.Items) != 2 ||
+		notices.Items[0].TaskID != completed.TaskID || notices.Items[0].Status != taskSucceeded ||
+		notices.Items[1].TaskID != manual.ProposedTaskID || notices.Items[1].Status != taskProposed {
+		t.Fatalf("automatic queue should notify completion without asking for confirmation: %s (%v)", inbox.Body, err)
+	}
 
 	workflow := send(`{"requestId":"workflow","text":"`+workflowText+`"}`, "CONFIRM_STEPS")
 	proposal := workflow.WorkflowProposal

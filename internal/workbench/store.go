@@ -107,7 +107,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 48 {
+	if version < 0 || version > 49 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
@@ -354,6 +354,11 @@ func migrate(db *sql.DB) error {
 	}
 	if version < 48 {
 		if _, err := tx.Exec(workflowModelRequestSchema); err != nil {
+			return err
+		}
+	}
+	if version < 49 {
+		if _, err := tx.Exec(notificationsSchema); err != nil {
 			return err
 		}
 	}
