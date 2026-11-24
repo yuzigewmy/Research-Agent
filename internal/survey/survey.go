@@ -34,6 +34,7 @@ type Options struct {
 	Reviews          []Review            `json:"reviews,omitempty"`
 	CrossTab         *CrossTabOptions    `json:"crossTab,omitempty"`
 	Reliability      *ReliabilityOptions `json:"reliability,omitempty"`
+	Regression       *RegressionOptions  `json:"regression,omitempty"`
 	Sheet            string              `json:"sheet,omitempty"`
 }
 
@@ -57,6 +58,7 @@ type Report struct {
 	Summaries   []Summary    `json:"summaries"`
 	CrossTab    *CrossTab    `json:"crossTab,omitempty"`
 	Reliability *Reliability `json:"reliability,omitempty"`
+	Regression  *Regression  `json:"regression,omitempty"`
 	Demo        bool         `json:"demo"`
 }
 
@@ -158,6 +160,13 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 			return Report{}, err
 		}
 	}
+	var regression *regressionAccumulator
+	if options.Regression != nil {
+		regression, err = newRegression(*options.Regression, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
 	statusIndex, hasStatus := byName[qualityColumn]
 	_, demo := byName[syntheticColumn]
 	report := Report{Columns: header, Rows: []Row{}, Summaries: make([]Summary, 0, len(accumulators)), Demo: demo}
@@ -235,6 +244,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 			if reliability != nil {
 				reliability.add(record)
 			}
+			if regression != nil {
+				regression.add(record)
+			}
 			for i := range accumulators {
 				accumulators[i].add(record)
 			}
@@ -259,6 +271,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	}
 	if reliability != nil {
 		report.Reliability = reliability.finish()
+	}
+	if regression != nil {
+		report.Regression = regression.finish()
 	}
 	return report, nil
 }

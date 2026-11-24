@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
+import { ReportRegression } from './SurveyRegression'
 import {
   analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, readSurvey,
   reliabilityItemLimit, surveyDownloadPath,
@@ -14,12 +15,13 @@ const rowPageSize = 20
 const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
-type SurveyCalculation = 'analyze' | 'cross-tab' | 'reliability'
+type SurveyCalculation = 'analyze' | 'cross-tab' | 'reliability' | 'regression'
 type SurveyOperation = SurveyCalculation | 'read'
 const surveyOperationLabels: Record<SurveyOperation, string> = {
   analyze: '正在分析并保存报告…',
   'cross-tab': '正在计算交叉统计…',
   reliability: '正在计算量表信度…',
+  regression: '正在计算线性回归…',
   read: '正在打开报告…',
 }
 
@@ -335,6 +337,7 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
     duplicateColumns: rules.duplicateColumns.length ? rules.duplicateColumns : undefined,
     crossTab: options.crossTab,
     reliability: options.reliability,
+    regression: options.regression,
   }
 
   useEffect(() => { heading.current?.focus() }, [])
@@ -392,6 +395,9 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
     <ReportReliability summaries={report.summaries} result={report.reliability} busy={busy}
       error={calculationError?.kind === 'reliability' ? calculationError.message : undefined}
       onCalculate={(reliability) => onAnalyze({ ...options, reliability }, 'reliability')} />
+    <ReportRegression summaries={report.summaries} result={report.regression} busy={busy}
+      error={calculationError?.kind === 'regression' ? calculationError.message : undefined}
+      onCalculate={(regression) => onAnalyze({ ...options, regression }, 'regression')} />
     <ReportRows rows={report.rows} busy={busy} rulesChanged={rulesChanged} onReview={(reviews) => {
       onAnalyze({ ...options, reviews: [...(options.reviews ?? []), ...reviews].sort((a, b) => a.row - b.row) })
     }} />

@@ -18,6 +18,7 @@ type surveyCreateInput struct {
 		DuplicateColumns []string                   `json:"duplicateColumns"`
 		CrossTab         *survey.CrossTabOptions    `json:"crossTab"`
 		Reliability      *survey.ReliabilityOptions `json:"reliability"`
+		Regression       *survey.RegressionOptions  `json:"regression"`
 		Sheet            string                     `json:"sheet"`
 		Reviews          []struct {
 			Row    int    `json:"row"`
@@ -71,6 +72,7 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 		Reviews:     make([]survey.Review, 0, len(input.Options.Reviews)),
 		CrossTab:    input.Options.CrossTab,
 		Reliability: input.Options.Reliability,
+		Regression:  input.Options.Regression,
 		Sheet:       input.Options.Sheet,
 	}
 	for _, review := range input.Options.Reviews {

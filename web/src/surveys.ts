@@ -36,6 +36,22 @@ export interface SurveyReliability extends SurveyReliabilityOptions {
   alpha?: number
 }
 
+export interface SurveyRegressionOptions {
+  predictorColumn: string
+  outcomeColumn: string
+}
+
+export type SurveyRegressionUnavailableReason = 'INSUFFICIENT_ROWS' | 'CONSTANT_PREDICTOR' | 'OUT_OF_RANGE'
+
+export type SurveyRegression = SurveyRegressionOptions & {
+  included: number
+  missing: number
+  nonNumeric: number
+} & (
+  | { fit: { intercept: number; slope: number; rSquared?: number }; unavailableReason?: never }
+  | { fit?: never; unavailableReason: SurveyRegressionUnavailableReason }
+)
+
 export interface SurveyOptions {
   sheet?: string
   requiredColumns?: string[]
@@ -43,6 +59,7 @@ export interface SurveyOptions {
   reviews?: SurveyReview[]
   crossTab?: SurveyCrossTabOptions
   reliability?: SurveyReliabilityOptions
+  regression?: SurveyRegressionOptions
 }
 
 export interface SurveyInput {
@@ -93,6 +110,7 @@ export interface SurveyReport extends SurveyCounts {
   summaries: SurveySummary[]
   crossTab?: SurveyCrossTab
   reliability?: SurveyReliability
+  regression?: SurveyRegression
 }
 
 export interface SurveyRun extends SurveyMetadata {
@@ -144,6 +162,13 @@ function isReliabilityOptions(value: unknown): value is SurveyReliabilityOptions
   return isStringList(columns) && columns.length >= 2 && columns.length <= reliabilityItemLimit
 }
 
+function isRegressionOptions(value: unknown): value is SurveyRegressionOptions {
+  const options = value as Partial<SurveyRegressionOptions> | null
+  return !!options && typeof options.predictorColumn === 'string' && typeof options.outcomeColumn === 'string'
+    && options.predictorColumn.length > 0 && options.outcomeColumn.length > 0
+    && options.predictorColumn !== options.outcomeColumn
+}
+
 function isSheetName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
@@ -157,6 +182,7 @@ function isOptions(value: unknown): value is SurveyOptions {
     && (options.reviews === undefined || (Array.isArray(options.reviews) && options.reviews.every(isReview)))
     && (options.crossTab === undefined || isCrossTabOptions(options.crossTab))
     && (options.reliability === undefined || isReliabilityOptions(options.reliability))
+    && (options.regression === undefined || isRegressionOptions(options.regression))
 }
 
 function isRow(value: unknown): value is SurveyRow {
@@ -205,6 +231,19 @@ function isReliability(value: unknown, valid: number): value is SurveyReliabilit
     && (alpha === undefined || (included >= 2 && Number.isFinite(alpha)))
 }
 
+function isRegression(value: unknown, valid: number): value is SurveyRegression {
+  if (!isRegressionOptions(value)) return false
+  const { included, missing, nonNumeric, fit, unavailableReason } = value as Partial<SurveyRegression>
+  if (!isCount(included) || !isCount(missing) || !isCount(nonNumeric) || included + missing + nonNumeric !== valid) return false
+  if (fit === undefined) {
+    return unavailableReason === 'INSUFFICIENT_ROWS' || unavailableReason === 'CONSTANT_PREDICTOR'
+      || unavailableReason === 'OUT_OF_RANGE'
+  }
+  return !!fit && unavailableReason === undefined && included >= 2
+    && Number.isFinite(fit.intercept) && Number.isFinite(fit.slope)
+    && (fit.rSquared === undefined || (Number.isFinite(fit.rSquared) && fit.rSquared >= 0 && fit.rSquared <= 1))
+}
+
 function isReport(value: unknown): value is SurveyReport {
   const report = value as Partial<SurveyReport> | null
   return !!report && isCounts(value) && isStringList(report.columns)
@@ -212,6 +251,7 @@ function isReport(value: unknown): value is SurveyReport {
     && Array.isArray(report.summaries) && report.summaries.every(isSummary)
     && (report.crossTab === undefined || isCrossTab(report.crossTab))
     && (report.reliability === undefined || isReliability(report.reliability, value.valid))
+    && (report.regression === undefined || isRegression(report.regression, value.valid))
 }
 
 function isRun(value: unknown): value is SurveyRun {

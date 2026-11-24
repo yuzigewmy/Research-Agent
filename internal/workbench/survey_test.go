@@ -68,7 +68,7 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return res
 	}
 	base := projectsPath + "/" + first + "/surveys"
-	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"duplicateColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"},"reliability":{"columns":[" scale b ","SCALE A"]}}}`, csv.MaterialID)
+	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"duplicateColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"},"reliability":{"columns":[" scale b ","SCALE A"]},"regression":{"predictorColumn":"Scale A","outcomeColumn":"Scale B"}}}`, csv.MaterialID)
 	created := request(http.MethodPost, base, body, http.StatusCreated).Body.String()
 	var run struct {
 		AnalysisID     string         `json:"analysisId"`
@@ -103,6 +103,17 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 	}
 	if run.Options.Reliability == nil || !reflect.DeepEqual(run.Options.Reliability.Columns, []string{" scale b ", "SCALE A"}) {
 		t.Fatalf("reliability options changed: %+v", run.Options.Reliability)
+	}
+	regression := run.Report.Regression
+	// For the three complete pairs, the centered sums Sxx, Syy and Sxy are 14, 6, and 6.
+	if regression == nil || regression.Included != 3 || regression.Missing != 1 || regression.NonNumeric != 1 ||
+		regression.Fit == nil || math.Abs(regression.Fit.Slope-3.0/7) > 1e-12 ||
+		math.Abs(regression.Fit.Intercept-17.0/7) > 1e-12 || regression.Fit.RSquared == nil ||
+		math.Abs(*regression.Fit.RSquared-3.0/7) > 1e-12 {
+		t.Fatalf("unexpected regression report: %+v", regression)
+	}
+	if run.Options.Regression == nil || *run.Options.Regression != (survey.RegressionOptions{PredictorColumn: "Scale A", OutcomeColumn: "Scale B"}) {
+		t.Fatalf("regression settings changed: %+v", run.Options.Regression)
 	}
 	newCSV, _, err := store.saveMaterial(ctx, first, csv.Name, strings.NewReader("Score,Station,Choice\n9,East,Yes\n9,East,Yes\n"))
 	if err != nil {
