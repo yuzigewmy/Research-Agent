@@ -72,7 +72,7 @@ func lookupWorkspaceVersion(ctx context.Context, db workspaceQuery, projectID, v
 }
 
 func (s *Store) readWorkspaceDocument(file WorkspaceFile) (WorkspaceDocument, error) {
-	content, err := os.ReadFile(s.materialObject(file.SHA256))
+	content, err := s.readObject(file.SHA256)
 	return WorkspaceDocument{WorkspaceFile: file, Content: string(content)}, err
 }
 

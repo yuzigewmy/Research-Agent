@@ -179,7 +179,7 @@ func (s *Store) openSurveyWorkbook(material Material) (*os.File, error) {
 	if material.Size > maxSurveyBytes {
 		return nil, errSurveyWorkbookTooLarge
 	}
-	return os.Open(s.materialObject(material.SHA256))
+	return s.openObject(material.SHA256)
 }
 
 func (s *Store) surveyWorkbookSheets(material Material) ([]string, error) {
@@ -206,7 +206,7 @@ func (s *Store) analyzeSurveyMaterial(material Material, options survey.Options)
 		if material.Size > maxSurveyBytes {
 			return survey.Report{}, errSurveyTooLarge
 		}
-		file, err := os.Open(s.materialObject(material.SHA256))
+		file, err := s.openObject(material.SHA256)
 		if err != nil {
 			return survey.Report{}, err
 		}

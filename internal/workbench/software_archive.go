@@ -194,7 +194,7 @@ func (scan *softwareArchiveScan) readTarGzip(ctx context.Context, file *os.File)
 }
 
 func (s *Store) readSoftwareArchive(ctx context.Context, material TurnReference) ([]softwareArchiveMember, error) {
-	file, err := os.Open(s.materialObject(material.SHA256))
+	file, err := s.openObject(material.SHA256)
 	if err != nil {
 		return nil, err
 	}

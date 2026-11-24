@@ -197,7 +197,7 @@ func (s *Store) materialExcerpt(ctx context.Context, digest, format string, limi
 	if format != "word" {
 		return s.previewObject(digest, limit)
 	}
-	file, err := os.Open(s.materialObject(digest))
+	file, err := s.openObject(digest)
 	if err != nil {
 		return MaterialPreview{}, err
 	}
@@ -214,7 +214,7 @@ func (s *Store) materialExcerpt(ctx context.Context, digest, format string, limi
 }
 
 func (s *Store) previewObject(digest string, limit int) (MaterialPreview, error) {
-	file, err := os.Open(s.materialObject(digest))
+	file, err := s.openObject(digest)
 	if err != nil {
 		return MaterialPreview{}, err
 	}

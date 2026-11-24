@@ -6,7 +6,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -127,7 +126,7 @@ func (s *Store) handleDownloadMaterial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Store) serveMaterial(w http.ResponseWriter, r *http.Request, material Material) {
-	file, err := os.Open(s.materialObject(material.SHA256))
+	file, err := s.openObject(material.SHA256)
 	if err != nil {
 		writeStoreError(w, "open material object", err)
 		return

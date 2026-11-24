@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"strings"
 	"unicode"
@@ -129,7 +128,7 @@ func (s *Store) readSoftwareInputs(ctx context.Context, materials []TurnReferenc
 				}
 			}
 		case softwareSourcePath(material.Name):
-			content, err := os.ReadFile(s.materialObject(material.SHA256))
+			content, err := s.readObject(material.SHA256)
 			if err != nil {
 				return softwareRunInputs{}, err
 			}
