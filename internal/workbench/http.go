@@ -64,6 +64,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)
 	store.registerWorkspace(mux)
+	mux.HandleFunc("POST /api/v1/workspace-backup", store.handleWorkspaceBackup)
+	mux.HandleFunc("/api/v1/workspace-backup", methodNotAllowed("POST"))
 	store.registerWord(mux, config.WordPython)
 	store.registerSurveys(mux)
 	store.registerQuestionnaires(mux)

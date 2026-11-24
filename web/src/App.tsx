@@ -11,6 +11,7 @@ import type { ProjectTemplate } from './projectTemplates'
 import { errorMessage } from './projects'
 import type { Project } from './projects'
 import type { TaskLink } from './tasks'
+import { WorkspaceBackup } from './WorkspaceBackup'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
@@ -117,6 +118,7 @@ function Workbench() {
         <Notifications hrefFor={projectUrl} onOpen={followProjectLink} />
       </header>
       <ModelConnection />
+      <WorkspaceBackup />
       <div className="workbench-grid">
         <section className="project-panel" aria-labelledby="workspace-title">
           <header className="panel-heading">

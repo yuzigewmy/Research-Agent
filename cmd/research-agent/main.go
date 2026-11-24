@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 
 	"research-agent/internal/inference"
@@ -19,8 +20,24 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "loopback IP address and port")
 	dataDir := flag.String("data-dir", "data", "directory for the workspace database")
 	webDir := flag.String("web-dir", "", "override the bundled or default Web build directory")
+	restore := flag.String("restore", "", "将工作区 ZIP 恢复到 --data-dir 指定的新目录")
 	flag.Parse()
 
+	restoreRequested := false
+	flag.Visit(func(option *flag.Flag) { restoreRequested = restoreRequested || option.Name == "restore" })
+	if restoreRequested {
+		if *restore == "" {
+			log.Fatal("请为 --restore 指定工作区备份文件。")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		err := workbench.RestoreWorkspace(ctx, *restore, *dataDir)
+		stop()
+		if err != nil {
+			log.Fatalf("恢复工作区失败：%v", err)
+		}
+		log.Printf("工作区已恢复至 %s。", *dataDir)
+		return
+	}
 	if err := run(*listen, *dataDir, *webDir); err != nil {
 		log.Fatal(err)
 	}

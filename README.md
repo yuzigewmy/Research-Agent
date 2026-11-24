@@ -19,6 +19,19 @@ go build -tags embedweb -trimpath -ldflags "-s -w" -o ./dist/research-agent.exe 
 
 开发构建可省略 `-tags embedweb`，默认从 `web/dist` 读取界面。两种构建都可以用 `--web-dir` 指定界面目录。开发前端时可在服务运行期间另行执行 `pnpm --dir web run dev`。
 
+## 工作区备份与恢复
+
+在首页展开「工作区备份」，点击「下载工作区备份」。ZIP 包含一致性数据库快照、各版本引用的资料对象，以及大小与 SHA-256 清单。它涵盖整个工作区，请按原资料的保密要求保存。模型凭据及其他部署环境设置由运行环境管理。生成时，系统临时目录需要容纳数据库快照和 ZIP。
+
+使用支持备份所用资料库版本的程序恢复。保留原 ZIP，选择一个父目录已存在的新资料库路径，再执行下列命令。恢复校验通过后，用新目录启动服务。
+
+```powershell
+./dist/research-agent.exe --restore ./research-workspace.zip --data-dir ./restored-data
+./dist/research-agent.exe --listen 127.0.0.1:8080 --data-dir ./restored-data
+```
+
+已有目录由恢复命令拒绝。恢复按清单核对数据库结构、关联记录及资料对象的大小与摘要，校验完成后再发布新目录。验证期间可以为恢复后的服务选用另一个端口。 [SQLite 一致性快照](https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause)
+
 ## 当前功能
 
 - 从自由研究、研究选题、文献综述、论文写作、开题报告、实验计划、多轮审稿、课程论文、课程报告、软件著作权材料、专利技术交底、互动问卷和工程项目创建项目。选择「多轮审稿」后，可在文本工作区直接导入 64 KiB 以内的 UTF-8 Markdown 稿件。导入会打开已保存的版本，确认后才开始审稿。

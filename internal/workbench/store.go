@@ -10,13 +10,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 const (
-	projectColumns = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
+	workspaceDatabase      = "projects.sqlite3"
+	workspaceSchemaVersion = 50
+	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -54,6 +57,7 @@ type Store struct {
 	tasks      taskWorkers
 	turns      turnWorkers
 	objectsDir string
+	backupMu   sync.Mutex
 }
 
 // Open creates the data directory if necessary and opens and migrates its database.
@@ -64,7 +68,7 @@ func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	filename, err := filepath.Abs(filepath.Join(dataDir, "projects.sqlite3"))
+	filename, err := filepath.Abs(filepath.Join(dataDir, workspaceDatabase))
 	if err != nil {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
@@ -107,7 +111,7 @@ func migrate(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 50 {
+	if version < 0 || version > workspaceSchemaVersion {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	if version == 0 {
