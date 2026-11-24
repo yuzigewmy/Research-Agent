@@ -9,6 +9,22 @@ import (
 
 var paperHeading = regexp.MustCompile(`^#{1,6}\s+(.+)$`)
 
+// fenceLine 识别行首至少三个连续的反引号或波浪号。
+// length 是这串标记的数量，rest 是其后的文本。
+func fenceLine(line string) (marker byte, length int, rest string, ok bool) {
+	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
+		return 0, 0, "", false
+	}
+	marker = line[0]
+	for length < len(line) && line[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, "", false
+	}
+	return marker, length, line[length:], true
+}
+
 // paperCheck reports structural signals for the supplied Markdown version.
 func paperCheck(source string) string {
 	sections := []struct {
@@ -30,19 +46,22 @@ func paperCheck(source string) string {
 		}, missing: "未识别到对应标题。请按投稿要求核对。"},
 	}
 	var placeholders []int
-	var fence string
+	var fenceMarker byte
+	var fenceLen int
 	for index, raw := range strings.Split(source, "\n") {
 		line := strings.TrimSpace(raw)
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			marker := line[:3]
-			if fence == "" {
-				fence = marker
-			} else if fence == marker && strings.Trim(line, marker[:1]) == "" {
-				fence = ""
+		if marker, length, rest, ok := fenceLine(line); ok {
+			// 关闭围栏须为同种标记，数量不短于开头，且标记后只有空白。
+			if fenceLen == 0 {
+				fenceMarker = marker
+				fenceLen = length
+			} else if marker == fenceMarker && length >= fenceLen && strings.TrimSpace(rest) == "" {
+				fenceMarker = 0
+				fenceLen = 0
 			}
 			continue
 		}
-		if fence != "" {
+		if fenceLen != 0 {
 			continue
 		}
 		if match := paperHeading.FindStringSubmatch(line); match != nil && !strings.HasPrefix(line, "# ") {

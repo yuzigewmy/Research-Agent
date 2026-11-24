@@ -68,3 +68,24 @@ func TestPaperCheckRecognizesAIDisclosureHeading(t *testing.T) {
 		t.Fatalf("missing heading was reported as present:\n%s", absent)
 	}
 }
+
+func TestPaperCheckIgnoresDisclosureInsideFourBacktickExample(t *testing.T) {
+	source := strings.Join([]string{
+		"````",
+		"```",
+		"## AI 使用披露",
+		"示例中的标题不计入。",
+		"```",
+		"````",
+		"",
+		"## 结论",
+		"外部结论仍计入。",
+	}, "\n")
+	report := paperCheck(source)
+	if !strings.Contains(report, "结论：已识别，第 8 行。") {
+		t.Fatalf("conclusion after the real fence close was not recognized:\n%s", report)
+	}
+	if strings.Contains(report, "AI 使用披露：已识别") || strings.Contains(report, "第 3 行") || !strings.Contains(report, "AI 使用披露：未识别到对应标题。请按投稿要求核对。") {
+		t.Fatalf("disclosure heading inside the example was counted:\n%s", report)
+	}
+}
