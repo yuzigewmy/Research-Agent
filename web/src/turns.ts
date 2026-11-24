@@ -58,6 +58,8 @@ export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode'> {
   turnId: string
   answer: string
   status: TurnStatus
+  model?: string
+  reasoningEffort?: string
   message?: string
   afterSeq: number
   createdAt: string
@@ -200,6 +202,8 @@ function isTurn(value: unknown): value is Turn {
       && isManuscriptSelections(turn.manuscriptSelections)))
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
     && (turn.mode === undefined || isTurnMode(turn.mode))
+    && (turn.model === undefined || typeof turn.model === 'string')
+    && (turn.reasoningEffort === undefined || typeof turn.reasoningEffort === 'string')
     && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
     && (turn.workflowProposal === undefined || (turn.status === 'COMPLETED' && turn.proposedTaskId === undefined
       && isWorkflowProposal(turn.workflowProposal)))

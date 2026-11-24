@@ -8,10 +8,19 @@ import (
 	"errors"
 	"slices"
 	"time"
+
+	"research-agent/internal/inference"
 )
 
 const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at,
-	references_json, task_results_json, mode, proposed_task_id, workflow_proposal_json, manuscript_selection_json, manuscript_selections_json`
+	references_json, task_results_json, mode, proposed_task_id, workflow_proposal_json, manuscript_selection_json, manuscript_selections_json,
+	model_name, reasoning_effort`
+
+const turnModelReceiptSchema = `
+	ALTER TABLE turns ADD COLUMN model_name TEXT NOT NULL DEFAULT '';
+	ALTER TABLE turns ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';
+	PRAGMA user_version = 43;
+`
 
 var (
 	errTurnBusy         = errors.New("project already has a running turn")
@@ -35,6 +44,8 @@ type Turn struct {
 	WorkflowProposal     *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 	ManuscriptSelection  *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
 	ManuscriptSelections []manuscriptSelection `json:"manuscriptSelections,omitempty"`
+	Model                string                `json:"model,omitempty"`
+	ReasoningEffort      string                `json:"reasoningEffort,omitempty"`
 }
 
 type TurnEvent struct {
@@ -77,7 +88,7 @@ const turnsSchema = `
 `
 
 // A stopped process loses its connection to the provider. Preserve the partial
-// answer and its receipt so a restart does not dispatch a second paid request.
+// answer and its receipt so a restart can show the interrupted request.
 func recoverInterruptedTurns(tx *sql.Tx) error {
 	const message = "服务重启打断了这轮回复，可以重新发送。"
 	if _, err := tx.Exec(`INSERT INTO turn_events(turn_id, kind, status, message)
@@ -94,7 +105,8 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var t Turn
 	var references, taskResults, workflowProposal, selection, selections []byte
 	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message,
-		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID, &workflowProposal, &selection, &selections); err != nil {
+		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID, &workflowProposal, &selection, &selections,
+		&t.Model, &t.ReasoningEffort); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(references, &t.References); err != nil {
@@ -115,7 +127,7 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	return t, nil
 }
 
-func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnInput, modelReady bool) (Turn, Project, bool, error) {
+func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnInput, model *inference.Client) (Turn, Project, bool, error) {
 	if input.ManuscriptSelections != nil && (input.ManuscriptSelection != nil ||
 		len(input.ManuscriptSelections) == 0 || len(input.ManuscriptSelections) > maxManuscriptSelections) {
 		return Turn{}, Project{}, false, errInvalidManuscriptSelection
@@ -153,7 +165,7 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}
-	if !modelReady {
+	if model == nil {
 		return Turn{}, Project{}, false, errModelUnavailable
 	}
 	var running bool
@@ -202,11 +214,12 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	turn = Turn{TurnID: rand.Text(), RequestID: input.RequestID, Text: input.Text, References: references, TaskResults: results,
 		ManuscriptSelection: selection, ManuscriptSelections: selections, Mode: mode, Status: "RUNNING",
 		CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+	turn.Model, turn.ReasoningEffort = model.ModelInfo()
 	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at,
-		references_json, task_results_json, mode, manuscript_selection_json, manuscript_selections_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
+		references_json, task_results_json, mode, manuscript_selection_json, manuscript_selections_json, model_name, reasoning_effort)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
 		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON), turn.Mode, string(selectionJSON),
-		string(selectionsJSON)).Scan(&turn.ordinal)
+		string(selectionsJSON), turn.Model, turn.ReasoningEffort).Scan(&turn.ordinal)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}

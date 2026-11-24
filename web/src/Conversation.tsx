@@ -370,6 +370,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
               </ul>
             </div>}
             <p className="turn-role">研究助手</p>
+            {turn.model && <p className="turn-status">模型 <bdi>{turn.model}</bdi> · 推理档 <bdi>{turn.reasoningEffort || '默认'}</bdi></p>}
             {turn.answer && <p className="turn-content" dir="auto">{turn.answer}</p>}
             {turn.status === 'RUNNING' && <>
               <p className="turn-status" role="status">{connectionLost ? '连接中断，正在续接…' : '正在回复…'}</p>

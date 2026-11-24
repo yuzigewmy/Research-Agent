@@ -28,7 +28,7 @@ func (c conversation) startReply(ctx context.Context, projectID string, input se
 		return Turn{}, false, context.Canceled
 	}
 	// Stop and start share this lock so a saved turn always has a cancel function.
-	turn, project, created, err := c.store.beginTurn(ctx, projectID, input, c.model != nil)
+	turn, project, created, err := c.store.beginTurn(ctx, projectID, input, c.model)
 	if err != nil || !created {
 		return turn, false, err
 	}

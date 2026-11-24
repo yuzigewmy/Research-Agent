@@ -67,7 +67,7 @@ func TestConversationSyncsOnlyItsCompletedTaskResultsOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		turn, _, _, err := store.beginTurn(ctx, project.ProjectID, sendTurnInput{RequestID: "source", Text: "Plan a river survey.", Mode: turnModeChat}, true)
+		turn, _, _, err := store.beginTurn(ctx, project.ProjectID, sendTurnInput{RequestID: "source", Text: "Plan a river survey.", Mode: turnModeChat}, model)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -212,7 +212,7 @@ func TestConversationSyncsOnlyItsCompletedTaskResultsOnce(t *testing.T) {
 	checkPrompt(failed)
 
 	const interruptedText = "Read the results before a restart."
-	started, _, _, err := store.beginTurn(ctx, projectID, sendTurnInput{RequestID: "interrupted", Text: interruptedText, Mode: turnModeChat}, true)
+	started, _, _, err := store.beginTurn(ctx, projectID, sendTurnInput{RequestID: "interrupted", Text: interruptedText, Mode: turnModeChat}, model)
 	if err != nil {
 		t.Fatal(err)
 	}
