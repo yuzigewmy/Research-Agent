@@ -22,7 +22,7 @@ import {
 } from './workflow'
 import type {
   AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, SelectWorkflowTopicInput, SkipWorkflowInput,
-  StartWorkflowInput, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
+  StartWorkflowInput, WorkflowModelId, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
 import type { FileRecord } from './workspace'
 import './workflow.css'
@@ -59,6 +59,14 @@ function hasNewerRevision(current: WorkflowRun | null | undefined, incoming: Wor
 
 function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
+}
+
+function WorkflowRunModel({ run }: { run: WorkflowRun }) {
+  if (!run.model && !run.reasoningEffort) return null
+  return <p className="workflow-note">
+    {run.model && <>本轮模型 <bdi>{run.model}</bdi> · </>}
+    推理档 <bdi>{run.reasoningEffort || '默认'}</bdi>
+  </p>
 }
 
 function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWordConfigured }: {
@@ -242,6 +250,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const cancelButton = useRef<HTMLButtonElement>(null)
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
+  const [preferredModelId, setPreferredModelId] = useState<WorkflowModelId>()
   const [checkpoints, setCheckpoints] = useState(defaultCheckpoints)
   const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
@@ -290,7 +299,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const firstStep = rangeSteps[0]
   const lastStep = rangeSteps.at(-1)
   const endStep = rangeSteps.some((step) => step.key === throughStep) ? throughStep : ''
-  const retryStart = retry?.kind === 'start' && (retry.input.throughStep ?? '') === endStep ? retry : null
+  const modelOptions = snapshot?.modelOptions ?? []
+  const startModel = modelOptions.find(({ id }) => id === preferredModelId) ?? modelOptions[0]
+  const retryStart = retry?.kind === 'start' && (retry.input.throughStep ?? '') === endStep
+    && retry.input.modelId === startModel?.id ? retry : null
   const retryContinue = retry?.kind === 'continue' && retry.input.runId === run?.runId
     && retry.input.expectedRevision === run.revision && (retry.input.throughStep ?? '') === endStep ? retry : null
   const retryPause = retry?.kind === 'pause' && retry.input.runId === run?.runId
@@ -433,8 +445,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       if (!attempt) {
         const requestId = crypto.randomUUID()
         if (kind === 'start') {
+          setPreferredModelId(startModel?.id)
           attempt = { kind, input: {
-            requestId, checkpoints, targetPaperCount: isReview ? target : undefined,
+            requestId, checkpoints, modelId: startModel?.id, targetPaperCount: isReview ? target : undefined,
             paper: isPaper ? { language: paperLanguage, outline } : undefined,
             topic: isTopic ? { requirements: requirements || undefined } : undefined,
             proposal: proposal?.options,
@@ -480,6 +493,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       setCancelTarget(null)
       setThroughStep('')
       if (attempt.kind === 'start') {
+        setPreferredModelId(undefined)
         setCheckpoints(defaultCheckpoints)
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
         if (isSoftware) setSoftwareDraft(initialSoftwareDraft())
@@ -497,7 +511,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       refresh()
     } catch (error) {
       if (controller.signal.aborted) return
-      if (error instanceof ProjectApiError && (error.status === 409 || error.code === 'REVISION_CONFLICT')) {
+      if (error instanceof ProjectApiError && error.code !== 'WORKFLOW_MODEL_CONNECTION_CHANGED'
+        && (error.status === 409 || error.code === 'REVISION_CONFLICT')) {
         setRetry(null)
         setRerunTarget(null)
         setCancelTarget(null)
@@ -542,6 +557,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       </p>}
       {isReview && run?.sourceCount !== undefined && <p className="workflow-note">本轮已固定 {run.sourceCount} 条来源，纳入上限为 {run.targetPaperCount} 条。</p>}
       {run?.language && <p className="workflow-note">本轮使用{run.language === 'zh' ? '中文' : '英文'}写作，纳入 {run.sourceCount ?? 0} 条已核验来源。</p>}
+      {run && <WorkflowRunModel run={run} />}
       {run && <WorkflowProposalSummary run={run} />}
       {run && <WorkflowCourseSummary run={run} />}
       {run && <WorkflowSoftwareSummary run={run} />}
@@ -599,6 +615,23 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       {modelUnavailable && <p className="workflow-note">请配置研究模型，然后刷新工作流状态。</p>}
       {(canStart || canCancel || readError || modelUnavailable) && (
         <div className="workflow-controls">
+          {canStart && startModel && (modelOptions.length > 1 ? <div className="field">
+            <label htmlFor={`${headingId}-model`}>工作流模型</label>
+            <select id={`${headingId}-model`} value={startModel.id} disabled={actionDisabled}
+              onChange={(event) => {
+                const next = modelOptions.find(({ id }) => id === event.currentTarget.value)
+                if (!next || next.id === startModel.id) return
+                setPreferredModelId(next.id)
+                if (retry?.kind === 'start') setRetry(null)
+                setActionError('')
+              }}>
+              {modelOptions.map(({ id, model, reasoningEffort }) => (
+                <option key={id} value={id}>{model} · 推理档 {reasoningEffort || '默认'}</option>
+              ))}
+            </select>
+          </div> : <p className="workflow-note">
+            工作流模型 <bdi>{startModel.model}</bdi> · 推理档 <bdi>{startModel.reasoningEffort || '默认'}</bdi>
+          </p>)}
           {canStart && courseTemplate && course && <WorkflowCourseOptions projectId={projectId} templateId={courseTemplate}
             draft={courseDraft} errors={course.errors} disabled={actionDisabled || retryStart !== null} onChange={setCourseDraft} />}
           {canStart && software && <WorkflowSoftwareOptions projectId={projectId} draft={softwareDraft}
@@ -731,6 +764,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId}
         renderSteps={(historicalRun) => <>
           <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
+          <WorkflowRunModel run={historicalRun} />
           <WorkflowProposalSummary run={historicalRun} />
           <WorkflowCourseSummary run={historicalRun} />
           <WorkflowSoftwareSummary run={historicalRun} />

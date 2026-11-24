@@ -65,9 +65,11 @@ func run(address, dataDir, webDir string) error {
 		return fmt.Errorf("open Web assets: %w", err)
 	}
 	handler := workbench.NewHandler(store, webFS, workbench.HandlerConfig{
-		Model:           model,
-		WordPython:      os.Getenv("RESEARCH_WORD_PYTHON"),
-		SoftwarePDFFont: os.Getenv("RESEARCH_PDF_FONT"),
+		Model:                   model,
+		WorkflowModelName:       os.Getenv("RESEARCH_WORKFLOW_MODEL_NAME"),
+		WorkflowReasoningEffort: os.Getenv("RESEARCH_WORKFLOW_MODEL_REASONING_EFFORT"),
+		WordPython:              os.Getenv("RESEARCH_WORD_PYTHON"),
+		SoftwarePDFFont:         os.Getenv("RESEARCH_PDF_FONT"),
 	})
 	server := &http.Server{
 		Handler:           handler,

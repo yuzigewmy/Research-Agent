@@ -13,6 +13,7 @@ import (
 type workflows struct {
 	store           *Store
 	model           *inference.Client
+	modelOptions    []workflowModelOption
 	softwarePDFFont string
 	wordPython      string
 }
@@ -54,12 +55,13 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 	key := projectWorkflowKey(project.TemplateID)
 	stages := workflowStages[key]
 	result := struct {
-		Run                   *WorkflowRun `json:"run"`
-		Steps                 []stepInfo   `json:"steps"`
-		ModelConfigured       bool         `json:"modelConfigured"`
-		SoftwarePDFConfigured *bool        `json:"softwarePdfConfigured,omitempty"`
-		PatentWordConfigured  *bool        `json:"patentWordConfigured,omitempty"`
-	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil}
+		Run                   *WorkflowRun          `json:"run"`
+		Steps                 []stepInfo            `json:"steps"`
+		ModelConfigured       bool                  `json:"modelConfigured"`
+		ModelOptions          []workflowModelOption `json:"modelOptions,omitempty"`
+		SoftwarePDFConfigured *bool                 `json:"softwarePdfConfigured,omitempty"`
+		PatentWordConfigured  *bool                 `json:"patentWordConfigured,omitempty"`
+	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil, ModelOptions: api.modelOptions}
 	if isSoftwareRegistrationWorkflow(key) {
 		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
 	}
@@ -106,9 +108,25 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择一个入围题目。")
 			return
 		}
+		modelID := input.ModelID
+		switch {
+		case modelID == "":
+			modelID = defaultWorkflowModelID
+		case action != workflowStart || (modelID != defaultWorkflowModelID && modelID != alternateWorkflowModelID):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择启动本轮工作流所用的模型。")
+			return
+		}
+		for _, option := range api.modelOptions {
+			if option.ID == modelID {
+				input.model = option
+				break
+			}
+		}
 		projectID := r.PathValue("id")
 		run, applied, err := api.store.applyWorkflow(r.Context(), projectID, action, input, api.model != nil)
 		switch {
+		case errors.Is(err, errWorkflowModelUnavailable):
+			writeError(w, http.StatusUnprocessableEntity, "WORKFLOW_MODEL_UNAVAILABLE", "所选模型当前不可用，请刷新工作流设置。")
 		case errors.Is(err, errWorkflowState):
 			writeError(w, http.StatusConflict, "WORKFLOW_STATE_CONFLICT", "当前工作流状态不支持此操作。")
 		case errors.Is(err, errWorkflowDependency):

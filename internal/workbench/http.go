@@ -25,10 +25,12 @@ import (
 const projectsPath = "/api/v1/projects"
 
 type HandlerConfig struct {
-	Model           *inference.Client
-	WordPython      string
-	SoftwarePDFFont string
-	literature      literatureSource
+	Model                   *inference.Client
+	WorkflowModelName       string
+	WorkflowReasoningEffort string
+	WordPython              string
+	SoftwarePDFFont         string
+	literature              literatureSource
 }
 
 // NewHandler serves the API and files from a trusted web build directory.
@@ -39,8 +41,9 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model}.register(mux)
 	store.registerTaskQueue(mux)
-	workflows{store: store, model: config.Model, softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont),
-		wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
+	workflows{store: store, model: config.Model,
+		modelOptions:    configuredWorkflowModels(config.Model, config.WorkflowModelName, config.WorkflowReasoningEffort),
+		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)
 	store.registerWorkspace(mux)
 	store.registerWord(mux, config.WordPython)

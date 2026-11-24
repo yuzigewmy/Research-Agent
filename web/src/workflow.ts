@@ -213,10 +213,20 @@ export interface PatentSettings extends PatentOptions {
   materials?: (WorkflowMaterial & { format?: 'word' })[]
 }
 
+export type WorkflowModelId = 'default' | 'workflow'
+
+interface WorkflowModelOption {
+  id: WorkflowModelId
+  model: string
+  reasoningEffort?: string
+}
+
 export interface WorkflowRun extends WorkflowRunSummary {
   workflowKey: string
   revision: number
   checkpoints: boolean
+  model?: string
+  reasoningEffort?: string
   confirmEachStep?: boolean
   targetPaperCount?: number
   sourceCount?: number
@@ -236,6 +246,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
 export interface WorkflowSnapshot {
   run: WorkflowRun | null
   modelConfigured: boolean
+  modelOptions?: WorkflowModelOption[]
   softwarePdfConfigured?: boolean
   patentWordConfigured?: boolean
   steps: WorkflowStepDefinition[]
@@ -244,6 +255,7 @@ export interface WorkflowSnapshot {
 export interface StartWorkflowInput {
   requestId: string
   checkpoints: boolean
+  modelId?: WorkflowModelId
   targetPaperCount?: number
   paper?: { language: 'zh' | 'en'; outline?: string }
   topic?: { requirements?: string }
@@ -426,10 +438,19 @@ function isPatentSettings(value: unknown): value is PatentSettings {
       && settings.materials.every((material) => isWorkflowMaterial(material, false))))
 }
 
+function isWorkflowModelOption(value: unknown): value is WorkflowModelOption {
+  const option = value as Partial<WorkflowModelOption> | null
+  return !!option && (option.id === 'default' || option.id === 'workflow')
+    && typeof option.model === 'string' && option.model.trim().length > 0
+    && (option.reasoningEffort === undefined || typeof option.reasoningEffort === 'string')
+}
+
 function isRun(value: unknown): value is WorkflowRun {
   const run = value as Partial<WorkflowRun> | null
   return !!run && typeof run.workflowKey === 'string' && typeof run.revision === 'number' && Number.isSafeInteger(run.revision)
     && typeof run.checkpoints === 'boolean'
+    && (run.model === undefined || typeof run.model === 'string')
+    && (run.reasoningEffort === undefined || typeof run.reasoningEffort === 'string')
     && (run.confirmEachStep === undefined || typeof run.confirmEachStep === 'boolean')
     && (run.sourceCount === undefined || Number.isSafeInteger(run.sourceCount))
     && (run.targetPaperCount === undefined || Number.isSafeInteger(run.targetPaperCount))
@@ -449,6 +470,9 @@ function isRun(value: unknown): value is WorkflowRun {
 function isSnapshot(value: unknown): value is WorkflowSnapshot {
   const snapshot = value as Partial<WorkflowSnapshot> | null
   return !!snapshot && typeof snapshot.modelConfigured === 'boolean'
+    && (snapshot.modelOptions === undefined || (Array.isArray(snapshot.modelOptions)
+      && snapshot.modelOptions.every(isWorkflowModelOption)
+      && new Set(snapshot.modelOptions.map(({ id }) => id)).size === snapshot.modelOptions.length))
     && (snapshot.softwarePdfConfigured === undefined || typeof snapshot.softwarePdfConfigured === 'boolean')
     && (snapshot.patentWordConfigured === undefined || typeof snapshot.patentWordConfigured === 'boolean')
     && (snapshot.run === null || isRun(snapshot.run))

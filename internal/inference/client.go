@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,18 @@ func New(config Config) (*Client, error) {
 // ModelInfo reports the configured model and reasoning effort for diagnostics.
 func (c *Client) ModelInfo() (model, reasoningEffort string) {
 	return c.model, c.reasoningEffort
+}
+
+// ForModel selects a model on the same deployment connection and transport.
+func (c *Client) ForModel(model, reasoningEffort string) *Client {
+	selected := *c
+	selected.model, selected.reasoningEffort = model, reasoningEffort
+	return &selected
+}
+
+// ConnectionFingerprint identifies the configured endpoint without storing its address or credentials.
+func (c *Client) ConnectionFingerprint() string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(c.endpoint)))
 }
 
 type chatTool struct {

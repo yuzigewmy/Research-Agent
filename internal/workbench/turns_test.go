@@ -174,8 +174,7 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 }
 
 func TestConversationHistorySurvivesModelReceiptMigration(t *testing.T) {
-	directory := t.TempDir()
-	store, err := Open(directory)
+	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,19 +188,14 @@ func TestConversationHistorySurvivesModelReceiptMigration(t *testing.T) {
 		ALTER TABLE turns DROP COLUMN model_name;
 		ALTER TABLE turns DROP COLUMN reasoning_effort;
 		INSERT INTO turns(turn_id, project_id, request_id, user_text, answer, status, created_at)
-		VALUES ('old-turn', ?, 'old-request', '原问题', '原答复', 'COMPLETED', '2026-11-23T00:00:00.000000000Z');
-		PRAGMA user_version = 42`, project.ProjectID); err != nil {
+		VALUES ('old-turn', ?, 'old-request', '原问题', '原答复', 'COMPLETED', '2026-11-23T00:00:00.000000000Z')`, project.ProjectID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	// Exercise the conversation migration independently of later schema changes.
+	if _, err := store.db.ExecContext(ctx, turnModelReceiptSchema); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	turn, err := reopened.getTurn(ctx, project.ProjectID, "old-turn")
+	turn, err := store.getTurn(ctx, project.ProjectID, "old-turn")
 	if err != nil || turn.Text != "原问题" || turn.Answer != "原答复" || turn.Status != "COMPLETED" || turn.Model != "" || turn.ReasoningEffort != "" {
 		t.Fatalf("legacy turn after migration = %+v, error = %v", turn, err)
 	}

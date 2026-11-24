@@ -37,11 +37,18 @@ func (e workflowOutputError) Error() string { return e.err.Error() }
 func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, project Project, task Task, input string) (taskResult, error) {
 	projectID := project.ProjectID
 	var key, evidence, options, sourceTurnID string
+	var modelName, reasoningEffort, connection string
 	var selectedNumber int
 	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number,
-		COALESCE(range_source_turn_id, '') FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
-		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID); err != nil {
+		COALESCE(range_source_turn_id, ''), model_name, reasoning_effort, model_connection FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
+		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID, &modelName, &reasoningEffort, &connection); err != nil {
 		return taskResult{}, err
+	}
+	if modelName != "" {
+		if connection != model.ConnectionFingerprint() {
+			return taskResult{}, workflowOutputError{errWorkflowModelConnection}
+		}
+		model = model.ForModel(modelName, reasoningEffort)
 	}
 	if sourceTurnID != "" {
 		source, err := s.taskTurnContext(ctx, projectID, sourceTurnID)

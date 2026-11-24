@@ -235,6 +235,8 @@ func writeTaskError(w http.ResponseWriter, operation string, err error) {
 		writeError(w, http.StatusConflict, "TASK_STATE_CONFLICT", "只有提议中的任务可以确认。")
 	case errors.Is(err, errModelUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "MODEL_UNAVAILABLE", "请先配置模型。")
+	case errors.Is(err, errWorkflowModelConnection):
+		writeError(w, http.StatusConflict, "WORKFLOW_MODEL_CONNECTION_CHANGED", errWorkflowModelConnection.Error())
 	default:
 		writeStoreError(w, operation, err)
 	}

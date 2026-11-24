@@ -109,6 +109,10 @@ type WorkflowRun struct {
 	Course              *courseSettings   `json:"course,omitempty"`
 	Software            *softwareSettings `json:"software,omitempty"`
 	Patent              *patentSettings   `json:"patent,omitempty"`
+	Model               string            `json:"model,omitempty"`
+	ReasoningEffort     string            `json:"reasoningEffort,omitempty"`
+	modelID             string
+	modelConnection     string
 	step                int
 	rangeStart          int
 	rangeEnd            int
@@ -145,8 +149,10 @@ type workflowRequest struct {
 	Course           *courseOptions   `json:"course"`
 	Software         *softwareOptions `json:"software"`
 	Patent           *patentOptions   `json:"patent"`
+	ModelID          string           `json:"modelId"`
 	sourceTurnID     string
 	workflowKey      string
+	model            workflowModelOption
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -164,13 +170,13 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
 		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json, COALESCE(w.range_source_turn_id, ''),
-		COALESCE(t.mode, '')
+		COALESCE(t.mode, ''), w.model_id, w.model_name, w.reasoning_effort, w.model_connection
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
 		LEFT JOIN turns t ON t.turn_id = w.range_source_turn_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.templateCheckpoints, &run.CreatedAt, &run.step,
 			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic,
-			&run.optionsJSON, &run.rangeSourceTurnID, &mode)
+			&run.optionsJSON, &run.rangeSourceTurnID, &mode, &run.modelID, &run.Model, &run.ReasoningEffort, &run.modelConnection)
 	if err != nil {
 		return WorkflowRun{}, err
 	}
@@ -297,6 +303,10 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
+	modelID := req.ModelID
+	if modelID == "" {
+		modelID = defaultWorkflowModelID
+	}
 
 	var runID, recordedAction, recordedEnd, recordedStep, recordedReason string
 	var revision, recordedCandidate int
@@ -311,10 +321,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
 		if err == nil && action == workflowStart {
-			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount {
-				return WorkflowRun{}, false, errRequestConflict
-			}
-			if options != run.optionsJSON {
+			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount || modelID != run.modelID || options != run.optionsJSON {
 				return WorkflowRun{}, false, errRequestConflict
 			}
 		}
@@ -411,6 +418,12 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if queuesWork && !modelReady {
 		return WorkflowRun{}, false, errModelUnavailable
 	}
+	if action == workflowStart && modelID == alternateWorkflowModelID && req.model.Model == "" {
+		return WorkflowRun{}, false, errWorkflowModelUnavailable
+	}
+	if queuesWork && current.modelConnection != "" && current.modelConnection != req.model.connection {
+		return WorkflowRun{}, false, errWorkflowModelConnection
+	}
 
 	switch action {
 	case workflowStart:
@@ -434,9 +447,11 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 			evidence = string(snapshot)
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs
-			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json, range_end, range_source_turn_id)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`, current.RunID, projectID, checkpoints,
-			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID)
+			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json,
+			 range_end, range_source_turn_id, model_id, model_name, reasoning_effort, model_connection)
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?)`, current.RunID, projectID, checkpoints,
+			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID,
+			modelID, req.model.Model, req.model.ReasoningEffort, req.model.connection)
 	case workflowPause, workflowCancel:
 		runStatus := taskCancelled
 		if action == workflowPause {

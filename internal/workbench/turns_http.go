@@ -82,6 +82,9 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
 	proposal, generateErr := c.generate(ctx, project, turn)
 	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposal: proposal}
+	if proposal.workflow != nil {
+		event.workflowModel = defaultWorkflowModel(c.model)
+	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		event.Status = "INTERRUPTED"
 		event.Message = "服务关闭中断了此轮回复。可以重新发送。"

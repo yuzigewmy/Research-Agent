@@ -85,4 +85,6 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 展开首页「模型连接」可查看当前模型和推理档位。点击「测试连接」才会向已配置服务发送一条固定消息，最多等待 30 秒。测试不发送项目资料，不写入对话历史，也不向浏览器返回服务地址或凭据。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
 
-使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。推理请求的 8192 token 上限包含推理和正文。
+使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。默认对话的 8192 token 上限包含推理和正文。
+
+在同一个模型服务上提供工作流备选模型时，设置 `RESEARCH_WORKFLOW_MODEL_NAME`，并按需设置 `RESEARCH_WORKFLOW_MODEL_REASONING_EFFORT`。重启服务后，可在启动工作流前选择模型。运行记录保存该模型和推理档位，后续步骤、续跑和重跑都使用这份配置。部署端可轮换凭据。若服务地址已改动，恢复启动本轮时的地址后即可继续。
