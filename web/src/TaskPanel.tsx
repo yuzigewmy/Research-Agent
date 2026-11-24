@@ -5,7 +5,7 @@ import { selectionEditInstructionLimit } from './SelectionEdit'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
 import { TaskSelectionEdit } from './TaskSelectionEdit'
 import {
-  changeTask, conversationTurnAnchor, editTask, getTask, isMarkdownTaskPath, isTaskActive, listTasks, proposeTask, refreshTasks,
+  changeTask, conversationTurnAnchor, editTask, getTask, isCSVTaskPath, isMarkdownTaskPath, isTaskActive, listTasks, proposeTask, refreshTasks,
   taskArtifactPath, taskInputLimit, taskInstructionLimit, taskStatusLabels,
 } from './tasks'
 import type { ProposalInput, Task, TaskAction, TaskInputVersion, TaskLink, TaskPage } from './tasks'
@@ -23,10 +23,10 @@ export interface TaskPanelSync {
   onReviewAppliedFile?: (file: FileRecord) => void
 }
 
-type TaskFields = Omit<ProposalInput, 'requestId' | 'sourceTurnId'>
+type TaskFields = Pick<ProposalInput, 'instruction' | 'inputVersionIds'>
 type CardMutation = { kind: TaskAction; task: Task }
   | ({ kind: 'edit'; task: Task; expectedRevision: number } & TaskFields)
-type Mutation = ({ kind: 'propose' } & TaskFields) | CardMutation
+type Mutation = ({ kind: 'propose'; taskKind?: ProposalInput['kind'] } & TaskFields) | CardMutation
 type ChangeAttempt = { requestId: string; expectedRevision: number } & Partial<TaskFields>
 type MutationResult = { ok: true } | { ok: false; message: string; inputChanged?: boolean }
 type LinkedTaskResult = { link: TaskLink } & ({ kind: 'ready'; task: Task } | { kind: 'error'; message: string })
@@ -71,6 +71,9 @@ function instructionError(instruction: string, limit = taskInstructionLimit) {
 }
 
 function editInputError(inputs: TaskInputVersion[], kind: Task['kind']) {
+  if (kind === 'experiment-comparison' && (inputs.length !== 1 || !isCSVTaskPath(inputs[0].path))) {
+    return '请选择一份已保存的 CSV 数据。'
+  }
   if (kind === 'manuscript-check' && (inputs.length !== 1 || !isMarkdownTaskPath(inputs[0].path))) {
     return '请选择一份已保存的 Markdown 稿件。'
   }
@@ -109,6 +112,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
   const editField = useRef<HTMLTextAreaElement>(null)
   const proposed = task.status === 'PROPOSED'
   const isManuscriptCheck = task.kind === 'manuscript-check'
+  const isExperimentComparison = task.kind === 'experiment-comparison'
+  const isLocalTask = isManuscriptCheck || isExperimentComparison
   const isSelectionEdit = task.kind === 'selection-edit'
   const isFocusedResearch = task.kind === 'focused-research'
   const canCancel = proposed || task.status === 'QUEUED' || task.status === 'RUNNING'
@@ -179,6 +184,10 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         <p className="turn-role">聚焦研究</p>
         {proposed && <p className="task-note">确认运行后，每份所选 Markdown 版本开头最多 8 KiB 的正文节选会发送给研究模型。</p>}
       </div>}
+      {isExperimentComparison && <div>
+        <p className="turn-role">配对指标对比</p>
+        {proposed && <p className="task-note">确认后在本机计算两列均值与平均差。任一列为空的行不计入比较。</p>}
+      </div>}
       {edit && <p className="task-note">当前任务说明</p>}
       <p className="task-instruction" dir="auto">{task.instruction}</p>
       {showSourceLink && task.sourceTurnId && <p className="task-note">
@@ -209,7 +218,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
           }} />
         {isSelectionEdit ? <p className="task-note">修改说明最多 2 KiB。更换范围时请从稿件重新引用选区。</p>
           : <TaskInputVersions projectId={projectId} inputs={edit.inputs} disabled={pending !== null || !proposed}
-            markdown={isManuscriptCheck ? 'single' : isFocusedResearch ? 'multiple' : undefined} onChange={(inputs) => {
+            single={isLocalTask} format={isExperimentComparison ? 'csv' : isManuscriptCheck || isFocusedResearch ? 'markdown' : undefined}
+            onChange={(inputs) => {
               setEdit({ ...edit, inputs })
               setEditError(undefined)
             }} />}
@@ -222,7 +232,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
               setEdit({
                 text: edit.text.trim() === edit.baseInstruction ? task.instruction : edit.text,
                 revision: task.revision,
-                inputs: isSelectionEdit ? currentInputs : rebaseInputs(edit, currentInputs, isManuscriptCheck),
+                inputs: isSelectionEdit ? currentInputs : rebaseInputs(edit, currentInputs, isLocalTask),
                 baseInstruction: task.instruction,
                 baseInputs: currentInputs,
               })
@@ -243,7 +253,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       {canCancel && <div className="task-actions">
         {proposed && <>
           <button className="button primary" type="button"
-            disabled={(!isManuscriptCheck && !modelConfigured) || editing || !!confirmationConflict}
+            disabled={(!isLocalTask && !modelConfigured) || editing || !!confirmationConflict}
             aria-disabled={pending !== null} onClick={() => void confirm()}>
             {pending === `confirm:${task.taskId}` ? '正在确认…' : '确认运行'}
           </button>
@@ -266,7 +276,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       </div>}
       {task.status === 'SUCCEEDED' && !isSelectionEdit && <div className="task-actions">
         <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>
-          {isManuscriptCheck ? '下载检查报告' : isFocusedResearch ? '下载聚焦研究报告' : '下载 Markdown'}
+          {isExperimentComparison ? '下载指标对比报告' : isManuscriptCheck ? '下载检查报告'
+            : isFocusedResearch ? '下载聚焦研究报告' : '下载 Markdown'}
         </a>
       </div>}
     </li>
@@ -296,6 +307,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   const prefill = initialInstruction.trim()
   const prefillTooLong = instructionEncoder.encode(prefill).length > taskInstructionLimit
   const [draft, setDraft] = useState(() => instructionError(prefill) ? '' : prefill)
+  const [proposalKind, setProposalKind] = useState<ProposalInput['kind']>()
   const [draftInputs, setDraftInputs] = useState<TaskInputVersion[]>([])
   const [inputError, setInputError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -428,9 +440,11 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   }
 
   async function mutate(mutation: Mutation): Promise<MutationResult | undefined> {
-    const localCheck = mutation.kind !== 'propose' && mutation.task.kind === 'manuscript-check'
+    const localTask = mutation.kind === 'propose'
+      ? mutation.taskKind === 'experiment-comparison'
+      : mutation.task.kind === 'manuscript-check' || mutation.task.kind === 'experiment-comparison'
     if (submission.current) return
-    if (!localCheck && (configured === undefined || (mutation.kind === 'confirm' && !configured))) return
+    if (!localTask && (configured === undefined || (mutation.kind === 'confirm' && !configured))) return
     const key = mutation.kind === 'propose' ? 'propose' : `${mutation.kind}:${mutation.task.taskId}`
     const controller = new AbortController()
     const focusControl = document.activeElement
@@ -441,11 +455,11 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
       let task: Task
       if (mutation.kind === 'propose') {
-        const { instruction, inputVersionIds } = mutation
+        const { instruction, inputVersionIds, taskKind } = mutation
         const previous = proposalAttempt.current
         const attempt = previous?.instruction === instruction && previous.sourceTurnId === sourceTurnId
-          && sameVersionIds(previous.inputVersionIds, inputVersionIds)
-          ? previous : { requestId: crypto.randomUUID(), instruction, inputVersionIds, sourceTurnId }
+          && previous.kind === taskKind && sameVersionIds(previous.inputVersionIds, inputVersionIds)
+          ? previous : { requestId: crypto.randomUUID(), instruction, inputVersionIds, sourceTurnId, kind: taskKind }
         proposalAttempt.current = attempt
         task = await proposeTask(projectId, attempt, signal)
         if (controller.signal.aborted) return
@@ -523,12 +537,32 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
       instructionField.current?.focus()
       return
     }
-    void mutate({ kind: 'propose', instruction, inputVersionIds: draftInputs.length ? versionIds(draftInputs) : undefined })
+    const inputsProblem = editInputError(draftInputs, proposalKind)
+    if (inputsProblem) {
+      setActionError(inputsProblem)
+      return
+    }
+    void mutate({
+      kind: 'propose', taskKind: proposalKind, instruction,
+      inputVersionIds: draftInputs.length ? versionIds(draftInputs) : undefined,
+    })
   }
 
+  const comparison = proposalKind === 'experiment-comparison'
   const proposalForm = (
     <form className="create-form" onSubmit={submit} noValidate aria-busy={pending === 'propose'}>
-      {sourceTurnId && <p className="task-note">{turnSourceNotice}</p>}
+      {sourceTurnId ? <p className="task-note">{turnSourceNotice}</p> : <div className="field">
+        <label htmlFor={`${panelId}-task-kind`}>任务类型</label>
+        <select id={`${panelId}-task-kind`} value={proposalKind ?? ''} disabled={pending === 'propose'}
+          onChange={(event) => {
+            setProposalKind(event.currentTarget.value === 'experiment-comparison' ? 'experiment-comparison' : undefined)
+            setDraftInputs([])
+            setActionError('')
+          }}>
+          <option value="">研究计划</option>
+          <option value="experiment-comparison">配对指标对比</option>
+        </select>
+      </div>}
       <div className="field">
         <label htmlFor={`${panelId}-instruction`}>任务说明</label>
         <textarea id={`${panelId}-instruction`} name="instruction" rows={3} required ref={instructionField}
@@ -539,14 +573,19 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
             setInputError('')
           }} />
         <p id={`${panelId}-hint`} className="task-note">
-          {sourceTurnId && prefillTooLong ? '原话超过 8 KiB，请填写简短的任务说明。'
-            : '说明研究目标，以及计划需要回答的问题。'}
+          {comparison ? '填写本次比较的指标和实验条件，便于在任务记录中查找。'
+            : sourceTurnId && prefillTooLong ? '原话超过 8 KiB，请填写简短的任务说明。'
+              : '说明研究目标，以及计划需要回答的问题。'}
         </p>
         {inputError && <p className="form-error" role="alert" id={`${panelId}-error`}>{inputError}</p>}
       </div>
-      <TaskInputVersions projectId={projectId} inputs={draftInputs} disabled={pending !== null} onChange={setDraftInputs} />
+      <TaskInputVersions projectId={projectId} inputs={draftInputs} disabled={pending !== null}
+        single={comparison} format={comparison ? 'csv' : undefined} onChange={(inputs) => {
+          setDraftInputs(inputs)
+          setActionError('')
+        }} />
       <div className="task-actions">
-        <button className="button primary" type="submit" disabled={configured === undefined} aria-disabled={pending !== null}>
+        <button className="button primary" type="submit" disabled={!comparison && configured === undefined} aria-disabled={pending !== null}>
           {pending === 'propose' ? '正在提交…' : '提交提议'}
         </button>
       </div>
@@ -556,7 +595,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   return (
     <section className="task-panel" aria-labelledby={`${panelId}-heading`}>
       <h4 id={`${panelId}-heading`}>{sourceTurnId ? '此对话的任务' : '研究计划'}</h4>
-      {configured === false && <p className="task-note" role="status">研究模型未配置。研究计划需要配置模型后运行，只读稿件检查可在本机运行。</p>}
+      {configured === false && <p className="task-note" role="status">研究计划需要配置模型。只读稿件检查和配对指标对比可在本机运行。</p>}
       {!proposedTaskId && proposalForm}
       {taskLink && !linkedTask && <p className="task-note" role="status">正在打开链接的任务…</p>}
       {linkedTask?.kind === 'error' && <div className="request-error" ref={linkedError} tabIndex={-1}>

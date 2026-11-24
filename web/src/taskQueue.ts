@@ -4,6 +4,7 @@ export const queueTaskKindLabels = {
   plan: '研究计划',
   'focused-research': '聚焦研究',
   'manuscript-check': '只读稿件检查',
+  'experiment-comparison': '配对指标对比',
   workflow: '工作流步骤',
   review: '稿件审查',
   'automatic-review': '多轮审稿',

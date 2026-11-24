@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { errorMessage } from './projects'
-import { isMarkdownTaskPath, taskInputLimit } from './tasks'
+import { isCSVTaskPath, isMarkdownTaskPath, taskInputLimit } from './tasks'
 import type { TaskInputVersion } from './tasks'
 import { listFiles, readVersion } from './workspace'
 import type { FilePage } from './workspace'
@@ -78,29 +78,31 @@ type PickerProps = {
   projectId: string
   inputs: TaskInputVersion[]
   disabled: boolean
-  markdown?: 'single' | 'multiple'
+  format?: 'markdown' | 'csv'
+  single?: boolean
   onChange: (inputs: TaskInputVersion[]) => void
 }
 
 export function TaskInputVersions(props: PickerProps) {
   const [open, setOpen] = useState(false)
-  const limit = props.markdown === 'single' ? 1 : taskInputLimit
+  const limit = props.single ? 1 : taskInputLimit
+  const hint = props.format === 'csv'
+    ? '选择一份已保存的 CSV，表头须含 baseline 和 variant。每一行对应同一次观测或实验。'
+    : props.format === 'markdown'
+      ? `请选择${props.single ? '一份' : ` 1 至 ${taskInputLimit} 份`}已保存的 Markdown 文件（.md 或 .markdown）。`
+      : `最多选择 ${taskInputLimit} 个文件。确认运行后，每个所选文件开头最多 8 KiB 的文字会发送给研究模型。`
   return <div className="task-input-body">
     <details className="task-input-disclosure" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>添加工作区文件 <span className="task-note">（已选 {props.inputs.length}/{limit}）</span></summary>
-      {open && <FilePicker key={props.projectId} {...props} />}
+      {open && <FilePicker key={`${props.projectId}:${props.format ?? ''}`} {...props} />}
     </details>
-    <p className="task-note">
-      {props.markdown === 'single' ? '请选择一份已保存的 Markdown 稿件（.md 或 .markdown）。'
-        : props.markdown === 'multiple' ? `请选择 1 至 ${taskInputLimit} 份已保存的 Markdown 文件（.md 或 .markdown）。`
-          : `最多选择 ${taskInputLimit} 个文件。确认运行后，每个所选文件开头最多 8 KiB 的文字会发送给研究模型。`}
-    </p>
+    <p className="task-note">{hint}</p>
   </div>
 }
 
-function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerProps) {
+function FilePicker({ projectId, inputs, disabled, format, single, onChange }: PickerProps) {
   const pickerId = useId()
-  const single = markdown === 'single'
+  const matchesFormat = format === 'csv' ? isCSVTaskPath : format === 'markdown' ? isMarkdownTaskPath : () => true
   const [page, setPage] = useState<FilePage>({ items: [] })
   const [query, setQuery] = useState<{ cursor?: string }>({})
   const [loading, setLoading] = useState(true)
@@ -108,7 +110,7 @@ function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerP
 
   useEffect(() => {
     const controller = new AbortController()
-    void listFiles(projectId, requestSignal(controller), query.cursor, markdown ? 'markdown' : undefined).then((next) => {
+    void listFiles(projectId, requestSignal(controller), query.cursor, format).then((next) => {
       if (controller.signal.aborted) return
       setPage((previous) => {
         if (!query.cursor) return next
@@ -121,7 +123,7 @@ function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerP
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [markdown, projectId, query])
+  }, [format, projectId, query])
 
   function load(cursor?: string) {
     setLoading(true)
@@ -130,7 +132,7 @@ function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerP
   }
 
   function select(input: TaskInputVersion, checked: boolean) {
-    if (disabled || (markdown && !isMarkdownTaskPath(input.path))) return
+    if (disabled || !matchesFormat(input.path)) return
     if (single) {
       if (checked) onChange([input])
       return
@@ -143,7 +145,7 @@ function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerP
 
   const listedPaths = new Set(page.items.map(({ path }) => path))
   const choices = [...inputs.filter(({ path }) => !listedPaths.has(path)), ...page.items]
-    .filter(({ path }) => !markdown || isMarkdownTaskPath(path))
+    .filter(({ path }) => matchesFormat(path))
   return <div className="task-input-body">
     <div className="task-actions">
       <button className="button outline" type="button" disabled={loading} onClick={() => load()}>刷新文件列表</button>
@@ -151,7 +153,8 @@ function FilePicker({ projectId, inputs, disabled, markdown, onChange }: PickerP
     {loading && <p className="task-note" role="status">正在读取工作区文件…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
     {!loading && !error && !choices.length && <p className="task-note">
-      {markdown ? '工作区暂无已保存的 Markdown 文件。' : '工作区暂无已保存的文件。'}
+      {format === 'csv' ? '请先在文本工作区保存一份 CSV 数据。'
+        : format === 'markdown' ? '工作区暂无已保存的 Markdown 文件。' : '工作区暂无已保存的文件。'}
     </p>}
     {choices.length > 0 && <ul className="task-input-list task-input-choices" role="list" aria-label="可选工作区文件">
       {choices.map(({ path, versionId, sha256 }) => {

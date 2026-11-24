@@ -27,7 +27,7 @@ export interface Task {
   revision: number
   status: TaskStatus
   createdAt: string
-  kind?: 'manuscript-check' | 'selection-edit' | 'focused-research'
+  kind?: 'manuscript-check' | 'selection-edit' | 'focused-research' | 'experiment-comparison'
   message?: string
   inputs?: TaskInputVersion[]
   sourceTurnId?: string
@@ -44,6 +44,7 @@ export interface ProposalInput {
   instruction: string
   inputVersionIds?: string[]
   sourceTurnId?: string
+  kind?: 'experiment-comparison'
 }
 
 interface ActionInput {
@@ -57,6 +58,10 @@ export const taskInputLimit = 4
 export function isMarkdownTaskPath(path: string) {
   const lower = path.toLowerCase()
   return lower.endsWith('.md') || lower.endsWith('.markdown')
+}
+
+export function isCSVTaskPath(path: string) {
+  return /\.csv$/i.test(path)
 }
 
 export function isTaskActive(status: TaskStatus) {
@@ -78,14 +83,16 @@ function isTask(value: unknown): value is Task {
     && typeof task.revision === 'number' && Number.isSafeInteger(task.revision) && task.revision >= 1
     && typeof task.status === 'string' && Object.hasOwn(taskStatusLabels, task.status)
     && typeof task.createdAt === 'string' && Number.isFinite(Date.parse(task.createdAt))
-    && (task.kind === undefined || task.kind === 'manuscript-check' || task.kind === 'selection-edit' || task.kind === 'focused-research')
+    && (task.kind === undefined || task.kind === 'manuscript-check' || task.kind === 'selection-edit'
+      || task.kind === 'focused-research' || task.kind === 'experiment-comparison')
     && (task.message === undefined || typeof task.message === 'string')
     && (task.sourceTurnId === undefined || (typeof task.sourceTurnId === 'string' && task.sourceTurnId.length > 0))
     && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
       && task.inputs.every(isTaskInputVersion)))
     && (task.kind === undefined || (task.inputs !== undefined && task.inputs.length >= 1
-      && (task.kind !== 'manuscript-check' || task.inputs.length === 1)
-      && task.inputs.every(({ path }) => isMarkdownTaskPath(path))))
+      && (task.kind === 'experiment-comparison'
+        ? task.inputs.length === 1 && isCSVTaskPath(task.inputs[0].path)
+        : (task.kind !== 'manuscript-check' || task.inputs.length === 1) && task.inputs.every(({ path }) => isMarkdownTaskPath(path)))))
     && (task.kind !== 'selection-edit' || (task.inputs !== undefined
       && new Set(task.inputs.map(({ path }) => path)).size === task.inputs.length
       && new Set(task.inputs.map(({ versionId }) => versionId)).size === task.inputs.length))
@@ -165,7 +172,7 @@ export function changeTask(projectId: string, taskId: string, action: TaskAction
   return sendTask(`${taskPath(projectId, taskId)}/${action}`, input, signal)
 }
 
-export function editTask(projectId: string, taskId: string, input: ActionInput & Omit<ProposalInput, 'requestId' | 'sourceTurnId'>, signal: AbortSignal) {
+export function editTask(projectId: string, taskId: string, input: ActionInput & Pick<ProposalInput, 'instruction' | 'inputVersionIds'>, signal: AbortSignal) {
   return sendTask(taskPath(projectId, taskId), input, signal, 'PATCH')
 }
 
