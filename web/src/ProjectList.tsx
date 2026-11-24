@@ -74,12 +74,11 @@ export function useProjectList() {
   }, [request])
 
   function filter(changes: Partial<ProjectFilters>) {
+    if (changes.status !== undefined) rememberProjectScope(changes.status)
     setState((current) => {
       const previous = current.request.filters
       const next = { ...previous, ...changes }
-      if (next.q === previous.q && next.status === previous.status) return current
-      if (next.status !== previous.status) rememberProjectScope(next.status)
-      return firstPage(next)
+      return next.q === previous.q && next.status === previous.status ? current : firstPage(next)
     })
   }
 
