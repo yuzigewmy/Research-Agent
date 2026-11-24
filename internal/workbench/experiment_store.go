@@ -113,6 +113,7 @@ type WorkflowRun struct {
 	ReasoningEffort     string            `json:"reasoningEffort,omitempty"`
 	modelID             string
 	modelConnection     string
+	stepModels          workflowStepModels
 	step                int
 	rangeStart          int
 	rangeEnd            int
@@ -124,35 +125,39 @@ type WorkflowRun struct {
 }
 
 type WorkflowStep struct {
-	Key           string                  `json:"key"`
-	Title         string                  `json:"title"`
-	Status        string                  `json:"status"`
-	Message       string                  `json:"message,omitempty"`
-	ArtifactID    string                  `json:"artifactId,omitempty"`
-	ArtifactCount int                     `json:"artifactCount,omitempty"`
-	Source        *workflowArtifactSource `json:"source,omitempty"`
+	Key             string                  `json:"key"`
+	Title           string                  `json:"title"`
+	Status          string                  `json:"status"`
+	Message         string                  `json:"message,omitempty"`
+	ArtifactID      string                  `json:"artifactId,omitempty"`
+	ArtifactCount   int                     `json:"artifactCount,omitempty"`
+	Source          *workflowArtifactSource `json:"source,omitempty"`
+	Model           string                  `json:"model,omitempty"`
+	ReasoningEffort string                  `json:"reasoningEffort,omitempty"`
 }
 
 type workflowRequest struct {
-	RequestID        string           `json:"requestId"`
-	RunID            string           `json:"runId"`
-	ExpectedRevision int              `json:"expectedRevision"`
-	Checkpoints      *bool            `json:"checkpoints"`
-	ThroughStep      string           `json:"throughStep"`
-	StepKey          string           `json:"stepKey"`
-	Reason           string           `json:"reason"`
-	CandidateNumber  int              `json:"candidateNumber"`
-	TargetPaperCount int              `json:"targetPaperCount"`
-	Paper            *paperOptions    `json:"paper"`
-	Topic            *topicOptions    `json:"topic"`
-	Proposal         *proposalOptions `json:"proposal"`
-	Course           *courseOptions   `json:"course"`
-	Software         *softwareOptions `json:"software"`
-	Patent           *patentOptions   `json:"patent"`
-	ModelID          string           `json:"modelId"`
+	RequestID        string            `json:"requestId"`
+	RunID            string            `json:"runId"`
+	ExpectedRevision int               `json:"expectedRevision"`
+	Checkpoints      *bool             `json:"checkpoints"`
+	ThroughStep      string            `json:"throughStep"`
+	StepKey          string            `json:"stepKey"`
+	Reason           string            `json:"reason"`
+	CandidateNumber  int               `json:"candidateNumber"`
+	TargetPaperCount int               `json:"targetPaperCount"`
+	Paper            *paperOptions     `json:"paper"`
+	Topic            *topicOptions     `json:"topic"`
+	Proposal         *proposalOptions  `json:"proposal"`
+	Course           *courseOptions    `json:"course"`
+	Software         *softwareOptions  `json:"software"`
+	Patent           *patentOptions    `json:"patent"`
+	ModelID          string            `json:"modelId"`
+	StepModelIDs     map[string]string `json:"stepModelIds"`
 	sourceTurnID     string
 	workflowKey      string
 	model            modelOption
+	modelOptions     []modelOption
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -166,18 +171,21 @@ func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowR
 
 func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (WorkflowRun, error) {
 	var run WorkflowRun
-	var skipReason, mode string
+	var skipReason, mode, stepModelsJSON string
 	err := tx.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.revision, w.status, w.checkpoints, w.created_at, w.step_no,
 		w.target_paper_count, json_array_length(w.evidence_json), COALESCE(json_extract(w.options_json, '$.language'), ''),
 		w.range_start, w.range_end, COALESCE(r.skip_reason, ''), w.selected_topic_number, w.options_json, COALESCE(w.range_source_turn_id, ''),
-		COALESCE(t.mode, ''), w.model_id, w.model_name, w.reasoning_effort, w.model_connection
+		COALESCE(t.mode, ''), w.model_id, w.model_name, w.reasoning_effort, w.model_connection, w.step_models_json
 		FROM workflow_runs w LEFT JOIN workflow_requests r ON r.project_id = w.project_id AND r.request_id = w.skipped_request_id
 		LEFT JOIN turns t ON t.turn_id = w.range_source_turn_id
 		WHERE w.project_id = ? AND (? = '' OR w.run_id = ?) ORDER BY w.ordinal DESC LIMIT 1`, projectID, runID, runID).
 		Scan(&run.RunID, &run.WorkflowKey, &run.Revision, &run.Status, &run.templateCheckpoints, &run.CreatedAt, &run.step,
 			&run.TargetPaperCount, &run.SourceCount, &run.Language, &run.rangeStart, &run.rangeEnd, &skipReason, &run.selectedTopic,
-			&run.optionsJSON, &run.rangeSourceTurnID, &mode, &run.modelID, &run.Model, &run.ReasoningEffort, &run.modelConnection)
+			&run.optionsJSON, &run.rangeSourceTurnID, &mode, &run.modelID, &run.Model, &run.ReasoningEffort, &run.modelConnection, &stepModelsJSON)
 	if err != nil {
+		return WorkflowRun{}, err
+	}
+	if err := json.Unmarshal([]byte(stepModelsJSON), &run.stepModels); err != nil {
 		return WorkflowRun{}, err
 	}
 	run.ConfirmEachStep = mode == turnModeConfirmAll
@@ -215,7 +223,8 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	run.Scope = WorkflowScope{StartStep: stages[run.rangeStart].key, EndStep: stages[last].key}
 	run.Steps = make([]WorkflowStep, len(stages))
 	for i, stage := range stages {
-		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING"}
+		model := run.stepModels[stage.key]
+		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING", Model: model.Model, ReasoningEffort: model.ReasoningEffort}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT t.workflow_step, t.task_id, t.status, t.message, t.workflow_superseded, history.artifacts,
 		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, ''), t.workflow_topic_data
@@ -321,7 +330,8 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
 		if err == nil && action == workflowStart {
-			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount || modelID != run.modelID || options != run.optionsJSON {
+			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount || modelID != run.modelID ||
+				options != run.optionsJSON || !run.stepModels.matches(req.StepModelIDs) {
 				return WorkflowRun{}, false, errRequestConflict
 			}
 		}
@@ -427,6 +437,14 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 
 	switch action {
 	case workflowStart:
+		stepModels, err := freezeWorkflowStepModels(workflowStages[key], req.StepModelIDs, req.modelOptions)
+		if err != nil {
+			return WorkflowRun{}, false, err
+		}
+		stepModelsJSON, err := json.Marshal(stepModels)
+		if err != nil {
+			return WorkflowRun{}, false, err
+		}
 		evidence := "[]"
 		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || isProposalWorkflow(key) || isCourseWorkflow(key) {
 			limit := target
@@ -446,12 +464,14 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 			}
 			evidence = string(snapshot)
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO workflow_runs
+		if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_runs
 			(run_id, project_id, status, checkpoints, created_at, workflow_key, evidence_json, target_paper_count, options_json,
-			 range_end, range_source_turn_id, model_id, model_name, reasoning_effort, model_connection)
-			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?)`, current.RunID, projectID, checkpoints,
+			 range_end, range_source_turn_id, model_id, model_name, reasoning_effort, model_connection, step_models_json)
+			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?)`, current.RunID, projectID, checkpoints,
 			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID,
-			modelID, req.model.Model, req.model.ReasoningEffort, req.model.connection)
+			modelID, req.model.Model, req.model.ReasoningEffort, req.model.connection, string(stepModelsJSON)); err != nil {
+			return WorkflowRun{}, false, err
+		}
 	case workflowPause, workflowCancel:
 		runStatus := taskCancelled
 		if action == workflowPause {

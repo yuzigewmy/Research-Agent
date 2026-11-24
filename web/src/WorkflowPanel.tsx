@@ -105,6 +105,10 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWor
             <strong dir="auto">{step.title}</strong>
             <span className="workflow-step-status" data-status={step.status}>{stepStatusLabels[step.status]}</span>
           </div>
+          {(step.model || step.reasoningEffort) && <p className="workflow-note">
+            {step.model && <>步骤模型 <bdi>{step.model}</bdi> · </>}
+            推理档 <bdi>{step.reasoningEffort || '默认'}</bdi>
+          </p>}
           {step.message && <p className="workflow-note workflow-step-message" dir="auto">{step.message}</p>}
           {step.source && <p className="workflow-note">
             工作区来源 <bdi>{step.source.path}</bdi> · 版本 <bdi>{step.source.versionId}</bdi>
@@ -251,6 +255,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const submission = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<WorkflowSnapshot | null>(null)
   const [preferredModelId, setPreferredModelId] = useState<WorkflowModelId>()
+  const [stepModelChoices, setStepModelChoices] = useState(() => new Map<string, WorkflowModelId>())
   const [checkpoints, setCheckpoints] = useState(defaultCheckpoints)
   const [targetPaperCount, setTargetPaperCount] = useState('20')
   const [paperLanguage, setPaperLanguage] = useState<'zh' | 'en'>('zh')
@@ -301,6 +306,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const endStep = rangeSteps.some((step) => step.key === throughStep) ? throughStep : ''
   const modelOptions = snapshot?.modelOptions ?? []
   const startModel = modelOptions.find(({ id }) => id === preferredModelId) ?? modelOptions[0]
+  const modelSteps = canStart && modelOptions.length > 1 ? steps.filter((step) => step.requiresModel) : []
+  const modelSelectOptions = modelOptions.map(({ id, model, reasoningEffort }) => (
+    <option key={id} value={id}>{model} · 推理档 {reasoningEffort || '默认'}</option>
+  ))
   const retryStart = retry?.kind === 'start' && (retry.input.throughStep ?? '') === endStep
     && retry.input.modelId === startModel?.id ? retry : null
   const retryContinue = retry?.kind === 'continue' && retry.input.runId === run?.runId
@@ -389,6 +398,19 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     setReload((value) => value + 1)
   }
 
+  function changeStepModel(stepKey: string, value: string) {
+    const modelId = modelOptions.find(({ id }) => id === value)?.id
+    if ((value !== '' && !modelId) || modelId === stepModelChoices.get(stepKey)) return
+    setStepModelChoices((current) => {
+      const next = new Map(current)
+      if (modelId) next.set(stepKey, modelId)
+      else next.delete(stepKey)
+      return next
+    })
+    if (retry?.kind === 'start') setRetry(null)
+    setActionError('')
+  }
+
   function toggleCancelConfirmation() {
     if (!run || !canCancel || requestBlocked || submission.current) return
     if (confirmingCancel) {
@@ -446,8 +468,15 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         const requestId = crypto.randomUUID()
         if (kind === 'start') {
           setPreferredModelId(startModel?.id)
+          const stepModelIds: Record<string, WorkflowModelId> = {}
+          for (const { key } of modelSteps) {
+            const modelId = stepModelChoices.get(key)
+            if (modelId) stepModelIds[key] = modelId
+          }
           attempt = { kind, input: {
-            requestId, checkpoints, modelId: startModel?.id, targetPaperCount: isReview ? target : undefined,
+            requestId, checkpoints, modelId: startModel?.id,
+            stepModelIds: Object.keys(stepModelIds).length ? stepModelIds : undefined,
+            targetPaperCount: isReview ? target : undefined,
             paper: isPaper ? { language: paperLanguage, outline } : undefined,
             topic: isTopic ? { requirements: requirements || undefined } : undefined,
             proposal: proposal?.options,
@@ -494,6 +523,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       setThroughStep('')
       if (attempt.kind === 'start') {
         setPreferredModelId(undefined)
+        setStepModelChoices(new Map())
         setCheckpoints(defaultCheckpoints)
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
         if (isSoftware) setSoftwareDraft(initialSoftwareDraft())
@@ -625,13 +655,28 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
                 if (retry?.kind === 'start') setRetry(null)
                 setActionError('')
               }}>
-              {modelOptions.map(({ id, model, reasoningEffort }) => (
-                <option key={id} value={id}>{model} · 推理档 {reasoningEffort || '默认'}</option>
-              ))}
+              {modelSelectOptions}
             </select>
           </div> : <p className="workflow-note">
             工作流模型 <bdi>{startModel.model}</bdi> · 推理档 <bdi>{startModel.reasoningEffort || '默认'}</bdi>
           </p>)}
+          {modelSteps.length > 0 && <details className="workflow-artifact-history">
+            <summary>步骤模型</summary>
+            <div className="workflow-run-history-content">
+              <p className="workflow-note">可为本轮稍后运行的步骤提前选模。继续运行或重跑时沿用已保存的选择。</p>
+              {modelSteps.map(({ key, title }) => {
+                const selectId = `${headingId}-step-model-${key}`
+                return <div className="field" key={key}>
+                  <label htmlFor={selectId}>{title}的模型</label>
+                  <select id={selectId} value={stepModelChoices.get(key) ?? ''} disabled={actionDisabled}
+                    onChange={(event) => changeStepModel(key, event.currentTarget.value)}>
+                    <option value="">沿用工作流模型</option>
+                    {modelSelectOptions}
+                  </select>
+                </div>
+              })}
+            </div>
+          </details>}
           {canStart && courseTemplate && course && <WorkflowCourseOptions projectId={projectId} templateId={courseTemplate}
             draft={courseDraft} errors={course.errors} disabled={actionDisabled || retryStart !== null} onChange={setCourseDraft} />}
           {canStart && software && <WorkflowSoftwareOptions projectId={projectId} draft={softwareDraft}

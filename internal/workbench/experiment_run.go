@@ -37,12 +37,22 @@ func (e workflowOutputError) Error() string { return e.err.Error() }
 func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Client, project Project, task Task, input string) (taskResult, error) {
 	projectID := project.ProjectID
 	var key, evidence, options, sourceTurnID string
-	var modelName, reasoningEffort, connection string
+	var modelName, reasoningEffort, connection, stepModelsJSON string
 	var selectedNumber int
 	if err := s.db.QueryRowContext(ctx, `SELECT workflow_key, evidence_json, options_json, selected_topic_number,
-		COALESCE(range_source_turn_id, ''), model_name, reasoning_effort, model_connection FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
-		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID, &modelName, &reasoningEffort, &connection); err != nil {
+		COALESCE(range_source_turn_id, ''), model_name, reasoning_effort, model_connection, step_models_json
+		FROM workflow_runs WHERE run_id = ?`, task.workflowRunID).
+		Scan(&key, &evidence, &options, &selectedNumber, &sourceTurnID, &modelName, &reasoningEffort, &connection, &stepModelsJSON); err != nil {
 		return taskResult{}, err
+	}
+	stages := workflowStages[key]
+	stage := stages[task.workflowStep]
+	var stepModels workflowStepModels
+	if err := json.Unmarshal([]byte(stepModelsJSON), &stepModels); err != nil {
+		return taskResult{}, err
+	}
+	if selected, ok := stepModels[stage.key]; ok {
+		modelName, reasoningEffort = selected.Model, selected.ReasoningEffort
 	}
 	if modelName != "" {
 		if connection != model.ConnectionFingerprint() {
@@ -64,13 +74,11 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 		return s.generateCourseStep(ctx, model, project, task, key, input, evidence, options)
 	}
 	if isSoftwareRegistrationWorkflow(key) {
-		return s.generateSoftwareRegistrationStep(ctx, model, project, task, workflowStages[key][task.workflowStep], input, options)
+		return s.generateSoftwareRegistrationStep(ctx, model, project, task, stage, input, options)
 	}
 	if isPatentWorkflow(key) {
 		return s.generatePatentStep(ctx, model, project, task, key, input, options)
 	}
-	stages := workflowStages[key]
-	stage := stages[task.workflowStep]
 	var sources []reviewSource
 	first := 0
 	usesLiterature := key == reviewWorkflow || key == paperWorkflow || isProposalWorkflow(key)

@@ -76,18 +76,16 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 		}
 		return res.Body.Bytes()
 	}
-	if snapshot := string(request(http.MethodGet, "", "", http.StatusOK)); !strings.Contains(snapshot, `"modelOptions"`) {
+	if snapshot := string(request(http.MethodGet, "", "", http.StatusOK)); !strings.Contains(snapshot, `"modelOptions"`) ||
+		!strings.Contains(snapshot, `"requiresModel":true`) {
 		t.Fatalf("model selection is missing from workflow snapshot: %s", snapshot)
 	}
-	var started struct {
-		RunID           string `json:"runId"`
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoningEffort"`
-		Status          string `json:"status"`
-	}
-	const start = `{"requestId":"workflow-1","modelId":"workflow","throughStep":"scope"}`
+	const start = `{"requestId":"workflow-1","modelId":"workflow","throughStep":"scope","stepModelIds":{"scope":"default"}}`
+	request(http.MethodPost, "", strings.Replace(start, `"scope":"default"`, `"unknown-step":"default"`, 1), http.StatusBadRequest)
+	var started WorkflowRun
 	if err := json.Unmarshal(request(http.MethodPost, "", start, http.StatusCreated), &started); err != nil ||
-		started.Status != taskQueued || started.Model != "fixture-workflow" || started.ReasoningEffort != "max" {
+		started.Status != taskQueued || started.Model != "fixture-workflow" || started.ReasoningEffort != "max" ||
+		len(started.Steps) != 3 || started.Steps[0].Model != "fixture-chat" || started.Steps[0].ReasoningEffort != "low" || started.Steps[1].Model != "" {
 		t.Fatalf("unexpected workflow start receipt: %+v (%v)", started, err)
 	}
 	if err := store.Close(); err != nil {
@@ -99,51 +97,61 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 	if err := store.ResumeQueuedTasks(ctx, changed); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-requests:
-		if got != (modelRequest{"fixture-workflow", "max"}) {
-			t.Fatalf("restarted worker requested %+v", got)
+	checkCall := func(want modelRequest) {
+		t.Helper()
+		select {
+		case got := <-requests:
+			if got != want {
+				t.Fatalf("workflow requested %+v, want %+v", got, want)
+			}
+		case <-time.After(4 * time.Second):
+			t.Fatal("queued workflow did not reach the model")
 		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("queued workflow did not reach the model")
 	}
-	deadline := time.Now().Add(4 * time.Second)
-	var snapshot struct{ Run WorkflowRun }
-	for {
-		if err := json.Unmarshal(request(http.MethodGet, "", "", http.StatusOK), &snapshot); err != nil {
-			t.Fatal(err)
+	waitForRange := func() WorkflowRun {
+		t.Helper()
+		deadline := time.Now().Add(4 * time.Second)
+		for {
+			var snapshot struct{ Run WorkflowRun }
+			if err := json.Unmarshal(request(http.MethodGet, "", "", http.StatusOK), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Run.Status == workflowRangeCompleted {
+				return snapshot.Run
+			}
+			if snapshot.Run.Status == taskFailed || time.Now().After(deadline) {
+				t.Fatalf("workflow did not complete its range: %+v", snapshot.Run)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if snapshot.Run.Status == workflowRangeCompleted {
-			break
-		}
-		if snapshot.Run.Status == taskFailed || time.Now().After(deadline) {
-			t.Fatalf("queued workflow did not complete: %+v", snapshot.Run)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	replayed := string(request(http.MethodPost, "", start, http.StatusOK))
-	if !strings.Contains(replayed, `"model":"fixture-workflow"`) || !strings.Contains(replayed, `"reasoningEffort":"max"`) {
-		t.Fatalf("workflow replay did not preserve its model: %s", replayed)
+	checkCall(modelRequest{"fixture-chat", "low"})
+	first := waitForRange()
+	var replayed WorkflowRun
+	if err := json.Unmarshal(request(http.MethodPost, "", start, http.StatusOK), &replayed); err != nil ||
+		replayed.RunID != first.RunID || replayed.Model != "fixture-workflow" || replayed.Steps[0].Model != "fixture-chat" {
+		t.Fatalf("workflow replay did not preserve model choices: %+v (%v)", replayed, err)
 	}
-	request(http.MethodPost, "", strings.Replace(start, `"workflow"`, `"default"`, 1), http.StatusConflict)
+	request(http.MethodPost, "", strings.Replace(start, `"scope":"default"`, `"scope":"workflow"`, 1), http.StatusConflict)
 
 	moved, err := inference.New(inference.Config{BaseURL: upstream.URL + "/new", Model: "fixture-new-default", APIKey: credential})
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler = NewHandler(store, nil, HandlerConfig{Model: moved})
-	resume := fmt.Sprintf(`{"requestId":"resume","runId":%q,"expectedRevision":%d}`, snapshot.Run.RunID, snapshot.Run.Revision)
+	resume := fmt.Sprintf(`{"requestId":"resume","runId":%q,"expectedRevision":%d,"throughStep":"plan"}`, first.RunID, first.Revision)
 	if body := string(request(http.MethodPost, "/continue", resume, http.StatusConflict)); !strings.Contains(body, `"code":"WORKFLOW_MODEL_CONNECTION_CHANGED"`) {
 		t.Fatalf("wrong connection change error: %s", body)
 	}
 	handler = NewHandler(store, nil, HandlerConfig{Model: changed})
 	request(http.MethodPost, "/continue", resume, http.StatusAccepted)
-	select {
-	case got := <-requests:
-		if got != (modelRequest{"fixture-workflow", "max"}) {
-			t.Fatalf("continued workflow requested %+v", got)
-		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("restored connection did not reach the model")
+	checkCall(modelRequest{"fixture-workflow", "max"})
+	second := waitForRange()
+	rerun := fmt.Sprintf(`{"requestId":"rerun-scope","runId":%q,"expectedRevision":%d,"stepKey":"scope"}`, second.RunID, second.Revision)
+	request(http.MethodPost, "/rerun", rerun, http.StatusAccepted)
+	checkCall(modelRequest{"fixture-chat", "low"})
+	finished := waitForRange()
+	if finished.Steps[0].ArtifactCount != 2 || finished.Steps[0].Model != "fixture-chat" || finished.Steps[1].Status != workflowStepStale {
+		t.Fatalf("rerun did not preserve its model or invalidate the derived step: %+v", finished.Steps)
 	}
 }

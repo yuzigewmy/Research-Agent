@@ -49,8 +49,9 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type stepInfo struct {
-		Key   string `json:"key"`
-		Title string `json:"title"`
+		Key           string `json:"key"`
+		Title         string `json:"title"`
+		RequiresModel bool   `json:"requiresModel,omitempty"`
 	}
 	key := projectWorkflowKey(project.TemplateID)
 	stages := workflowStages[key]
@@ -69,7 +70,7 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		result.PatentWordConfigured = new(api.patentWordConfigured())
 	}
 	for index, stage := range stages {
-		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title}
+		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title, RequiresModel: stage.prompt != ""}
 	}
 	run, err := api.store.latestWorkflow(r.Context(), projectID)
 	switch {
@@ -108,6 +109,11 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择一个入围题目。")
 			return
 		}
+		if action != workflowStart && len(input.StepModelIDs) != 0 {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请在启动新一轮时设置步骤模型。")
+			return
+		}
+		input.modelOptions = api.modelOptions
 		modelID := input.ModelID
 		switch {
 		case modelID == "":
@@ -125,6 +131,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 		projectID := r.PathValue("id")
 		run, applied, err := api.store.applyWorkflow(r.Context(), projectID, action, input, api.model != nil)
 		switch {
+		case errors.Is(err, errWorkflowStepModel):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择本模板中需要模型的步骤和可用的模型。")
 		case errors.Is(err, errWorkflowModelUnavailable):
 			writeError(w, http.StatusUnprocessableEntity, "WORKFLOW_MODEL_UNAVAILABLE", "所选模型当前不可用，请刷新工作流设置。")
 		case errors.Is(err, errWorkflowState):

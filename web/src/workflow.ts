@@ -37,6 +37,7 @@ export const stepStatusLabels = {
 interface WorkflowStepDefinition {
   key: string
   title: string
+  requiresModel?: boolean
 }
 
 interface WorkflowArtifactSource {
@@ -47,6 +48,8 @@ interface WorkflowArtifactSource {
 
 interface WorkflowStep extends WorkflowStepDefinition {
   status: keyof typeof stepStatusLabels
+  model?: string
+  reasoningEffort?: string
   message?: string
   artifactId?: string
   artifactCount?: number
@@ -256,6 +259,7 @@ export interface StartWorkflowInput {
   requestId: string
   checkpoints: boolean
   modelId?: WorkflowModelId
+  stepModelIds?: Record<string, WorkflowModelId>
   targetPaperCount?: number
   paper?: { language: 'zh' | 'en'; outline?: string }
   topic?: { requirements?: string }
@@ -302,6 +306,7 @@ export function isWorkflowActive(run: WorkflowRun | null) {
 function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
   const step = value as Partial<WorkflowStepDefinition> | null
   return !!step && typeof step.key === 'string' && /^[a-z][a-z0-9-]*$/.test(step.key) && typeof step.title === 'string'
+    && (step.requiresModel === undefined || typeof step.requiresModel === 'boolean')
 }
 
 function isPathId(value: unknown): value is string {
@@ -317,6 +322,8 @@ function isArtifactSource(value: unknown): value is WorkflowArtifactSource {
 function isStep(value: unknown): value is WorkflowStep {
   const step = value as Partial<WorkflowStep> | null
   return !!step && typeof step.status === 'string' && Object.hasOwn(stepStatusLabels, step.status)
+    && (step.model === undefined || typeof step.model === 'string')
+    && (step.reasoningEffort === undefined || typeof step.reasoningEffort === 'string')
     && (step.message === undefined || typeof step.message === 'string')
     && (step.artifactId === undefined || isPathId(step.artifactId))
     && (step.artifactCount === undefined || (Number.isSafeInteger(step.artifactCount) && step.artifactCount >= 0))
