@@ -35,8 +35,8 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if len(input.Tools) == 0 {
-			if input.Model != "fixture" {
-				t.Errorf("workflow used conversation model %q", input.Model)
+			if input.Model != "fixture-workflow" {
+				t.Errorf("workflow used %q, want the experiment template model", input.Model)
 			}
 			artifacts := []string{"# 观测范围", "# 采样计划", checklist}
 			call := int(executions.Add(1))
@@ -83,7 +83,10 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Second)
 	defer cancel()
-	handler := NewHandler(store, nil, HandlerConfig{Model: model, ConversationModelName: "fixture-conversation"})
+	handler := NewHandler(store, nil, HandlerConfig{
+		Model: model, ConversationModelName: "fixture-conversation",
+		WorkflowModelName: "fixture-workflow", WorkflowModelTemplates: "experiment",
+	})
 	createProject := func(template string) Project {
 		t.Helper()
 		project, _, err := store.createProject(ctx, createProjectInput{RequestID: template, Title: "河流观测", TemplateID: template})
@@ -231,7 +234,7 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 		t.Fatalf("manual confirmation did not recover the blocked proposal: %+v", confirmed)
 	}
 	completed := waitFor(review, "RANGE_COMPLETED")
-	if completed.RunID != confirmed.RunID || completed.SourceCount != 1 || executions.Load() != 3 || dialogues.Load() != 2 {
+	if completed.RunID != confirmed.RunID || completed.Model != "fixture" || completed.SourceCount != 1 || executions.Load() != 3 || dialogues.Load() != 2 {
 		t.Fatalf("manual confirmation did not freeze the new source: %+v, executions=%d, dialogues=%d", completed, executions.Load(), dialogues.Load())
 	}
 }

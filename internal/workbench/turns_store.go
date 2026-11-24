@@ -63,7 +63,7 @@ type TurnEvent struct {
 	ProposedTaskID   string                `json:"proposedTaskId,omitempty"`
 	WorkflowProposal *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 	proposal         turnProposal
-	workflowModel    modelOption
+	workflowModels   workflowModels
 	editModel        modelSnapshot
 	queued           bool
 }
@@ -286,7 +286,7 @@ func recordTurnEvent(ctx context.Context, tx *sql.Tx, turnID string, e *TurnEven
 	if completed {
 		switch {
 		case e.proposal.workflow != nil:
-			queued, err := dispatchTurnWorkflow(ctx, tx, turnID, e.proposal.workflow, e.workflowModel)
+			queued, err := dispatchTurnWorkflow(ctx, tx, turnID, e.proposal.workflow, e.workflowModels)
 			if err != nil {
 				return 0, err
 			}

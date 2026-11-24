@@ -24,10 +24,11 @@ const alternateConversationModelID = "conversation"
 var errConversationModelUnavailable = errors.New("requested conversation model is not configured")
 
 type conversation struct {
-	store        *Store
-	model        *inference.Client
-	modelOptions []modelOption
-	editModel    modelSnapshot
+	store          *Store
+	model          *inference.Client
+	modelOptions   []modelOption
+	workflowModels workflowModels
+	editModel      modelSnapshot
 }
 
 func (c conversation) register(mux *http.ServeMux) {
@@ -95,7 +96,7 @@ func (c conversation) reply(ctx context.Context, model *inference.Client, projec
 	proposal, generateErr := c.generate(ctx, model, project, turn)
 	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposal: proposal, editModel: c.editModel}
 	if proposal.workflow != nil {
-		event.workflowModel = defaultWorkflowModel(c.model)
+		event.workflowModels = c.workflowModels
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		event.Status = "INTERRUPTED"

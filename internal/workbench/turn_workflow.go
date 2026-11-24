@@ -107,7 +107,7 @@ func (p *workflowProposalRecord) selectScope(instruction, end string) error {
 func (c conversation) changeWorkflowProposal(confirm bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectID, turnID := r.PathValue("id"), r.PathValue("turnId")
-		proposal, queued, err := c.store.applyWorkflowProposal(r.Context(), projectID, turnID, confirm, defaultWorkflowModel(c.model))
+		proposal, queued, err := c.store.applyWorkflowProposal(r.Context(), projectID, turnID, confirm, c.workflowModels)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "该项目下没有这项工作流建议。")
@@ -126,7 +126,7 @@ func (c conversation) changeWorkflowProposal(confirm bool) http.HandlerFunc {
 	}
 }
 
-func (s *Store) applyWorkflowProposal(ctx context.Context, projectID, turnID string, confirm bool, model modelOption) (turnWorkflowProposal, bool, error) {
+func (s *Store) applyWorkflowProposal(ctx context.Context, projectID, turnID string, confirm bool, models workflowModels) (turnWorkflowProposal, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return turnWorkflowProposal{}, false, err
@@ -149,7 +149,7 @@ func (s *Store) applyWorkflowProposal(ctx context.Context, projectID, turnID str
 	}
 	queued := false
 	if confirm {
-		queued, err = confirmWorkflowInTx(ctx, tx, projectID, turnID, record, model, false)
+		queued, err = confirmWorkflowInTx(ctx, tx, projectID, turnID, record, models, false)
 		if err != nil {
 			return turnWorkflowProposal{}, false, err
 		}
@@ -166,7 +166,7 @@ func (s *Store) applyWorkflowProposal(ctx context.Context, projectID, turnID str
 	return record.turnWorkflowProposal, queued, tx.Commit()
 }
 
-func confirmWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, turnID string, record *workflowProposalRecord, model modelOption, automatic bool) (bool, error) {
+func confirmWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, turnID string, record *workflowProposalRecord, models workflowModels, automatic bool) (bool, error) {
 	latest, err := readWorkflow(ctx, tx, projectID, "")
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
@@ -179,11 +179,11 @@ func confirmWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, turnID stri
 		return false, errWorkflowCheckpoint
 	}
 	req := workflowRequest{RequestID: rand.Text(), ThroughStep: record.Scope.EndStep, Checkpoints: new(record.Checkpoints),
-		sourceTurnID: turnID, workflowKey: record.WorkflowKey, model: model}
+		sourceTurnID: turnID, workflowKey: record.WorkflowKey, models: models}
 	if record.Action == workflowContinue {
 		req.RunID, req.ExpectedRevision = record.BaseRunID, record.BaseRevision
 	}
-	run, applied, err := applyWorkflowInTx(ctx, tx, projectID, record.Action, req, model.Model != "")
+	run, applied, err := applyWorkflowInTx(ctx, tx, projectID, record.Action, req, len(models.options) != 0)
 	if err != nil {
 		return false, err
 	}
@@ -191,7 +191,7 @@ func confirmWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, turnID stri
 	return applied && run.Status == taskQueued, nil
 }
 
-func dispatchTurnWorkflow(ctx context.Context, tx *sql.Tx, turnID string, record *workflowProposalRecord, model modelOption) (bool, error) {
+func dispatchTurnWorkflow(ctx context.Context, tx *sql.Tx, turnID string, record *workflowProposalRecord, models workflowModels) (bool, error) {
 	var projectID, mode string
 	if err := tx.QueryRowContext(ctx, `SELECT project_id, mode FROM turns
 		WHERE turn_id = ? AND status = 'RUNNING' AND mode <> 'CHAT'`, turnID).Scan(&projectID, &mode); err != nil {
@@ -200,7 +200,7 @@ func dispatchTurnWorkflow(ctx context.Context, tx *sql.Tx, turnID string, record
 	if mode != turnModeAuto {
 		return false, nil
 	}
-	queued, err := confirmWorkflowInTx(ctx, tx, projectID, turnID, record, model, true)
+	queued, err := confirmWorkflowInTx(ctx, tx, projectID, turnID, record, models, true)
 	// These conditions are checked before the workflow writes its run and queue receipt.
 	switch {
 	case errors.Is(err, errReviewSources):

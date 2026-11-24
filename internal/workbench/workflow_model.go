@@ -3,8 +3,7 @@ package workbench
 import (
 	"errors"
 	"slices"
-
-	"research-agent/internal/inference"
+	"strings"
 )
 
 const workflowModelSchema = `
@@ -18,6 +17,11 @@ const workflowModelSchema = `
 const workflowStepModelSchema = `
 	ALTER TABLE workflow_runs ADD COLUMN step_models_json TEXT NOT NULL DEFAULT '{}';
 	PRAGMA user_version = 47;
+`
+
+const workflowModelRequestSchema = `
+	ALTER TABLE workflow_requests ADD COLUMN requested_model_id TEXT;
+	PRAGMA user_version = 48;
 `
 
 const alternateWorkflowModelID = "workflow"
@@ -59,6 +63,40 @@ func freezeWorkflowStepModels(stages []workflowStage, requested map[string]strin
 	return models, nil
 }
 
-func defaultWorkflowModel(client *inference.Client) modelOption {
-	return modelOption{ID: defaultModelID, modelSnapshot: snapshotModel(client, "", "")}
+type workflowModels struct {
+	options   []modelOption
+	templates map[string]bool
+}
+
+func configureWorkflowModels(options []modelOption, templates string) workflowModels {
+	preferred := make(map[string]bool)
+	for template := range strings.SplitSeq(templates, ",") {
+		if template = strings.TrimSpace(template); projectWorkflowKey(template) != "" {
+			preferred[template] = true
+		}
+	}
+	return workflowModels{options: options, templates: preferred}
+}
+
+func (models workflowModels) defaultID(template string) string {
+	if len(models.options) > 1 && models.templates[template] {
+		return alternateWorkflowModelID
+	}
+	return defaultModelID
+}
+
+func (models workflowModels) optionsFor(template string) []modelOption {
+	if models.defaultID(template) == alternateWorkflowModelID {
+		return []modelOption{models.options[1], models.options[0]}
+	}
+	return models.options
+}
+
+func (models workflowModels) option(id string) modelOption {
+	for _, option := range models.options {
+		if option.ID == id {
+			return option
+		}
+	}
+	return modelOption{}
 }

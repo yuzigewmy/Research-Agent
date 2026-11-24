@@ -13,7 +13,7 @@ import (
 type workflows struct {
 	store           *Store
 	model           *inference.Client
-	modelOptions    []modelOption
+	models          workflowModels
 	softwarePDFFont string
 	wordPython      string
 }
@@ -62,7 +62,7 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		ModelOptions          []modelOption `json:"modelOptions,omitempty"`
 		SoftwarePDFConfigured *bool         `json:"softwarePdfConfigured,omitempty"`
 		PatentWordConfigured  *bool         `json:"patentWordConfigured,omitempty"`
-	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil, ModelOptions: api.modelOptions}
+	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil, ModelOptions: api.models.optionsFor(project.TemplateID)}
 	if isSoftwareRegistrationWorkflow(key) {
 		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
 	}
@@ -113,21 +113,12 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请在启动新一轮时设置步骤模型。")
 			return
 		}
-		input.modelOptions = api.modelOptions
-		modelID := input.ModelID
-		switch {
-		case modelID == "":
-			modelID = defaultModelID
-		case action != workflowStart || (modelID != defaultModelID && modelID != alternateWorkflowModelID):
+		if input.ModelID != "" && (action != workflowStart ||
+			(input.ModelID != defaultModelID && input.ModelID != alternateWorkflowModelID)) {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择启动本轮工作流所用的模型。")
 			return
 		}
-		for _, option := range api.modelOptions {
-			if option.ID == modelID {
-				input.model = option
-				break
-			}
-		}
+		input.models = api.models
 		projectID := r.PathValue("id")
 		run, applied, err := api.store.applyWorkflow(r.Context(), projectID, action, input, api.model != nil)
 		switch {

@@ -30,6 +30,7 @@ type HandlerConfig struct {
 	ConversationReasoningEffort string
 	WorkflowModelName           string
 	WorkflowReasoningEffort     string
+	WorkflowModelTemplates      string
 	ReviewModelName             string
 	ReviewReasoningEffort       string
 	EditModelName               string
@@ -43,15 +44,16 @@ type HandlerConfig struct {
 func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 	editModel := snapshotModel(config.Model, config.EditModelName, config.EditReasoningEffort)
+	workflowOptions := configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort)
+	flowModels := configureWorkflowModels(workflowOptions, config.WorkflowModelTemplates)
 	registerModelConnection(mux, config.Model)
-	conversation{store: store, model: config.Model, editModel: editModel,
+	conversation{store: store, model: config.Model, editModel: editModel, workflowModels: flowModels,
 		modelOptions: configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort),
 	}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model, editModel: editModel}.register(mux)
 	store.registerTaskQueue(mux)
-	workflows{store: store, model: config.Model,
-		modelOptions:    configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort),
+	workflows{store: store, model: config.Model, models: flowModels,
 		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)
 	store.registerWorkspace(mux)

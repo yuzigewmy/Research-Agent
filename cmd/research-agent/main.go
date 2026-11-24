@@ -70,6 +70,7 @@ func run(address, dataDir, webDir string) error {
 		ConversationReasoningEffort: os.Getenv("RESEARCH_CONVERSATION_MODEL_REASONING_EFFORT"),
 		WorkflowModelName:           os.Getenv("RESEARCH_WORKFLOW_MODEL_NAME"),
 		WorkflowReasoningEffort:     os.Getenv("RESEARCH_WORKFLOW_MODEL_REASONING_EFFORT"),
+		WorkflowModelTemplates:      os.Getenv("RESEARCH_WORKFLOW_MODEL_TEMPLATES"),
 		ReviewModelName:             os.Getenv("RESEARCH_REVIEW_MODEL_NAME"),
 		ReviewReasoningEffort:       os.Getenv("RESEARCH_REVIEW_MODEL_REASONING_EFFORT"),
 		EditModelName:               os.Getenv("RESEARCH_EDIT_MODEL_NAME"),

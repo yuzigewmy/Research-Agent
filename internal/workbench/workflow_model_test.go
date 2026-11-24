@@ -59,6 +59,7 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 	base := projectsPath + "/" + project.ProjectID + "/workflow"
 	handler := NewHandler(store, nil, HandlerConfig{
 		Model: client("fixture-chat", "low"), WorkflowModelName: "fixture-workflow", WorkflowReasoningEffort: "max",
+		WorkflowModelTemplates: " experiment, freeform, unknown ",
 	})
 	request := func(method, suffix, body string, status int) []byte {
 		t.Helper()
@@ -76,11 +77,15 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 		}
 		return res.Body.Bytes()
 	}
-	if snapshot := string(request(http.MethodGet, "", "", http.StatusOK)); !strings.Contains(snapshot, `"modelOptions"`) ||
-		!strings.Contains(snapshot, `"requiresModel":true`) {
-		t.Fatalf("model selection is missing from workflow snapshot: %s", snapshot)
+	var catalog struct {
+		ModelOptions []modelOption
 	}
-	const start = `{"requestId":"workflow-1","modelId":"workflow","throughStep":"scope","stepModelIds":{"scope":"default"}}`
+	snapshot := request(http.MethodGet, "", "", http.StatusOK)
+	if err := json.Unmarshal(snapshot, &catalog); err != nil || len(catalog.ModelOptions) != 2 ||
+		catalog.ModelOptions[0].ID != alternateWorkflowModelID || !strings.Contains(string(snapshot), `"requiresModel":true`) {
+		t.Fatalf("template model is missing from the workflow snapshot: %s (%v)", snapshot, err)
+	}
+	const start = `{"requestId":"workflow-1","throughStep":"scope","stepModelIds":{"scope":"default"}}`
 	request(http.MethodPost, "", strings.Replace(start, `"scope":"default"`, `"unknown-step":"default"`, 1), http.StatusBadRequest)
 	var started WorkflowRun
 	if err := json.Unmarshal(request(http.MethodPost, "", start, http.StatusCreated), &started); err != nil ||
@@ -133,6 +138,7 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 		t.Fatalf("workflow replay did not preserve model choices: %+v (%v)", replayed, err)
 	}
 	request(http.MethodPost, "", strings.Replace(start, `"scope":"default"`, `"scope":"workflow"`, 1), http.StatusConflict)
+	request(http.MethodPost, "", strings.Replace(start, `"throughStep"`, `"modelId":"default","throughStep"`, 1), http.StatusConflict)
 
 	moved, err := inference.New(inference.Config{BaseURL: upstream.URL + "/new", Model: "fixture-new-default", APIKey: credential})
 	if err != nil {
@@ -153,5 +159,41 @@ func TestWorkflowKeepsSelectedModelAfterQueueRestart(t *testing.T) {
 	finished := waitForRange()
 	if finished.Steps[0].ArtifactCount != 2 || finished.Steps[0].Model != "fixture-chat" || finished.Steps[1].Status != workflowStepStale {
 		t.Fatalf("rerun did not preserve its model or invalidate the derived step: %+v", finished.Steps)
+	}
+}
+
+func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
+	ctx, directory := t.Context(), t.TempDir()
+	store, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, _, err := store.createProject(ctx, createProjectInput{RequestID: "project", Title: "采样记录", TemplateID: "experiment"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := workflowRequest{RequestID: "legacy", ThroughStep: "scope"}
+	original, _, err := store.applyWorkflow(ctx, project.ProjectID, workflowStart, request, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE workflow_requests DROP COLUMN requested_model_id; PRAGMA user_version = 47`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	for _, modelID := range []string{"", defaultModelID} {
+		request.ModelID = modelID
+		replayed, applied, err := reopened.applyWorkflow(ctx, project.ProjectID, workflowStart, request, false)
+		if err != nil || applied || replayed.RunID != original.RunID || replayed.Revision != original.Revision {
+			t.Fatalf("legacy replay with model %q changed: %+v (%v)", modelID, replayed, err)
+		}
 	}
 }

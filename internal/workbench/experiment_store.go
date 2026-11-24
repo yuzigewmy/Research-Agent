@@ -156,8 +156,7 @@ type workflowRequest struct {
 	StepModelIDs     map[string]string `json:"stepModelIds"`
 	sourceTurnID     string
 	workflowKey      string
-	model            modelOption
-	modelOptions     []modelOption
+	models           workflowModels
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -312,16 +311,12 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
-	modelID := req.ModelID
-	if modelID == "" {
-		modelID = defaultModelID
-	}
-
 	var runID, recordedAction, recordedEnd, recordedStep, recordedReason string
+	var recordedModelID sql.NullString
 	var revision, recordedCandidate int
-	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key, skip_reason, topic_number
+	err = tx.QueryRowContext(ctx, `SELECT run_id, action, expected_revision, through_step, step_key, skip_reason, topic_number, requested_model_id
 		FROM workflow_requests WHERE project_id = ? AND request_id = ?`, projectID, req.RequestID).
-		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep, &recordedReason, &recordedCandidate)
+		Scan(&runID, &recordedAction, &revision, &recordedEnd, &recordedStep, &recordedReason, &recordedCandidate, &recordedModelID)
 	if err == nil {
 		if recordedAction != action || revision != req.ExpectedRevision || recordedEnd != req.ThroughStep ||
 			recordedStep != req.StepKey || recordedReason != req.Reason || recordedCandidate != req.CandidateNumber ||
@@ -330,7 +325,15 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 		run, err := readWorkflow(ctx, tx, projectID, runID)
 		if err == nil && action == workflowStart {
-			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount || modelID != run.modelID ||
+			requested, recorded := req.ModelID, recordedModelID.String
+			if !recordedModelID.Valid {
+				// Older receipts treated an omitted model as the global default.
+				recorded = run.modelID
+				if requested == "" {
+					requested = defaultModelID
+				}
+			}
+			if checkpoints != run.templateCheckpoints || target != run.TargetPaperCount || requested != recorded ||
 				options != run.optionsJSON || !run.stepModels.matches(req.StepModelIDs) {
 				return WorkflowRun{}, false, errRequestConflict
 			}
@@ -428,16 +431,21 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if queuesWork && !modelReady {
 		return WorkflowRun{}, false, errModelUnavailable
 	}
-	if action == workflowStart && modelID == alternateWorkflowModelID && req.model.Model == "" {
-		return WorkflowRun{}, false, errWorkflowModelUnavailable
-	}
-	if queuesWork && current.modelConnection != "" && current.modelConnection != req.model.connection {
+	if queuesWork && current.modelConnection != "" && current.modelConnection != req.models.option(defaultModelID).connection {
 		return WorkflowRun{}, false, errWorkflowModelConnection
 	}
 
 	switch action {
 	case workflowStart:
-		stepModels, err := freezeWorkflowStepModels(workflowStages[key], req.StepModelIDs, req.modelOptions)
+		modelID := req.ModelID
+		if modelID == "" {
+			modelID = req.models.defaultID(template)
+		}
+		model := req.models.option(modelID)
+		if modelID == alternateWorkflowModelID && model.Model == "" {
+			return WorkflowRun{}, false, errWorkflowModelUnavailable
+		}
+		stepModels, err := freezeWorkflowStepModels(workflowStages[key], req.StepModelIDs, req.models.options)
 		if err != nil {
 			return WorkflowRun{}, false, err
 		}
@@ -469,7 +477,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 			 range_end, range_source_turn_id, model_id, model_name, reasoning_effort, model_connection, step_models_json)
 			VALUES (?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?)`, current.RunID, projectID, checkpoints,
 			time.Now().UTC().Format(createdAtLayout), key, evidence, target, options, current.rangeEnd, req.sourceTurnID,
-			modelID, req.model.Model, req.model.ReasoningEffort, req.model.connection, string(stepModelsJSON)); err != nil {
+			modelID, model.Model, model.ReasoningEffort, model.connection, string(stepModelsJSON)); err != nil {
 			return WorkflowRun{}, false, err
 		}
 	case workflowPause, workflowCancel:
@@ -520,9 +528,9 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_requests
-		(project_id, request_id, run_id, action, expected_revision, through_step, step_key, skip_reason, topic_number)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision,
-		req.ThroughStep, req.StepKey, req.Reason, req.CandidateNumber); err != nil {
+		(project_id, request_id, run_id, action, expected_revision, through_step, step_key, skip_reason, topic_number, requested_model_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectID, req.RequestID, current.RunID, action, req.ExpectedRevision,
+		req.ThroughStep, req.StepKey, req.Reason, req.CandidateNumber, req.ModelID); err != nil {
 		return WorkflowRun{}, false, err
 	}
 	run, err := readWorkflow(ctx, tx, projectID, current.RunID)
