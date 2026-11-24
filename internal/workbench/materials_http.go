@@ -33,13 +33,18 @@ func (s *Store) handleListMaterials(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_CURSOR", "资料列表游标无效。")
 		return
 	}
+	search := strings.TrimSpace(r.URL.Query().Get("q"))
+	if !utf8.ValidString(search) || strings.ContainsRune(search, 0) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "搜索词必须是有效文本，且不能包含空字符。")
+		return
+	}
 	ctx, projectID := r.Context(), r.PathValue("id")
 	if _, err := s.getProject(ctx, projectID); err != nil {
 		writeMaterialError(w, "read project for materials", err)
 		return
 	}
 	const pageSize = 50
-	items, err := s.listMaterials(ctx, projectID, cursor, pageSize+1)
+	items, err := s.listMaterials(ctx, projectID, search, cursor, pageSize+1)
 	if err != nil {
 		writeStoreError(w, "list materials", err)
 		return

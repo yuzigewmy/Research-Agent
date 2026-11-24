@@ -76,26 +76,35 @@ interface MaterialPanelProps {
   allowSoftwareFolder?: boolean
 }
 
+function matchesMaterialQuery(name: string, q: string) {
+  return q === '' || name.includes(q)
+}
+
 export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [], allowSoftwareFolder }: MaterialPanelProps) {
   const headingId = useId()
+  const queryId = useId()
   const [items, setItems] = useState<Material[]>([])
   const [nextCursor, setNextCursor] = useState<string>()
   const [status, setStatus] = useState<ListStatus>({ kind: 'loading' })
-  const [pageRequest, setPageRequest] = useState<{ cursor?: string }>({})
+  const [query, setQuery] = useState('')
+  const [pageRequest, setPageRequest] = useState<{ q: string; cursor?: string }>({ q: '' })
   const [previewId, setPreviewId] = useState<string>()
   const [uploading, setUploading] = useState<'files' | 'folder'>()
   const [uploadedCount, setUploadedCount] = useState(0)
   const [failures, setFailures] = useState<UploadFailure[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
+  const queryInput = useRef<HTMLInputElement>(null)
   const uploadRequest = useRef<AbortController | null>(null)
+  const appliedQuery = useRef(pageRequest.q)
+  appliedQuery.current = pageRequest.q
   const referenceLimitReached = referenceIds.length >= turnReferenceLimit
   const referenceLimitHint = `${headingId}-reference-limit`
 
   useEffect(() => {
     const controller = new AbortController()
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(readTimeout)])
-    void listMaterials(projectId, signal, pageRequest.cursor).then((page) => {
+    void listMaterials(projectId, signal, pageRequest.cursor, pageRequest.q).then((page) => {
       if (controller.signal.aborted) return
       setItems((current) => mergeMaterials(current, page.items))
       setNextCursor(page.nextCursor)
@@ -111,7 +120,28 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
   function loadPage(cursor?: string) {
     if (status.kind === 'loading') return
     setStatus({ kind: 'loading' })
-    setPageRequest({ cursor })
+    setPageRequest({ q: pageRequest.q, cursor })
+  }
+
+  function applySearch(raw: string) {
+    const q = raw.trim()
+    setQuery(q)
+    if (q === pageRequest.q && !pageRequest.cursor && status.kind !== 'error') return
+    setItems([])
+    setNextCursor(undefined)
+    setStatus({ kind: 'loading' })
+    setPageRequest({ q })
+  }
+
+  function clearSearch() {
+    setQuery('')
+    if (pageRequest.q || pageRequest.cursor) {
+      setItems([])
+      setNextCursor(undefined)
+      setStatus({ kind: 'loading' })
+      setPageRequest({ q: '' })
+    }
+    queryInput.current?.focus()
   }
 
   async function uploadFiles(event: ChangeEvent<HTMLInputElement>, kind: 'files' | 'folder') {
@@ -133,7 +163,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
         try {
           const material = await uploadMaterial(projectId, file, controller.signal)
           if (controller.signal.aborted) return
-          setItems((current) => mergeMaterials(current, [material]))
+          if (matchesMaterialQuery(material.name, appliedQuery.current)) {
+            setItems((current) => mergeMaterials(current, [material]))
+          }
           setUploadedCount((count) => count + 1)
         } catch (error) {
           if (controller.signal.aborted) return
@@ -170,6 +202,18 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           </>}
         </div>
       </div>
+      <form className="field" role="search" aria-label="资料检索" onSubmit={(event) => {
+        event.preventDefault()
+        applySearch(query)
+      }}>
+        <label htmlFor={queryId}>按文件名搜索</label>
+        <div className="material-search-controls">
+          <input id={queryId} ref={queryInput} type="search" value={query} autoComplete="off"
+            onChange={(event) => setQuery(event.currentTarget.value)} />
+          <button className="button outline" type="submit">搜索</button>
+          {(query || pageRequest.q) && <button className="button outline" type="button" onClick={clearSearch}>清除</button>}
+        </div>
+      </form>
       {allowSoftwareFolder && <p id={`${headingId}-folder`} className="material-note">
         目录内的源码和文字说明将保留相对路径，打包成一份可选的 ZIP 资料。
       </p>}
@@ -234,7 +278,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
         })}
       </ul>}
       {status.kind === 'loading' && !nextCursor && <p className="material-note" role="status">正在加载资料…</p>}
-      {status.kind === 'ready' && items.length === 0 && <p className="material-note" role="status">暂无资料</p>}
+      {status.kind === 'ready' && items.length === 0 && <p className="material-note" role="status">
+        {pageRequest.q ? '没有匹配的资料' : '暂无资料'}
+      </p>}
       {status.kind === 'error' && (
         <div className="request-error">
           <p role="alert">{status.message}</p>
