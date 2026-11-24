@@ -81,6 +81,55 @@ func TestAnalyze(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReliabilityEdges(t *testing.T) {
+	options := Options{Reliability: &ReliabilityOptions{Columns: []string{"A", "B", "C"}}}
+	for _, tt := range []struct {
+		name, rows string
+		alpha      bool
+		negative   bool
+	}{
+		{name: "one response", rows: "1,2,3\n"},
+		{name: "constant total", rows: "1,3,0\n2,2,0\n3,1,0\n"},
+		{name: "constant total with cancellation", rows: "0,1,-1\n1e30,-1e30,0\n"},
+		{name: "finite items with overflowing raw totals", rows: "1e308,1e308,1e308\n1.5e308,1.5e308,1.5e308\n", alpha: true},
+		{name: "finite items with negative alpha", rows: "-1e308,1.2e308,0\n1e308,-1e308,0\n", alpha: true, negative: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			report, err := Analyze(strings.NewReader("A,B,C\n"+tt.rows), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := report.Reliability
+			if got == nil || got.Included != report.Valid || got.Missing != 0 || got.NonNumeric != 0 ||
+				(got.Alpha != nil) != tt.alpha || (got.Alpha != nil && (*got.Alpha < 0) != tt.negative) {
+				t.Fatalf("unexpected reliability: %+v", got)
+			}
+			if _, err := json.Marshal(report); err != nil {
+				t.Fatalf("report cannot be encoded: %v", err)
+			}
+		})
+	}
+	for _, columns := range [][]string{
+		{}, {"A"}, {"A", " a "}, {"A", "Email"}, {"A", "_quality_status"}, {"A", "unknown"},
+	} {
+		opts := Options{Reliability: &ReliabilityOptions{Columns: columns}}
+		if _, err := Analyze(strings.NewReader("A,B,Email,_quality_status\n"), opts); err == nil {
+			t.Errorf("accepted invalid reliability columns: %q", columns)
+		}
+	}
+	columns := make([]string, 21)
+	for i := range columns {
+		columns[i] = fmt.Sprintf("Item%d", i+1)
+	}
+	header := strings.Join(columns, ",") + "\n"
+	if _, err := Analyze(strings.NewReader(header), Options{Reliability: &ReliabilityOptions{Columns: columns[:20]}}); err != nil {
+		t.Errorf("rejected 20 distinct reliability columns: %v", err)
+	}
+	if _, err := Analyze(strings.NewReader(header), Options{Reliability: &ReliabilityOptions{Columns: columns}}); err == nil {
+		t.Error("accepted 21 distinct reliability columns")
+	}
+}
+
 func TestAnalyzeCrossTabCategories(t *testing.T) {
 	axis := CrossTabOptions{RowColumn: "Station", ColumnColumn: "Choice"}
 	options := Options{CrossTab: &axis}

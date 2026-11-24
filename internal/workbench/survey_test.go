@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -34,13 +35,15 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return project.ProjectID
 	}
 	first, second := create("Water samples"), create("Field notes")
-	csv, _, err := store.saveMaterial(ctx, first, "samples.CSV", strings.NewReader(`Score,Station,Choice,_quality_status,__synthetic__
-8,North,Yes,,true
-7,North,No,,true
-3,South,Yes,held,true
-4,South,,,true
-1,South,No,held,true
-5,North,Yes,invalid,true
+	csv, _, err := store.saveMaterial(ctx, first, "samples.CSV", strings.NewReader(`Score,Station,Choice,Scale A,Scale B,_quality_status,__synthetic__
+8,North,Yes,8,7,,true
+7,North,No,7,4,,true
+3,South,Yes,3,4,held,true
+4,South,,,NaN,,true
+1,South,No,2,3,held,true
+5,North,Yes,4,8,invalid,true
+6,South,,1,+Inf,,true
+8,South,Yes,3,20,,true
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -65,29 +68,41 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return res
 	}
 	base := projectsPath + "/" + first + "/surveys"
-	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"}}}`, csv.MaterialID)
+	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"duplicateColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"},"reliability":{"columns":[" scale b ","SCALE A"]}}}`, csv.MaterialID)
 	created := request(http.MethodPost, base, body, http.StatusCreated).Body.String()
 	var run struct {
-		AnalysisID     string        `json:"analysisId"`
-		MaterialID     string        `json:"materialId"`
-		MaterialName   string        `json:"materialName"`
-		MaterialSHA256 string        `json:"materialSha256"`
-		Valid          int           `json:"valid"`
-		Demo           bool          `json:"demo"`
-		Report         survey.Report `json:"report"`
+		AnalysisID     string         `json:"analysisId"`
+		MaterialID     string         `json:"materialId"`
+		MaterialName   string         `json:"materialName"`
+		MaterialSHA256 string         `json:"materialSha256"`
+		Valid          int            `json:"valid"`
+		Demo           bool           `json:"demo"`
+		Options        survey.Options `json:"options"`
+		Report         survey.Report  `json:"report"`
 	}
-	if err := json.Unmarshal([]byte(created), &run); err != nil || run.AnalysisID == "" || run.Valid != 4 || !run.Demo ||
-		!run.Report.Demo || run.Report.Valid != 4 || run.Report.Pending != 1 || run.Report.Invalid != 1 ||
+	if err := json.Unmarshal([]byte(created), &run); err != nil || run.AnalysisID == "" || run.Valid != 5 || !run.Demo ||
+		!run.Report.Demo || run.Report.Valid != 5 || run.Report.Pending != 1 || run.Report.Invalid != 2 ||
 		run.MaterialID != csv.MaterialID || run.MaterialName != csv.Name || run.MaterialSHA256 != csv.SHA256 {
 		t.Fatalf("unexpected analysis receipt %s (%v)", created, err)
 	}
 	want := &survey.CrossTab{
 		CrossTabOptions: survey.CrossTabOptions{RowColumn: "Station", ColumnColumn: "Choice"},
-		Included:        3, Missing: 1, RowLabels: []string{"North", "South"}, ColumnLabels: []string{"No", "Yes"},
+		Included:        3, Missing: 2, RowLabels: []string{"North", "South"}, ColumnLabels: []string{"No", "Yes"},
 		Counts: [][]int{{1, 1}, {0, 1}}, RowTotals: []int{2, 1}, ColumnTotals: []int{1, 2},
 	}
 	if !reflect.DeepEqual(run.Report.CrossTab, want) {
 		t.Fatalf("unexpected cross-tab: got %+v, want %+v", run.Report.CrossTab, want)
+	}
+	// Variances of the complete responses (8,7), (7,4), and (3,4) are
+	// 7 and 3 for the items and 16 for the row totals. Alpha is 2*(1-10/16).
+	reliability := run.Report.Reliability
+	if reliability == nil || !reflect.DeepEqual(reliability.Columns, []string{"Scale B", "Scale A"}) ||
+		reliability.Included != 3 || reliability.Missing != 1 || reliability.NonNumeric != 1 ||
+		reliability.Alpha == nil || math.Abs(*reliability.Alpha-0.75) > 1e-12 {
+		t.Fatalf("unexpected reliability report: %+v", reliability)
+	}
+	if run.Options.Reliability == nil || !reflect.DeepEqual(run.Options.Reliability.Columns, []string{" scale b ", "SCALE A"}) {
+		t.Fatalf("reliability options changed: %+v", run.Options.Reliability)
 	}
 	newCSV, _, err := store.saveMaterial(ctx, first, csv.Name, strings.NewReader("Score,Station,Choice\n9,East,Yes\n9,East,Yes\n"))
 	if err != nil {
@@ -102,6 +117,7 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		t.Fatalf("replay changed the saved run: %s", replay)
 	}
 	request(http.MethodPost, base, strings.Replace(body, "Confirmed", "Amended", 1), http.StatusConflict)
+	request(http.MethodPost, base, strings.Replace(body, `" scale b ","SCALE A"`, `"Scale A","Scale B"`, 1), http.StatusConflict)
 	newBody := fmt.Sprintf(`{"requestId":"analysis-2","materialId":%q,"options":{"crossTab":{"rowColumn":"Station","columnColumn":"Choice"}}}`, newCSV.MaterialID)
 	var replacement struct {
 		AnalysisID     string        `json:"analysisId"`

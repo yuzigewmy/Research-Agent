@@ -23,12 +23,25 @@ export interface SurveyCrossTab extends SurveyCrossTabOptions {
 
 export const crossTabCategoryLimit = 20
 export const crossTabLabelByteLimit = 128
+export const reliabilityItemLimit = 20
+
+export interface SurveyReliabilityOptions {
+  columns: string[]
+}
+
+export interface SurveyReliability extends SurveyReliabilityOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  alpha?: number
+}
 
 export interface SurveyOptions {
   requiredColumns?: string[]
   duplicateColumns?: string[]
   reviews?: SurveyReview[]
   crossTab?: SurveyCrossTabOptions
+  reliability?: SurveyReliabilityOptions
 }
 
 export interface SurveyInput {
@@ -77,6 +90,7 @@ export interface SurveyReport extends SurveyCounts {
   rows: SurveyRow[]
   summaries: SurveySummary[]
   crossTab?: SurveyCrossTab
+  reliability?: SurveyReliability
 }
 
 export interface SurveyRun extends SurveyMetadata {
@@ -123,6 +137,11 @@ function isCrossTabOptions(value: unknown): value is SurveyCrossTabOptions {
     && options.rowColumn.length > 0 && options.columnColumn.length > 0 && options.rowColumn !== options.columnColumn
 }
 
+function isReliabilityOptions(value: unknown): value is SurveyReliabilityOptions {
+  const columns = (value as Partial<SurveyReliabilityOptions> | null)?.columns
+  return isStringList(columns) && columns.length >= 2 && columns.length <= reliabilityItemLimit
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
@@ -130,6 +149,7 @@ function isOptions(value: unknown): value is SurveyOptions {
     && (options.duplicateColumns === undefined || isStringList(options.duplicateColumns))
     && (options.reviews === undefined || (Array.isArray(options.reviews) && options.reviews.every(isReview)))
     && (options.crossTab === undefined || isCrossTabOptions(options.crossTab))
+    && (options.reliability === undefined || isReliabilityOptions(options.reliability))
 }
 
 function isRow(value: unknown): value is SurveyRow {
@@ -170,12 +190,20 @@ function isCrossTab(value: unknown): value is SurveyCrossTab {
     && isCountList(rowTotals, rowLabels.length) && isCountList(columnTotals, columnLabels.length)
 }
 
+function isReliability(value: unknown, valid: number): value is SurveyReliability {
+  if (!isReliabilityOptions(value)) return false
+  const { included, missing, nonNumeric, alpha } = value as Partial<SurveyReliability>
+  return isCount(included) && isCount(missing) && isCount(nonNumeric) && included + missing + nonNumeric === valid
+    && (alpha === undefined || (included >= 2 && Number.isFinite(alpha)))
+}
+
 function isReport(value: unknown): value is SurveyReport {
   const report = value as Partial<SurveyReport> | null
-  return !!report && isStringList(report.columns)
+  return !!report && isCounts(value) && isStringList(report.columns)
     && Array.isArray(report.rows) && report.rows.every(isRow)
     && Array.isArray(report.summaries) && report.summaries.every(isSummary)
-    && (report.crossTab === undefined || isCrossTab(report.crossTab)) && isCounts(report)
+    && (report.crossTab === undefined || isCrossTab(report.crossTab))
+    && (report.reliability === undefined || isReliability(report.reliability, value.valid))
 }
 
 function isRun(value: unknown): value is SurveyRun {

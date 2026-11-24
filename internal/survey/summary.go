@@ -53,8 +53,8 @@ func (s *columnSummary) add(record []string) {
 		}
 		s.counts[value]++
 	}
-	number, err := strconv.ParseFloat(value, 64)
-	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+	number, ok := parseFiniteNumber(value)
+	if !ok {
 		return
 	}
 	s.Numeric++
@@ -72,6 +72,11 @@ func (s *columnSummary) add(record []string) {
 		delta /= n
 	}
 	s.mean = min(s.high, max(s.low, s.mean+delta))
+}
+
+func parseFiniteNumber(value string) (float64, bool) {
+	number, err := strconv.ParseFloat(value, 64)
+	return number, err == nil && !math.IsNaN(number) && !math.IsInf(number, 0)
 }
 
 func (s *columnSummary) finish(valid int) Summary {

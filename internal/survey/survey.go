@@ -25,14 +25,15 @@ const (
 	StatusPending   = "PENDING"
 )
 
-// Options selects CSV columns for quality checks and applies pending-row reviews.
-// Empty column lists disable the respective check. Column names are matched
-// case-insensitively after trimming whitespace.
+// Options selects CSV columns for quality checks and statistics and applies
+// pending-row reviews. Empty required and duplicate column lists disable their
+// respective checks. Column names are matched case-insensitively after trimming.
 type Options struct {
-	RequiredColumns  []string         `json:"requiredColumns,omitempty"`
-	DuplicateColumns []string         `json:"duplicateColumns,omitempty"`
-	Reviews          []Review         `json:"reviews,omitempty"`
-	CrossTab         *CrossTabOptions `json:"crossTab,omitempty"`
+	RequiredColumns  []string            `json:"requiredColumns,omitempty"`
+	DuplicateColumns []string            `json:"duplicateColumns,omitempty"`
+	Reviews          []Review            `json:"reviews,omitempty"`
+	CrossTab         *CrossTabOptions    `json:"crossTab,omitempty"`
+	Reliability      *ReliabilityOptions `json:"reliability,omitempty"`
 }
 
 // Review resolves a pending response. Row is its one-based CSV record number
@@ -43,18 +44,19 @@ type Review struct {
 	Reason string `json:"reason"`
 }
 
-// Report gives the final quality counts and per-column summaries of valid rows.
+// Report gives the final quality counts and requested statistics of valid rows.
 // Demo marks a CSV with a __synthetic__ column, regardless of its contents.
 type Report struct {
-	Columns   []string  `json:"columns"`
-	Total     int       `json:"total"`
-	Valid     int       `json:"valid"`
-	Invalid   int       `json:"invalid"`
-	Pending   int       `json:"pending"`
-	Rows      []Row     `json:"rows"`
-	Summaries []Summary `json:"summaries"`
-	CrossTab  *CrossTab `json:"crossTab,omitempty"`
-	Demo      bool      `json:"demo"`
+	Columns     []string     `json:"columns"`
+	Total       int          `json:"total"`
+	Valid       int          `json:"valid"`
+	Invalid     int          `json:"invalid"`
+	Pending     int          `json:"pending"`
+	Rows        []Row        `json:"rows"`
+	Summaries   []Summary    `json:"summaries"`
+	CrossTab    *CrossTab    `json:"crossTab,omitempty"`
+	Reliability *Reliability `json:"reliability,omitempty"`
+	Demo        bool         `json:"demo"`
 }
 
 // Row gives one response's quality status and reasons in evaluation order.
@@ -127,6 +129,13 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	var crossTab *crossTabAccumulator
 	if options.CrossTab != nil {
 		crossTab, err = newCrossTab(*options.CrossTab, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var reliability *reliabilityAccumulator
+	if options.Reliability != nil {
+		reliability, err = newReliability(*options.Reliability, header, byName)
 		if err != nil {
 			return Report{}, err
 		}
@@ -209,6 +218,9 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 					return Report{}, err
 				}
 			}
+			if reliability != nil {
+				reliability.add(record)
+			}
 			for i := range accumulators {
 				accumulators[i].add(record)
 			}
@@ -230,6 +242,9 @@ func Analyze(r io.Reader, options Options) (Report, error) {
 	}
 	if crossTab != nil {
 		report.CrossTab = crossTab.finish()
+	}
+	if reliability != nil {
+		report.Reliability = reliability.finish()
 	}
 	return report, nil
 }

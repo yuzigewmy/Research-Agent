@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
-import { analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveys, readSurvey, surveyDownloadPath } from './surveys'
-import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
+import { analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveys, readSurvey, reliabilityItemLimit, surveyDownloadPath } from './surveys'
+import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
 import './survey.css'
 
 const reportDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
@@ -11,7 +11,14 @@ const rowPageSize = 20
 const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
-type SurveyOperation = 'analyze' | 'read' | 'cross-tab'
+type SurveyCalculation = 'analyze' | 'cross-tab' | 'reliability'
+type SurveyOperation = SurveyCalculation | 'read'
+const surveyOperationLabels: Record<SurveyOperation, string> = {
+  analyze: '正在分析并保存报告…',
+  'cross-tab': '正在计算交叉统计…',
+  reliability: '正在计算量表信度…',
+  read: '正在打开报告…',
+}
 
 function useSurveyList<T>(load: (signal: AbortSignal, cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>, idOf: (item: T) => string) {
   const [page, setPage] = useState<{ items: T[]; nextCursor?: string }>({ items: [] })
@@ -157,6 +164,48 @@ function ReportCrossTab({ summaries, result, busy, error, onCalculate }: {
   </section>
 }
 
+function ReportReliability({ summaries, result, busy, error, onCalculate }: {
+  summaries: SurveySummary[]
+  result?: SurveyReliability
+  busy: boolean
+  error?: string
+  onCalculate: (options: SurveyReliabilityOptions) => void
+}) {
+  const id = useId()
+  const [selected, setSelected] = useState(() => result?.columns ?? [])
+  const columns = summaries.map(({ column }) => column)
+  const atLimit = selected.length === reliabilityItemLimit
+
+  return <section className="survey-section" aria-labelledby={`${id}-heading`}>
+    <h6 id={`${id}-heading`}>量表信度</h6>
+    {result && <div className="survey-section" role="status">
+      <strong>{result.alpha === undefined ? '当前答卷无法计算 Cronbach α' : `Cronbach α ${numberFormat.format(result.alpha)}`}</strong>
+      <p className="survey-note">本次题项 <bdi>{result.columns.join('、')}</bdi></p>
+      <p className="survey-note">纳入 {result.included} 份，缺失 {result.missing} 份，非数值 {result.nonNumeric} 份。</p>
+      {result.alpha === undefined && <p className="survey-note">计算需要至少两份完整数值答卷，且总分须有变异。</p>}
+    </div>}
+    {columns.length >= 2 ? <>
+      <p className="survey-note" id={`${id}-help`}>
+        选择同一量表的 2 至 {reliabilityItemLimit} 个题项，反向题请先完成反向计分。计算沿用当前报告的清洗规则与复核决定。
+      </p>
+      <fieldset className="survey-scale-items" aria-describedby={`${id}-help`} disabled={busy}>
+        <legend>量表题项（已选 {selected.length} 项）</legend>
+        {columns.map((column) => <label key={column}>
+          <input type="checkbox" checked={selected.includes(column)} disabled={atLimit && !selected.includes(column)}
+            onChange={(event) => {
+              const checked = event.currentTarget.checked
+              setSelected((current) => checked ? [...current, column] : current.filter((item) => item !== column))
+            }} />
+          <bdi>{column}</bdi>
+        </label>)}
+      </fieldset>
+      <button className="button outline" type="button" disabled={busy || selected.length < 2}
+        onClick={() => onCalculate({ columns: selected })}>计算量表信度</button>
+    </> : <p className="survey-note">至少需要两个可统计字段。</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </section>
+}
+
 type DraftReview = { accept: boolean; reason: string }
 
 function ReportRows({ rows, busy, rulesChanged, onReview }: {
@@ -256,13 +305,13 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
   </section>
 }
 
-function SurveyAnalysis({ projectId, run, busy, newerMaterial, crossTabError, onAnalyze }: {
+function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError, onAnalyze }: {
   projectId: string
   run: SurveyRun
   busy: boolean
   newerMaterial: boolean
-  crossTabError?: string
-  onAnalyze: (options: SurveyOptions, kind?: 'cross-tab') => void
+  calculationError?: { kind: SurveyOperation; message: string }
+  onAnalyze: (options: SurveyOptions, kind?: SurveyCalculation) => void
 }) {
   const { report, options } = run
   const heading = useRef<HTMLHeadingElement>(null)
@@ -280,6 +329,7 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, crossTabError, on
     requiredColumns: rules.requiredColumns.length ? rules.requiredColumns : undefined,
     duplicateColumns: rules.duplicateColumns.length ? rules.duplicateColumns : undefined,
     crossTab: options.crossTab,
+    reliability: options.reliability,
   }
 
   useEffect(() => { heading.current?.focus() }, [])
@@ -330,8 +380,12 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, crossTabError, on
       </div>
     </details>
     <ReportSummary summaries={report.summaries} valid={report.valid} />
-    <ReportCrossTab summaries={report.summaries} result={report.crossTab} busy={busy} error={crossTabError}
+    <ReportCrossTab summaries={report.summaries} result={report.crossTab} busy={busy}
+      error={calculationError?.kind === 'cross-tab' ? calculationError.message : undefined}
       onCalculate={(crossTab) => onAnalyze({ ...options, crossTab }, 'cross-tab')} />
+    <ReportReliability summaries={report.summaries} result={report.reliability} busy={busy}
+      error={calculationError?.kind === 'reliability' ? calculationError.message : undefined}
+      onCalculate={(reliability) => onAnalyze({ ...options, reliability }, 'reliability')} />
     <ReportRows rows={report.rows} busy={busy} rulesChanged={rulesChanged} onReview={(reviews) => {
       onAnalyze({ ...options, reviews: [...(options.reviews ?? []), ...reviews].sort((a, b) => a.row - b.row) })
     }} />
@@ -389,7 +443,7 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
     }
   }
 
-  function analyze(materialId: string, options: SurveyOptions, kind: 'analyze' | 'cross-tab' = 'analyze') {
+  function analyze(materialId: string, options: SurveyOptions, kind: SurveyCalculation = 'analyze') {
     if (active.current) return
     const key = JSON.stringify({ materialId, options })
     if (attempt.current?.key !== key) attempt.current = { key, requestId: crypto.randomUUID() }
@@ -438,12 +492,9 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
         {!reports.loading && !reports.error && !reports.items.length && <p className="survey-note">暂无保存的报告。</p>}
       </div>
     </details>
-    {busy && <p className="survey-note" role="status">
-      {busy === 'cross-tab' ? '正在计算交叉统计…' : busy === 'analyze' ? '正在分析并保存报告…' : '正在打开报告…'}
-    </p>}
-    {failure && failure.kind !== 'cross-tab' && <p className="form-error" role="alert">{failure.message}</p>}
+    {busy && <p className="survey-note" role="status">{surveyOperationLabels[busy]}</p>}
+    {failure && (failure.kind === 'analyze' || failure.kind === 'read') && <p className="form-error" role="alert">{failure.message}</p>}
     {run && <SurveyAnalysis key={run.analysisId} run={run} projectId={projectId} busy={!!busy} newerMaterial={newerMaterial}
-      crossTabError={failure?.kind === 'cross-tab' ? failure.message : undefined}
-      onAnalyze={(options, kind) => analyze(run.materialId, options, kind)} />}
+      calculationError={failure} onAnalyze={(options, kind) => analyze(run.materialId, options, kind)} />}
   </section>
 }
