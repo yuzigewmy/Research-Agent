@@ -8,10 +8,29 @@ import './project-management.css'
 type ListStatus = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string }
 type ListRequest = { filters: ProjectFilters; cursor?: string }
 
+const projectListScopeKey = 'research-agent.project-list.scope'
 const projectScopes = [
   ['READY', '当前项目'],
   ['ARCHIVED', '归档项目'],
 ] as const satisfies ReadonlyArray<readonly [ProjectStatus, string]>
+
+function storedProjectScope(): ProjectStatus {
+  try {
+    const value = localStorage.getItem(projectListScopeKey)
+    if (value === 'READY' || value === 'ARCHIVED') return value
+  } catch {
+    // 浏览器拒绝读取本地偏好时使用当前项目。
+  }
+  return 'READY'
+}
+
+function rememberProjectScope(status: ProjectStatus) {
+  try {
+    localStorage.setItem(projectListScopeKey, status)
+  } catch {
+    // 无法写入时保留本次选择，下次打开回到当前项目。
+  }
+}
 
 function mergeItems(first: Project[], second: Project[]): Project[] {
   const byId = new Map(first.map((project) => [project.projectId, project]))
@@ -31,7 +50,7 @@ function firstPage(filters: ProjectFilters): ListState {
 }
 
 export function useProjectList() {
-  const [state, setState] = useState(() => firstPage({ q: '', status: 'READY' }))
+  const [state, setState] = useState(() => firstPage({ q: '', status: storedProjectScope() }))
   const { request, items, nextCursor, status } = state
 
   useEffect(() => {
@@ -58,7 +77,9 @@ export function useProjectList() {
     setState((current) => {
       const previous = current.request.filters
       const next = { ...previous, ...changes }
-      return next.q === previous.q && next.status === previous.status ? current : firstPage(next)
+      if (next.q === previous.q && next.status === previous.status) return current
+      if (next.status !== previous.status) rememberProjectScope(next.status)
+      return firstPage(next)
     })
   }
 
