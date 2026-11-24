@@ -27,8 +27,18 @@ func (c conversation) startReply(ctx context.Context, projectID string, input se
 	if workers.closing {
 		return Turn{}, false, context.Canceled
 	}
+	model := c.model
+	if input.ModelID == alternateConversationModelID {
+		model = nil
+		for _, option := range c.modelOptions {
+			if option.ID == input.ModelID {
+				model = c.model.ForModel(option.Model, option.ReasoningEffort)
+				break
+			}
+		}
+	}
 	// Stop and start share this lock so a saved turn always has a cancel function.
-	turn, project, created, err := c.store.beginTurn(ctx, projectID, input, c.model)
+	turn, project, created, err := c.store.beginTurn(ctx, projectID, input, model)
 	if err != nil || !created {
 		return turn, false, err
 	}
@@ -38,7 +48,7 @@ func (c conversation) startReply(ctx context.Context, projectID string, input se
 	go func() {
 		defer workers.wg.Done()
 		defer cancel()
-		c.reply(replyCtx, project, turn)
+		c.reply(replyCtx, model, project, turn)
 		workers.mu.Lock()
 		delete(workers.active, turn.TurnID)
 		workers.mu.Unlock()

@@ -13,7 +13,7 @@ import (
 type workflows struct {
 	store           *Store
 	model           *inference.Client
-	modelOptions    []workflowModelOption
+	modelOptions    []modelOption
 	softwarePDFFont string
 	wordPython      string
 }
@@ -55,12 +55,12 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 	key := projectWorkflowKey(project.TemplateID)
 	stages := workflowStages[key]
 	result := struct {
-		Run                   *WorkflowRun          `json:"run"`
-		Steps                 []stepInfo            `json:"steps"`
-		ModelConfigured       bool                  `json:"modelConfigured"`
-		ModelOptions          []workflowModelOption `json:"modelOptions,omitempty"`
-		SoftwarePDFConfigured *bool                 `json:"softwarePdfConfigured,omitempty"`
-		PatentWordConfigured  *bool                 `json:"patentWordConfigured,omitempty"`
+		Run                   *WorkflowRun  `json:"run"`
+		Steps                 []stepInfo    `json:"steps"`
+		ModelConfigured       bool          `json:"modelConfigured"`
+		ModelOptions          []modelOption `json:"modelOptions,omitempty"`
+		SoftwarePDFConfigured *bool         `json:"softwarePdfConfigured,omitempty"`
+		PatentWordConfigured  *bool         `json:"patentWordConfigured,omitempty"`
 	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil, ModelOptions: api.modelOptions}
 	if isSoftwareRegistrationWorkflow(key) {
 		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
@@ -111,8 +111,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 		modelID := input.ModelID
 		switch {
 		case modelID == "":
-			modelID = defaultWorkflowModelID
-		case action != workflowStart || (modelID != defaultWorkflowModelID && modelID != alternateWorkflowModelID):
+			modelID = defaultModelID
+		case action != workflowStart || (modelID != defaultModelID && modelID != alternateWorkflowModelID):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择启动本轮工作流所用的模型。")
 			return
 		}

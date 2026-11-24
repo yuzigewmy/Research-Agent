@@ -14,7 +14,12 @@ import (
 
 const turnColumns = `ordinal, turn_id, request_id, user_text, answer, status, message, event_seq, created_at,
 	references_json, task_results_json, mode, proposed_task_id, workflow_proposal_json, manuscript_selection_json, manuscript_selections_json,
-	model_name, reasoning_effort`
+	model_name, reasoning_effort, model_id`
+
+const turnModelChoiceSchema = `
+	ALTER TABLE turns ADD COLUMN model_id TEXT NOT NULL DEFAULT 'default';
+	PRAGMA user_version = 46;
+`
 
 const turnModelReceiptSchema = `
 	ALTER TABLE turns ADD COLUMN model_name TEXT NOT NULL DEFAULT '';
@@ -44,6 +49,7 @@ type Turn struct {
 	WorkflowProposal     *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 	ManuscriptSelection  *manuscriptSelection  `json:"manuscriptSelection,omitempty"`
 	ManuscriptSelections []manuscriptSelection `json:"manuscriptSelections,omitempty"`
+	ModelID              string                `json:"modelId,omitempty"`
 	Model                string                `json:"model,omitempty"`
 	ReasoningEffort      string                `json:"reasoningEffort,omitempty"`
 }
@@ -57,7 +63,7 @@ type TurnEvent struct {
 	ProposedTaskID   string                `json:"proposedTaskId,omitempty"`
 	WorkflowProposal *turnWorkflowProposal `json:"workflowProposal,omitempty"`
 	proposal         turnProposal
-	workflowModel    workflowModelOption
+	workflowModel    modelOption
 	queued           bool
 }
 
@@ -107,7 +113,7 @@ func scanTurn(row interface{ Scan(...any) error }) (Turn, error) {
 	var references, taskResults, workflowProposal, selection, selections []byte
 	if err := row.Scan(&t.ordinal, &t.TurnID, &t.RequestID, &t.Text, &t.Answer, &t.Status, &t.Message,
 		&t.AfterSeq, &t.CreatedAt, &references, &taskResults, &t.Mode, &t.ProposedTaskID, &workflowProposal, &selection, &selections,
-		&t.Model, &t.ReasoningEffort); err != nil {
+		&t.Model, &t.ReasoningEffort, &t.ModelID); err != nil {
 		return Turn{}, err
 	}
 	if err := json.Unmarshal(references, &t.References); err != nil {
@@ -139,10 +145,14 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	}
 	defer tx.Rollback()
 
+	modelID := input.ModelID
+	if modelID == "" {
+		modelID = defaultModelID
+	}
 	turn, err := scanTurn(tx.QueryRowContext(ctx, `SELECT `+turnColumns+` FROM turns WHERE project_id = ? AND request_id = ?`, projectID, input.RequestID))
 	if err == nil {
 		// An omitted mode reuses the original choice on replay, even after settings change.
-		if turn.Text != input.Text || (input.Mode != "" && turn.Mode != input.Mode) ||
+		if turn.Text != input.Text || turn.ModelID != modelID || (input.Mode != "" && turn.Mode != input.Mode) ||
 			!turn.ManuscriptSelection.matches(input.ManuscriptSelection) ||
 			!slices.EqualFunc(turn.ManuscriptSelections, input.ManuscriptSelections, func(saved manuscriptSelection, requested manuscriptSelectionInput) bool {
 				return saved.manuscriptSelectionInput == requested
@@ -167,6 +177,9 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 		return Turn{}, Project{}, false, err
 	}
 	if model == nil {
+		if modelID == alternateConversationModelID {
+			return Turn{}, Project{}, false, errConversationModelUnavailable
+		}
 		return Turn{}, Project{}, false, errModelUnavailable
 	}
 	var running bool
@@ -214,13 +227,13 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	}
 	turn = Turn{TurnID: rand.Text(), RequestID: input.RequestID, Text: input.Text, References: references, TaskResults: results,
 		ManuscriptSelection: selection, ManuscriptSelections: selections, Mode: mode, Status: "RUNNING",
-		CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+		CreatedAt: time.Now().UTC().Format(createdAtLayout), ModelID: modelID}
 	turn.Model, turn.ReasoningEffort = model.ModelInfo()
 	err = tx.QueryRowContext(ctx, `INSERT INTO turns(turn_id, project_id, request_id, user_text, status, created_at,
-		references_json, task_results_json, mode, manuscript_selection_json, manuscript_selections_json, model_name, reasoning_effort)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
+		references_json, task_results_json, mode, manuscript_selection_json, manuscript_selections_json, model_name, reasoning_effort, model_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ordinal`, turn.TurnID, projectID, input.RequestID, turn.Text,
 		turn.Status, turn.CreatedAt, string(referenceJSON), string(resultsJSON), turn.Mode, string(selectionJSON),
-		string(selectionsJSON), turn.Model, turn.ReasoningEffort).Scan(&turn.ordinal)
+		string(selectionsJSON), turn.Model, turn.ReasoningEffort, turn.ModelID).Scan(&turn.ordinal)
 	if err != nil {
 		return Turn{}, Project{}, false, err
 	}

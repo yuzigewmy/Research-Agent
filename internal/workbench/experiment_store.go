@@ -152,7 +152,7 @@ type workflowRequest struct {
 	ModelID          string           `json:"modelId"`
 	sourceTurnID     string
 	workflowKey      string
-	model            workflowModelOption
+	model            modelOption
 }
 
 func (s *Store) latestWorkflow(ctx context.Context, projectID string) (WorkflowRun, error) {
@@ -305,7 +305,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	}
 	modelID := req.ModelID
 	if modelID == "" {
-		modelID = defaultWorkflowModelID
+		modelID = defaultModelID
 	}
 
 	var runID, recordedAction, recordedEnd, recordedStep, recordedReason string

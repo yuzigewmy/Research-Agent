@@ -25,6 +25,7 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 	var dialogues, executions atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
+			Model    string
 			Messages []inference.Message
 			Tools    []struct{ Function inference.Tool }
 		}
@@ -34,6 +35,9 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if len(input.Tools) == 0 {
+			if input.Model != "fixture" {
+				t.Errorf("workflow used conversation model %q", input.Model)
+			}
 			artifacts := []string{"# 观测范围", "# 采样计划", checklist}
 			call := int(executions.Add(1))
 			if call > len(artifacts) {
@@ -51,9 +55,12 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 			http.Error(w, "unexpected dialogue request", http.StatusBadRequest)
 			return
 		}
-		end := "checklist"
+		end, wantModel := "checklist", "fixture-conversation"
 		if prompt == reviewText {
-			end = "sources"
+			end, wantModel = "sources", "fixture"
+		}
+		if input.Model != wantModel {
+			t.Errorf("conversation used %q, want %q", input.Model, wantModel)
 		}
 		var parameters struct {
 			Properties map[string]struct{ Enum []string }
@@ -76,7 +83,7 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Second)
 	defer cancel()
-	handler := NewHandler(store, nil, HandlerConfig{Model: model})
+	handler := NewHandler(store, nil, HandlerConfig{Model: model, ConversationModelName: "fixture-conversation"})
 	createProject := func(template string) Project {
 		t.Helper()
 		project, _, err := store.createProject(ctx, createProjectInput{RequestID: template, Title: "河流观测", TemplateID: template})
@@ -172,7 +179,7 @@ func TestAutoTurnStartsWorkflowAndHonorsCheckpoint(t *testing.T) {
 	}
 
 	experiment := projectsPath + "/" + createProject("experiment").ProjectID
-	const start = `{"requestId":"auto-run","mode":"AUTO","text":"` + experimentText + `"}`
+	const start = `{"requestId":"auto-run","mode":"AUTO","modelId":"conversation","text":"` + experimentText + `"}`
 	turn := send(experiment, start)
 	dispatched := turn.WorkflowProposal
 	wantScope := WorkflowScope{StartStep: "scope", EndStep: "checklist"}

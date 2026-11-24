@@ -16,6 +16,13 @@ const taskModelSchema = `
 
 var errReviewModelConnection = errors.New("请恢复提交本次审稿时的模型服务地址，再重试。")
 
+const defaultModelID = "default"
+
+type modelOption struct {
+	ID string `json:"id"`
+	modelSnapshot
+}
+
 type modelSnapshot struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
@@ -31,6 +38,19 @@ func snapshotModel(client *inference.Client, name, effort string) modelSnapshot 
 		name, effort = client.ModelInfo()
 	}
 	return modelSnapshot{Model: name, ReasoningEffort: effort, connection: client.ConnectionFingerprint()}
+}
+
+func configuredModelOptions(client *inference.Client, alternateID, name, effort string) []modelOption {
+	if client == nil {
+		return nil
+	}
+	primary := snapshotModel(client, "", "")
+	options := []modelOption{{ID: defaultModelID, modelSnapshot: primary}}
+	alternate := snapshotModel(client, name, effort)
+	if alternate != primary {
+		options = append(options, modelOption{ID: alternateID, modelSnapshot: alternate})
+	}
+	return options
 }
 
 func (saved modelSnapshot) checkReviewRetry(current modelSnapshot) error {

@@ -25,26 +25,30 @@ import (
 const projectsPath = "/api/v1/projects"
 
 type HandlerConfig struct {
-	Model                   *inference.Client
-	WorkflowModelName       string
-	WorkflowReasoningEffort string
-	ReviewModelName         string
-	ReviewReasoningEffort   string
-	WordPython              string
-	SoftwarePDFFont         string
-	literature              literatureSource
+	Model                       *inference.Client
+	ConversationModelName       string
+	ConversationReasoningEffort string
+	WorkflowModelName           string
+	WorkflowReasoningEffort     string
+	ReviewModelName             string
+	ReviewReasoningEffort       string
+	WordPython                  string
+	SoftwarePDFFont             string
+	literature                  literatureSource
 }
 
 // NewHandler serves the API and files from a trusted web build directory.
 func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 	registerModelConnection(mux, config.Model)
-	conversation{store: store, model: config.Model}.register(mux)
+	conversation{store: store, model: config.Model,
+		modelOptions: configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort),
+	}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model}.register(mux)
 	store.registerTaskQueue(mux)
 	workflows{store: store, model: config.Model,
-		modelOptions:    configuredWorkflowModels(config.Model, config.WorkflowModelName, config.WorkflowReasoningEffort),
+		modelOptions:    configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort),
 		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)
 	store.registerWorkspace(mux)

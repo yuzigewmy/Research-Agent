@@ -14,6 +14,14 @@ export const manuscriptSelectionLimit = 4
 const turnTaskResultLimit = 4
 const utf8 = new TextEncoder()
 export type TurnStatus = typeof statuses[number]
+export type ConversationModelId = 'default' | 'conversation'
+
+export interface ConversationModelOption {
+  id: ConversationModelId
+  model: string
+  reasoningEffort?: string
+}
+
 export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'> & { page?: number; quote?: string }
 export type PdfQuote = { sha256: string; page: number; text: string }
 export type ManuscriptSelectionInput = Pick<FileRecord, 'versionId'> & Pick<SelectionEditRange, 'startByte' | 'endByte'>
@@ -33,6 +41,7 @@ export interface TurnInput {
   manuscriptSelection?: ManuscriptSelectionInput
   manuscriptSelections?: ManuscriptSelectionInput[]
   mode?: TurnMode
+  modelId?: ConversationModelId
 }
 
 export interface WorkflowProposal {
@@ -48,7 +57,7 @@ export interface WorkflowProposal {
   runId?: string
 }
 
-export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode'> {
+export interface Turn extends Pick<TurnInput, 'requestId' | 'text' | 'mode' | 'modelId'> {
   references?: TurnReference[]
   manuscriptSelection?: ManuscriptSelection
   manuscriptSelections?: ManuscriptSelection[]
@@ -69,6 +78,7 @@ export interface TurnPage {
   items: Turn[]
   nextCursor?: string
   modelConfigured: boolean
+  modelOptions?: ConversationModelOption[]
 }
 
 export type TurnEvent =
@@ -81,6 +91,16 @@ export type TurnEvent =
     proposedTaskId?: string
     workflowProposal?: WorkflowProposal
   }
+
+export function isConversationModelId(value: unknown): value is ConversationModelId {
+  return value === 'default' || value === 'conversation'
+}
+
+function isConversationModelOption(value: unknown): value is ConversationModelOption {
+  const option = value as Partial<ConversationModelOption> | null
+  return !!option && isConversationModelId(option.id) && typeof option.model === 'string' && option.model.trim().length > 0
+    && (option.reasoningEffort === undefined || typeof option.reasoningEffort === 'string')
+}
 
 export function isProposedTaskId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
@@ -202,6 +222,7 @@ function isTurn(value: unknown): value is Turn {
       && isManuscriptSelections(turn.manuscriptSelections)))
     && (turn.taskResults === undefined || isTurnTaskResults(turn.taskResults))
     && (turn.mode === undefined || isTurnMode(turn.mode))
+    && (turn.modelId === undefined || isConversationModelId(turn.modelId))
     && (turn.model === undefined || typeof turn.model === 'string')
     && (turn.reasoningEffort === undefined || typeof turn.reasoningEffort === 'string')
     && (turn.proposedTaskId === undefined || isProposedTaskId(turn.proposedTaskId))
@@ -213,6 +234,13 @@ function isTurnPage(value: unknown): value is TurnPage {
   const page = value as Partial<TurnPage> | null
   return !!page && Array.isArray(page.items) && page.items.every(isTurn)
     && typeof page.modelConfigured === 'boolean'
+    && (page.modelOptions === undefined || (Array.isArray(page.modelOptions)
+      && page.modelOptions.every(isConversationModelOption)
+      && new Set(page.modelOptions.map(({ id }) => id)).size === page.modelOptions.length))
+}
+
+export function matchesTurnModel(turn: Turn, input: TurnInput) {
+  return turn.modelId === undefined || turn.modelId === (input.modelId ?? 'default')
 }
 
 export function turnsPath(projectId: string) {
@@ -226,7 +254,7 @@ export function listTurns(projectId: string, signal: AbortSignal, before?: strin
 
 export function sendTurn(projectId: string, input: TurnInput, signal: AbortSignal) {
   return request(turnsPath(projectId), (value): value is Turn => isTurn(value)
-    && value.requestId === input.requestId
+    && value.requestId === input.requestId && matchesTurnModel(value, input)
     && sameManuscriptSelections(manuscriptSelectionsOf(value), manuscriptSelectionsOf(input)), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

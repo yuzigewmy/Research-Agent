@@ -3,15 +3,19 @@ import type { FormEvent } from 'react'
 import { ConversationTasks } from './ConversationTasks'
 import { ConversationWorkflowProposal } from './ConversationWorkflowProposal'
 import { materialDownloadPath } from './materials'
-import { errorMessage, isTurnMode, turnModeHelp, turnModeLabels } from './projects'
+import { errorMessage, isTurnMode, ProjectApiError, turnModeHelp, turnModeLabels } from './projects'
 import type { TurnMode } from './projects'
 import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
 import {
-  isManuscriptSelectionInput, isManuscriptSelectionInputs, isPdfQuotes, isProposedTaskId, isWorkflowProposal, listTurns,
-  manuscriptSelectionInput, manuscriptSelectionsOf, sameManuscriptSelections, sendTurn, stopTurn, turnsPath,
+  isConversationModelId, isManuscriptSelectionInput, isManuscriptSelectionInputs, isPdfQuotes, isProposedTaskId,
+  isWorkflowProposal, listTurns, manuscriptSelectionInput, manuscriptSelectionsOf, matchesTurnModel,
+  sameManuscriptSelections, sendTurn, stopTurn, turnsPath,
 } from './turns'
-import type { ManuscriptSelection, ManuscriptSelectionInput, PdfQuote, Turn, TurnEvent, TurnInput, TurnReference, WorkflowProposal } from './turns'
+import type {
+  ConversationModelId, ConversationModelOption, ManuscriptSelection, ManuscriptSelectionInput, PdfQuote, Turn, TurnEvent,
+  TurnInput, TurnReference, WorkflowProposal,
+} from './turns'
 
 type StopState = { turnId: string; kind: 'pending' } | { turnId: string; kind: 'error'; message: string }
 
@@ -37,6 +41,7 @@ function readAttempt(key: string): TurnInput | null {
     const input = saved as Partial<TurnInput>
     if (typeof input.requestId !== 'string' || typeof input.text !== 'string'
       || (input.mode !== undefined && !isTurnMode(input.mode))
+      || (input.modelId !== undefined && !isConversationModelId(input.modelId))
       || (input.referenceIds !== undefined && (!Array.isArray(input.referenceIds)
         || !input.referenceIds.every((id) => typeof id === 'string')))
       || (input.pdfQuotes !== undefined && !isPdfQuotes(input.pdfQuotes, input.referenceIds))
@@ -45,12 +50,21 @@ function readAttempt(key: string): TurnInput | null {
         || !isManuscriptSelectionInputs(input.manuscriptSelections)))) return null
     return {
       requestId: input.requestId, text: input.text, referenceIds: input.referenceIds,
-      pdfQuotes: input.pdfQuotes, mode: input.mode ?? 'CHAT',
+      pdfQuotes: input.pdfQuotes, mode: input.mode ?? 'CHAT', modelId: input.modelId,
       manuscriptSelection: input.manuscriptSelection ? manuscriptSelectionInput(input.manuscriptSelection) : undefined,
       manuscriptSelections: input.manuscriptSelections?.map(manuscriptSelectionInput),
     }
   } catch {
     return null
+  }
+}
+
+function readModelPreference(key: string): ConversationModelId | undefined {
+  try {
+    const value = sessionStorage.getItem(key)
+    return isConversationModelId(value) ? value : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -118,12 +132,15 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   onClearManuscriptSelections, onWorkflowConfirmed, taskSync }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
+  const modelPreferenceKey = `research.conversation-model.${projectId}`
   const submission = useRef<AbortController | null>(null)
   const earlierRequest = useRef<AbortController | null>(null)
   const stopRequests = useRef(new Map<string, AbortController>())
   const [turns, setTurns] = useState<Turn[]>([])
   const [cursor, setCursor] = useState<string>()
   const [configured, setConfigured] = useState(false)
+  const [modelOptions, setModelOptions] = useState<ConversationModelOption[]>([])
+  const [preferredModelId, setPreferredModelId] = useState(() => readModelPreference(modelPreferenceKey))
   const [attempt, setAttempt] = useState(() => readAttempt(attemptKey))
   const [draft, setDraft] = useState(() => sessionStorage.getItem(draftKey) ?? attempt?.text ?? '')
   const [modeOverride, setModeOverride] = useState<TurnMode>()
@@ -143,10 +160,35 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const retryMode = matchingAttempt ? matchingAttempt.mode ?? 'CHAT' : undefined
   const inheritedMode = retryMode ?? defaultTurnMode
   const mode = modeOverride ?? inheritedMode
+  const retry = matchingAttempt && retryMode === mode ? matchingAttempt : null
+  const preferredModel = modelOptions.find(({ id }) => id === preferredModelId) ?? modelOptions[0]
+  const selectedModelId = retry ? retry.modelId ?? 'default' : preferredModel?.id
 
-  function finishAttempt(input: TurnInput) {
+  function discardAttempt() {
     setAttempt(null)
     sessionStorage.removeItem(attemptKey)
+  }
+
+  function discardAttemptKeepingDraft() {
+    updateDraft(draft)
+    setModeOverride(mode === defaultTurnMode ? undefined : mode)
+    discardAttempt()
+  }
+
+  function changeModel(modelId: string) {
+    if (!isConversationModelId(modelId) || modelId === selectedModelId || submission.current) return
+    setPreferredModelId(modelId)
+    if (attempt) discardAttemptKeepingDraft()
+    setError('')
+    try {
+      sessionStorage.setItem(modelPreferenceKey, modelId)
+    } catch {
+      // The selection still applies while this project is open.
+    }
+  }
+
+  function finishAttempt(input: TurnInput) {
+    discardAttempt()
     if (sessionStorage.getItem(draftKey) === input.text) sessionStorage.removeItem(draftKey)
     setDraft((current) => current === input.text ? '' : current)
     setModeOverride(undefined)
@@ -158,7 +200,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const reconcileAttempt = useEffectEvent((items: Turn[]) => {
     if (!attempt) return
     const sent = manuscriptSelectionsOf(attempt)
-    if (items.some((turn) => turn.requestId === attempt.requestId
+    if (items.some((turn) => turn.requestId === attempt.requestId && matchesTurnModel(turn, attempt)
       && sameManuscriptSelections(manuscriptSelectionsOf(turn), sent))) finishAttempt(attempt)
   })
 
@@ -171,6 +213,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
         latestTurn(items.find((turn) => turn.turnId === snapshot.turnId), snapshot)))
       setCursor(page.nextCursor)
       setConfigured(page.modelConfigured)
+      setModelOptions(page.modelOptions ?? [])
       setConnectionLost(false)
     }).catch((err: unknown) => {
       if (!controller.signal.aborted) setError(errorMessage(err))
@@ -243,8 +286,8 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       if (page !== undefined && quote !== undefined) pdfQuotes[materialId] = { page, text: quote, sha256 }
     }
     const selections = manuscriptSelections.map(manuscriptSelectionInput)
-    const input: TurnInput = matchingAttempt && retryMode === mode ? matchingAttempt : {
-      requestId: crypto.randomUUID(), text: draft, mode,
+    const input: TurnInput = retry ?? {
+      requestId: crypto.randomUUID(), text: draft, mode, modelId: preferredModel?.id,
       referenceIds: references.length ? references.map(({ materialId }) => materialId) : undefined,
       pdfQuotes: Object.keys(pdfQuotes).length ? pdfQuotes : undefined,
       manuscriptSelection: selections.length === 1 ? selections[0] : undefined,
@@ -263,7 +306,11 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       setTurns((items) => mergeTurns(items, [turn]))
       setConnectionLost(false)
     } catch (err) {
-      if (!controller.signal.aborted) setError(errorMessage(err))
+      if (controller.signal.aborted) return
+      if (err instanceof ProjectApiError && err.status === 422 && err.code === 'CONVERSATION_MODEL_UNAVAILABLE') {
+        discardAttemptKeepingDraft()
+      }
+      setError(errorMessage(err))
     } finally {
       submission.current = null
       if (!controller.signal.aborted) setSending(false)
@@ -417,6 +464,15 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       <ManuscriptQuotes selections={manuscriptSelections} onRemove={(selection) => onClearManuscriptSelections([selection])} />
       {configured && (
         <form className="create-form" onSubmit={send} aria-busy={sending}>
+          {modelOptions.length > 1 && <div className="field">
+            <label htmlFor="turn-model">对话模型</label>
+            <select id="turn-model" value={selectedModelId ?? ''} disabled={loading || sending}
+              onChange={(event) => changeModel(event.currentTarget.value)}>
+              {modelOptions.map(({ id, model, reasoningEffort }) => (
+                <option key={id} value={id}>{model} · 推理档 {reasoningEffort || '默认'}</option>
+              ))}
+            </select>
+          </div>}
           <div className="field">
             <label htmlFor="turn-mode">本轮协作</label>
             <select id="turn-mode" value={mode} disabled={loading || sending} aria-describedby="turn-mode-help" onChange={(event) => {

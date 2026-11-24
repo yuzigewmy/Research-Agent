@@ -150,14 +150,18 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 		t.Fatalf("cursor was not respected: %s", replay.Body.String())
 	}
 
-	handler = NewHandler(reopened, nil, HandlerConfig{Model: configured("fixture-after", "low")})
+	changed := configured("fixture-default", "low")
+	handler = NewHandler(reopened, nil, HandlerConfig{
+		Model: changed, ConversationModelName: "fixture-after", ConversationReasoningEffort: "low",
+	})
 	oldReceipt := request(handler, "POST", base, input, http.StatusOK)
 	assertModel(oldReceipt.Body.Bytes(), "fixture-before", "max")
-	nextInput := fmt.Sprintf(`{"requestId":"turn-2","text":"核对对照组","referenceIds":[%q]}`, material.MaterialID)
+	request(handler, "POST", base, strings.Replace(input, `"text":`, `"modelId":"conversation","text":`, 1), http.StatusConflict)
+	nextInput := fmt.Sprintf(`{"requestId":"turn-2","text":"核对对照组","modelId":"conversation","referenceIds":[%q]}`, material.MaterialID)
 	nextReceipt := request(handler, "POST", base, nextInput, http.StatusAccepted)
 	assertModel(nextReceipt.Body.Bytes(), "fixture-after", "low")
 	var next Turn
-	if err := json.Unmarshal(nextReceipt.Body.Bytes(), &next); err != nil || next.TurnID == turn.TurnID {
+	if err := json.Unmarshal(nextReceipt.Body.Bytes(), &next); err != nil || next.TurnID == turn.TurnID || next.ModelID != alternateConversationModelID {
 		t.Fatalf("invalid new turn: %v, %s", err, nextReceipt.Body)
 	}
 	nextStream := request(handler, "GET", base+"/"+next.TurnID+"/stream", "", http.StatusOK)
@@ -165,12 +169,23 @@ func TestConversationReceiptAndReplaySurviveReopening(t *testing.T) {
 		t.Fatalf("new turn did not finish: %s", nextStream.Body)
 	}
 	page := request(handler, "GET", base, "", http.StatusOK)
-	var history struct{ Items []json.RawMessage }
-	if err := json.Unmarshal(page.Body.Bytes(), &history); err != nil || len(history.Items) != 2 {
+	var history struct {
+		Items        []json.RawMessage
+		ModelOptions []modelOption
+	}
+	if err := json.Unmarshal(page.Body.Bytes(), &history); err != nil || len(history.Items) != 2 || len(history.ModelOptions) != 2 {
 		t.Fatalf("invalid turn history: %v, %s", err, page.Body)
+	}
+	if history.ModelOptions[0].ID != defaultModelID || history.ModelOptions[1].ID != alternateConversationModelID ||
+		history.ModelOptions[1].Model != "fixture-after" || strings.Contains(page.Body.String(), upstream.URL) || strings.Contains(page.Body.String(), credential) {
+		t.Fatalf("unexpected public model list: %+v", history.ModelOptions)
 	}
 	assertModel(history.Items[0], "fixture-after", "low")
 	assertModel(history.Items[1], "fixture-before", "max")
+
+	handler = NewHandler(reopened, nil, HandlerConfig{Model: changed})
+	assertModel(request(handler, "POST", base, nextInput, http.StatusOK).Body.Bytes(), "fixture-after", "low")
+	request(handler, "POST", base, strings.Replace(nextInput, `"turn-2"`, `"turn-3"`, 1), http.StatusUnprocessableEntity)
 }
 
 func TestConversationHistorySurvivesModelReceiptMigration(t *testing.T) {
@@ -187,16 +202,18 @@ func TestConversationHistorySurvivesModelReceiptMigration(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `
 		ALTER TABLE turns DROP COLUMN model_name;
 		ALTER TABLE turns DROP COLUMN reasoning_effort;
+		ALTER TABLE turns DROP COLUMN model_id;
 		INSERT INTO turns(turn_id, project_id, request_id, user_text, answer, status, created_at)
 		VALUES ('old-turn', ?, 'old-request', '原问题', '原答复', 'COMPLETED', '2026-11-23T00:00:00.000000000Z')`, project.ProjectID); err != nil {
 		t.Fatal(err)
 	}
-	// Exercise the conversation migration independently of later schema changes.
-	if _, err := store.db.ExecContext(ctx, turnModelReceiptSchema); err != nil {
+	// Exercise both conversation migrations without changing unrelated tables.
+	if _, err := store.db.ExecContext(ctx, turnModelReceiptSchema+turnModelChoiceSchema); err != nil {
 		t.Fatal(err)
 	}
 	turn, err := store.getTurn(ctx, project.ProjectID, "old-turn")
-	if err != nil || turn.Text != "原问题" || turn.Answer != "原答复" || turn.Status != "COMPLETED" || turn.Model != "" || turn.ReasoningEffort != "" {
+	if err != nil || turn.Text != "原问题" || turn.Answer != "原答复" || turn.Status != "COMPLETED" ||
+		turn.ModelID != defaultModelID || turn.Model != "" || turn.ReasoningEffort != "" {
 		t.Fatalf("legacy turn after migration = %+v, error = %v", turn, err)
 	}
 }

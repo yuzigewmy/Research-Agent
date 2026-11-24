@@ -19,9 +19,14 @@ import (
 //go:embed prompts/conversation.md
 var conversationPrompt string
 
+const alternateConversationModelID = "conversation"
+
+var errConversationModelUnavailable = errors.New("requested conversation model is not configured")
+
 type conversation struct {
-	store *Store
-	model *inference.Client
+	store        *Store
+	model        *inference.Client
+	modelOptions []modelOption
 }
 
 func (c conversation) register(mux *http.ServeMux) {
@@ -56,12 +61,16 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的协作方式。")
 		return
 	}
+	if input.ModelID != "" && input.ModelID != defaultModelID && input.ModelID != alternateConversationModelID {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的对话模型。")
+		return
+	}
 	turn, created, err := c.startReply(r.Context(), r.PathValue("id"), input)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "项目不存在。")
 	case errors.Is(err, errRequestConflict):
-		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联不同的消息、资料、稿件选区或协作方式。")
+		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该请求编号已关联不同的消息、资料、稿件选区、协作方式或模型。")
 	case errors.Is(err, errInvalidTurnReference):
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", "请重新选择当前项目的文本、Word 资料或 PDF 选区。")
 	case errors.Is(err, errInvalidManuscriptSelection):
@@ -70,6 +79,8 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "TURN_RUNNING", "上一轮仍在回复。")
 	case errors.Is(err, errModelUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "MODEL_UNAVAILABLE", "请先配置对话模型。")
+	case errors.Is(err, errConversationModelUnavailable):
+		writeError(w, http.StatusUnprocessableEntity, "CONVERSATION_MODEL_UNAVAILABLE", "所选模型当前不可用，请刷新会话后重新选择。")
 	case err != nil:
 		writeStoreError(w, "begin turn", err)
 	case created:
@@ -79,8 +90,8 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
-	proposal, generateErr := c.generate(ctx, project, turn)
+func (c conversation) reply(ctx context.Context, model *inference.Client, project Project, turn Turn) {
+	proposal, generateErr := c.generate(ctx, model, project, turn)
 	event := TurnEvent{Kind: "done", Status: "COMPLETED", proposal: proposal}
 	if proposal.workflow != nil {
 		event.workflowModel = defaultWorkflowModel(c.model)
@@ -113,11 +124,11 @@ func (c conversation) reply(ctx context.Context, project Project, turn Turn) {
 		c.store.kickTaskQueue(project.ProjectID, c.model)
 	}
 	if event.Status == "FAILED" {
-		log.Printf("conversation %s: %v", turn.TurnID, generateErr)
+		log.Printf("conversation %s: reply failed", turn.TurnID)
 	}
 }
 
-func (c conversation) generate(ctx context.Context, project Project, turn Turn) (turnProposal, error) {
+func (c conversation) generate(ctx context.Context, model *inference.Client, project Project, turn Turn) (turnProposal, error) {
 	previous, err := c.store.listTurns(ctx, project.ProjectID, turn.ordinal, 6)
 	if err != nil {
 		return turnProposal{}, err
@@ -182,11 +193,11 @@ func (c conversation) generate(ctx context.Context, project Project, turn Turn) 
 		if err != nil {
 			return turnProposal{}, err
 		}
-		arguments, err = c.model.StreamWithTool(ctx, messages, tool, emit)
+		arguments, err = model.StreamWithTool(ctx, messages, tool, emit)
 		if err != nil {
 			return turnProposal{}, err
 		}
-	} else if err := c.model.Stream(ctx, messages, emit); err != nil {
+	} else if err := model.Stream(ctx, messages, emit); err != nil {
 		return turnProposal{}, err
 	}
 	if len(arguments) == 0 {
@@ -248,10 +259,11 @@ func (c conversation) list(w http.ResponseWriter, r *http.Request) {
 		items = items[:pageSize]
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Items           []Turn `json:"items"`
-		NextCursor      string `json:"nextCursor,omitempty"`
-		ModelConfigured bool   `json:"modelConfigured"`
-	}{items, next, c.model != nil})
+		Items           []Turn        `json:"items"`
+		NextCursor      string        `json:"nextCursor,omitempty"`
+		ModelConfigured bool          `json:"modelConfigured"`
+		ModelOptions    []modelOption `json:"modelOptions,omitempty"`
+	}{items, next, c.model != nil, c.modelOptions})
 }
 
 func eventCursor(raw string) (int64, error) {
