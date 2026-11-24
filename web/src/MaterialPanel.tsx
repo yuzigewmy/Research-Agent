@@ -106,7 +106,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(readTimeout)])
     void listMaterials(projectId, signal, pageRequest.cursor, pageRequest.q).then((page) => {
       if (controller.signal.aborted) return
-      setItems((current) => pageRequest.cursor ? mergeMaterials(current, page.items) : page.items)
+      setItems((current) => mergeMaterials(current, page.items))
       setNextCursor(page.nextCursor)
       setStatus({ kind: 'ready' })
     }).catch((error: unknown) => {
