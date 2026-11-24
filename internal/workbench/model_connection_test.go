@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,19 +25,27 @@ func TestModelConnectionChecksOnlyConfiguredService(t *testing.T) {
 			Tools           json.RawMessage     `json:"tools"`
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer "+credential ||
-			json.NewDecoder(r.Body).Decode(&request) != nil || request.Model != "fixture-chat" || request.ReasoningEffort != "max" ||
+			json.NewDecoder(r.Body).Decode(&request) != nil ||
 			!request.Stream || len(request.Tools) != 0 || len(request.Messages) != 1 ||
 			request.Messages[0] != (inference.Message{Role: "user", Content: "这是一条连接测试，请只回复：正常。"}) {
 			t.Error("unexpected model connection request")
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
-		if calls.Add(1) == 1 {
-			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"正常\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		call := calls.Add(1)
+		wantModel, wantEffort := "fixture-chat", "max"
+		if call > 1 {
+			wantModel, wantEffort = "fixture-review", "low"
+		}
+		if request.Model != wantModel || request.ReasoningEffort != wantEffort {
+			t.Errorf("probe %d used %q / %q, want %q / %q", call, request.Model, request.ReasoningEffort, wantModel, wantEffort)
+		}
+		if call == 2 {
+			http.Error(w, credential, http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, credential, http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"正常\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer upstream.Close()
 
@@ -77,22 +86,44 @@ func TestModelConnectionChecksOnlyConfiguredService(t *testing.T) {
 	}
 	request(offline, http.MethodPost, probe, `{}`, http.StatusServiceUnavailable)
 
-	handler := NewHandler(store, nil, HandlerConfig{Model: model})
-	const want = `{"configured":true,"model":"fixture-chat","reasoningEffort":"max"}`
-	if got := request(handler, http.MethodGet, route, "", http.StatusOK); got != want {
-		t.Fatalf("configured status: %s", got)
+	handler := NewHandler(store, nil, HandlerConfig{
+		Model:                 model,
+		ConversationModelName: "fixture-conversation", ConversationReasoningEffort: "high",
+		WorkflowModelName: "fixture-workflow", WorkflowReasoningEffort: "medium",
+		ReviewModelName: "fixture-review", ReviewReasoningEffort: "low",
+		EditModelName: "fixture-edit",
+	})
+	body := request(handler, http.MethodGet, route, "", http.StatusOK)
+	var info modelConnectionInfo
+	if err := json.Unmarshal([]byte(body), &info); err != nil || !info.Configured || info.Model != "fixture-chat" || info.ReasoningEffort != "max" {
+		t.Fatalf("unexpected default connection: %s (%v)", body, err)
+	}
+	want := []modelOption{
+		{ID: "default", modelSnapshot: modelSnapshot{Model: "fixture-chat", ReasoningEffort: "max"}},
+		{ID: "conversation", modelSnapshot: modelSnapshot{Model: "fixture-conversation", ReasoningEffort: "high"}},
+		{ID: "workflow", modelSnapshot: modelSnapshot{Model: "fixture-workflow", ReasoningEffort: "medium"}},
+		{ID: "review", modelSnapshot: modelSnapshot{Model: "fixture-review", ReasoningEffort: "low"}},
+		{ID: "edit", modelSnapshot: modelSnapshot{Model: "fixture-edit"}},
+	}
+	if !slices.Equal(info.ModelOptions, want) {
+		t.Fatalf("unexpected model options: %+v", info.ModelOptions)
 	}
 	request(handler, http.MethodPost, probe, `{"baseUrl":"https://other.invalid"}`, http.StatusBadRequest)
+	request(handler, http.MethodPost, probe, `{"modelId":"unsupported"}`, http.StatusBadRequest)
 	if calls.Load() != 0 {
 		t.Fatal("reading configuration or sending invalid input contacted the model")
 	}
 	if got := request(handler, http.MethodPost, probe, `{}`, http.StatusOK); got != `{"ok":true}` {
 		t.Fatalf("connection check: %s", got)
 	}
-	if got := request(handler, http.MethodPost, probe, `{}`, http.StatusBadGateway); !strings.Contains(got, `"code":"MODEL_CONNECTION_FAILED"`) {
+	const reviewProbe = `{"modelId":"review"}`
+	if got := request(handler, http.MethodPost, probe, reviewProbe, http.StatusBadGateway); !strings.Contains(got, `"code":"MODEL_CONNECTION_FAILED"`) {
 		t.Fatalf("connection failure: %s", got)
 	}
-	if calls.Load() != 2 {
-		t.Fatalf("model calls = %d, want 2", calls.Load())
+	if got := request(handler, http.MethodPost, probe, reviewProbe, http.StatusOK); got != `{"ok":true}` {
+		t.Fatalf("connection retry: %s", got)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("model calls = %d, want 3", calls.Load())
 	}
 }

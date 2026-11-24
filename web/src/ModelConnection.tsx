@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { readModelConnection, testModelConnection } from './modelConnectionApi'
-import type { ModelConnectionStatus } from './modelConnectionApi'
+import { connectionModelLabels, readModelConnection, testModelConnection } from './modelConnectionApi'
+import type { ConnectionModelId, ModelConnectionStatus } from './modelConnectionApi'
 import { errorMessage } from './projects'
 import './model-connection.css'
 
@@ -16,11 +16,16 @@ export function ModelConnection() {
 }
 
 function ConnectionDetails() {
-  const testErrorId = useId()
+  const id = useId()
+  const testErrorId = `${id}-error`
   const [config, setConfig] = useState<ConfigState>({ kind: 'loading' })
   const [reload, setReload] = useState(0)
   const [result, setResult] = useState<TestState>()
+  const [modelId, setModelId] = useState<ConnectionModelId>('default')
   const activeTest = useRef<AbortController | null>(null)
+  const options = config.kind === 'ready' ? config.status.modelOptions ?? [] : []
+  const selected = options.find((option) => option.id === modelId) ?? options[0]
+  const modelInfo = selected ?? (config.kind === 'ready' ? config.status : undefined)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -44,7 +49,7 @@ function ConnectionDetails() {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(35_000)])
     setResult({ kind: 'testing' })
     try {
-      await testModelConnection(signal)
+      await testModelConnection(selected?.id, signal)
       signal.throwIfAborted()
       setResult({ kind: 'success' })
     } catch (cause) {
@@ -70,10 +75,23 @@ function ConnectionDetails() {
       }}>重试读取配置</button>
     </>}
     {config.kind === 'ready' && (config.status.configured ? <>
+      {options.length > 1 && <div className="field model-connection-role">
+        <label htmlFor={`${id}-role`}>模型用途</label>
+        <select id={`${id}-role`} value={selected?.id} disabled={result?.kind === 'testing'} onChange={(event) => {
+          const option = options.find(({ id }) => id === event.currentTarget.value)
+          if (option) {
+            setModelId(option.id)
+            setResult(undefined)
+          }
+        }}>
+          {options.map(({ id }) => <option key={id} value={id}>{connectionModelLabels[id]}</option>)}
+        </select>
+      </div>}
       <dl className="model-connection-settings">
-        <div><dt>模型</dt><dd><bdi>{config.status.model || '未提供'}</bdi></dd></div>
-        <div><dt>推理档</dt><dd><bdi>{config.status.reasoningEffort || '默认'}</bdi></dd></div>
+        <div><dt>模型</dt><dd><bdi>{modelInfo?.model || '未提供'}</bdi></dd></div>
+        <div><dt>推理档</dt><dd><bdi>{modelInfo?.reasoningEffort || '默认'}</bdi></dd></div>
       </dl>
+      <p className="model-connection-note">测试会发送一条固定消息，验证所选模型的文本流式回复。</p>
       <button className="button outline" type="button" disabled={result?.kind === 'testing'}
         aria-describedby={result?.kind === 'error' ? testErrorId : undefined} onClick={() => void test()}>测试连接</button>
       {result?.kind === 'testing' && <p className="model-connection-note" role="status">正在测试连接…</p>}

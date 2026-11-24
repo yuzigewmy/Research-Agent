@@ -83,7 +83,7 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 工作台只连接用户自行配置的模型服务，不提供平台计费、充值、余额或账单。启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求在运行环境设置 `RESEARCH_MODEL_API_KEY`。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。项目和已有会话可离线浏览。一个数据目录运行一个服务实例。
 
-展开首页「模型连接」可查看当前模型和推理档位。点击「测试连接」才会向已配置服务发送一条固定消息，最多等待 30 秒。测试不发送项目资料，不写入对话历史，也不向浏览器返回服务地址或凭据。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
+展开首页「模型连接」，通过「模型用途」查看全局默认、已配置的对话和工作流备选，以及审稿和改稿的模型名称与推理档位。点击「测试连接」会向所选模型发送一条固定消息，最多等待 30 秒。测试验证文本流式回复，结果保留在当前面板。服务地址和凭据由部署环境管理。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
 
 使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。默认对话的 8192 token 上限包含推理和正文。
 

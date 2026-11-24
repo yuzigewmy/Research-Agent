@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,39 +14,50 @@ import (
 const modelConnectionPath = "/api/v1/model-connection"
 
 type modelConnectionInfo struct {
-	Configured      bool   `json:"configured"`
-	Model           string `json:"model,omitempty"`
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Configured bool `json:"configured"`
+	modelSnapshot
+	ModelOptions []modelOption `json:"modelOptions,omitempty"`
 }
 
-func registerModelConnection(mux *http.ServeMux, model *inference.Client) {
-	info := modelConnectionInfo{Configured: model != nil}
-	if model != nil {
-		info.Model, info.ReasoningEffort = model.ModelInfo()
+func registerModelConnection(mux *http.ServeMux, model *inference.Client, options []modelOption) {
+	info := modelConnectionInfo{
+		Configured: model != nil, modelSnapshot: snapshotModel(model, "", ""), ModelOptions: options,
 	}
 	mux.HandleFunc("GET "+modelConnectionPath, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, info)
 	})
 	mux.HandleFunc("POST "+modelConnectionPath+"/test", func(w http.ResponseWriter, r *http.Request) {
-		testModelConnection(w, r, model)
+		testModelConnection(w, r, model, options)
 	})
 	mux.HandleFunc(modelConnectionPath, methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(modelConnectionPath+"/test", methodNotAllowed("POST"))
 }
 
-func testModelConnection(w http.ResponseWriter, r *http.Request, model *inference.Client) {
-	var input *struct{}
+func testModelConnection(w http.ResponseWriter, r *http.Request, model *inference.Client, options []modelOption) {
+	var input *struct {
+		ModelID string `json:"modelId"`
+	}
 	if !readJSON(w, r, &input, 1024) {
 		return
 	}
 	if input == nil {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交一个空 JSON 对象。")
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交一个 JSON 对象以选择要测试的模型。")
 		return
 	}
 	if model == nil {
 		writeError(w, http.StatusServiceUnavailable, "MODEL_UNAVAILABLE", "请先在服务端配置模型连接。")
 		return
 	}
+	if input.ModelID == "" {
+		input.ModelID = defaultModelID
+	}
+	index := slices.IndexFunc(options, func(option modelOption) bool { return option.ID == input.ModelID })
+	if index < 0 {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "所选模型当前不可用。请重新打开模型连接。")
+		return
+	}
+	option := options[index]
+	model = model.ForModel(option.Model, option.ReasoningEffort)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()

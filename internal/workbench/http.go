@@ -44,12 +44,18 @@ type HandlerConfig struct {
 func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 	editModel := snapshotModel(config.Model, config.EditModelName, config.EditReasoningEffort)
+	reviewModel := snapshotModel(config.Model, config.ReviewModelName, config.ReviewReasoningEffort)
+	conversationOptions := configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort)
 	workflowOptions := configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort)
 	flowModels := configureWorkflowModels(workflowOptions, config.WorkflowModelTemplates)
-	registerModelConnection(mux, config.Model)
-	conversation{store: store, model: config.Model, editModel: editModel, workflowModels: flowModels,
-		modelOptions: configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort),
-	}.register(mux)
+	var connectionOptions []modelOption
+	if config.Model != nil {
+		connectionOptions = append(connectionOptions, conversationOptions...)
+		connectionOptions = append(connectionOptions, workflowOptions[1:]...)
+		connectionOptions = append(connectionOptions, modelOption{ID: "review", modelSnapshot: reviewModel}, modelOption{ID: "edit", modelSnapshot: editModel})
+	}
+	registerModelConnection(mux, config.Model, connectionOptions)
+	conversation{store: store, model: config.Model, editModel: editModel, workflowModels: flowModels, modelOptions: conversationOptions}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model, editModel: editModel}.register(mux)
 	store.registerTaskQueue(mux)
@@ -61,8 +67,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerSurveys(mux)
 	store.registerQuestionnaires(mux)
 	store.registerEngineeringPreview(mux)
-	manuscriptReviews{store: store, model: config.Model, editModel: editModel,
-		reviewModel: snapshotModel(config.Model, config.ReviewModelName, config.ReviewReasoningEffort)}.register(mux)
+	manuscriptReviews{store: store, model: config.Model, editModel: editModel, reviewModel: reviewModel}.register(mux)
 	selectionEdits{store: store, model: config.Model, editModel: editModel}.register(mux)
 	findingRechecks{store: store, model: config.Model}.register(mux)
 	source := config.literature
