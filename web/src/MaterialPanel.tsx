@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { MaterialImageGeneration } from './MaterialImageGeneration'
 import { MaterialImageReview } from './MaterialImageReview'
 import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
@@ -91,6 +92,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
   const [pageRequest, setPageRequest] = useState<{ q: string; cursor?: string }>({ q: '' })
   const [previewId, setPreviewId] = useState<string>()
   const [imageReviewId, setImageReviewId] = useState<string>()
+  const [generationOpen, setGenerationOpen] = useState(false)
   const [uploading, setUploading] = useState<'files' | 'folder'>()
   const [uploadedCount, setUploadedCount] = useState(0)
   const [failures, setFailures] = useState<UploadFailure[]>([])
@@ -204,6 +206,14 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           </>}
         </div>
       </div>
+      <details className="material-generation" onToggle={(event) => setGenerationOpen(event.currentTarget.open)}>
+        <summary>生成科研图片</summary>
+        {generationOpen && <MaterialImageGeneration projectId={projectId} onMaterial={(material) => {
+          if (matchesMaterialQuery(material.name, appliedQuery.current)) {
+            setItems((current) => mergeMaterials(current, [material]))
+          }
+        }} />}
+      </details>
       <form className="field" role="search" aria-label="资料检索" onSubmit={(event) => {
         event.preventDefault()
         applySearch(query)

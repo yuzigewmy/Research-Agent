@@ -7,6 +7,7 @@ export const connectionModelLabels = {
   review: '审稿',
   edit: '改稿',
   vision: '视觉识别',
+  image: '图片生成',
 } as const
 
 export type ConnectionModelId = keyof typeof connectionModelLabels
@@ -15,6 +16,7 @@ type ConnectionModelOption = {
   id: ConnectionModelId
   model: string
   reasoningEffort?: string
+  imageQuality?: string
 }
 
 export interface ModelConnectionStatus {
@@ -31,6 +33,7 @@ function isModelOption(value: unknown): value is ConnectionModelOption {
   return !!option && typeof option.id === 'string' && Object.hasOwn(connectionModelLabels, option.id)
     && typeof option.model === 'string' && option.model.trim().length > 0
     && (option.reasoningEffort === undefined || typeof option.reasoningEffort === 'string')
+    && (option.id !== 'image' || typeof option.imageQuality === 'string')
 }
 
 function isModelConnectionStatus(value: unknown): value is ModelConnectionStatus {

@@ -34,7 +34,7 @@ go build -tags embedweb -trimpath -ldflags "-s -w" -o ./dist/research-agent.exe 
 ./dist/research-agent.exe --listen 127.0.0.1:8080 --data-dir ./restored-data
 ```
 
-已有目录由恢复命令拒绝。恢复按清单核对数据库结构、关联记录及资料对象的大小与摘要，校验完成后再发布新目录。验证期间可以为恢复后的服务选用另一个端口。 [SQLite 一致性快照](https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause)
+已有目录由恢复命令拒绝。恢复按清单核对数据库结构、关联记录及资料对象的大小与摘要，校验完成后再发布新目录。快照中的排队生图任务在副本中标为中断并保留原请求记录。原工作区可能已在备份后处理该请求，重新生成前可到原工作区核对。验证期间可以为恢复后的服务选用另一个端口。 [SQLite 一致性快照](https://www.sqlite.org/lang_vacuum.html#vacuum_with_an_into_clause)
 
 ## 当前功能
 
@@ -102,7 +102,7 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 工作台只连接用户自行配置的模型服务，不提供平台计费、充值、余额或账单。启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求在运行环境设置 `RESEARCH_MODEL_API_KEY`。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。项目和已有会话可离线浏览。一个数据目录运行一个服务实例。
 
-展开首页「模型连接」，通过「模型用途」查看全局默认、已配置的对话和工作流备选，以及审稿和改稿的模型名称与推理档位。点击「测试连接」会验证所选角色的回复，最多等待 30 秒。文本角色收到固定消息，视觉角色收到内置测试图，结果保留在当前面板。服务地址和凭据由部署环境管理。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
+展开首页「模型连接」，通过「模型用途」查看全局默认、已配置的对话和工作流备选，以及审稿和改稿的模型名称与推理档位。点击「测试连接」会验证所选角色的回复。文本和视觉识别测试最多等待 30 秒，图片生成测试最多等待 2 分钟。测试结果保留在当前面板。服务地址和凭据由部署环境管理。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
 
 使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。默认对话的 8192 token 上限包含推理和正文。
 
@@ -117,3 +117,7 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 设置 `RESEARCH_VISION_MODEL_NAME` 和可选的 `RESEARCH_VISION_MODEL_REASONING_EFFORT` 后，在「模型连接」选择「视觉识别」并点击「测试连接」。测试向同一模型服务发送一张内置 PNG，核对回复中的两列方块数量。结果保留在当前面板。 [Chat Completions 图像输入](https://developers.openai.com/api/docs/guides/images-vision#analyze-images)
 
 在「项目资料」上传 PNG 或 JPEG，打开该版本的「图片复查」，点击「开始图片复查」。工作台将通过校验的图片原件发送给已配置的视觉模型。支持 8 MiB 以内的图片，长宽各不超过 4096 像素，总像素数不超过 400 万。后台报告记录图中标签、关系和可见问题，可查询和下载。报告包含资料版本、原图 SHA-256、模型、推理档和复查规则版本。排队任务重启后按原配置继续，运行中断后可按原图重试。
+
+设置 `RESEARCH_IMAGE_MODEL_NAME` 和可选的 `RESEARCH_IMAGE_MODEL_QUALITY` 后，在「模型连接」选择「图片生成」测试。质量默认为 `auto`，也可填写模型支持的质量档。生图沿用同一服务地址和凭据，通过 `/images/generations` 接收单张内联 PNG，上限为 8 MiB。 [图像生成接口](https://developers.openai.com/api/reference/resources/images/methods/generate.md)
+
+在「项目资料」展开「生成科研图片」，填写图形说明并选定尺寸。任务会保存说明、模型、质量档和尺寸，通过校验的 PNG 自动进入项目资料，可直接下载或复查。每个项目同时处理一笔生图请求。重新打开面板可查回最新记录，重放已接受的请求仍取得原回执。
