@@ -66,6 +66,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerWorkspace(mux)
 	mux.HandleFunc("POST /api/v1/workspace-backup", store.handleWorkspaceBackup)
 	mux.HandleFunc("/api/v1/workspace-backup", methodNotAllowed("POST"))
+	mux.HandleFunc("POST /api/v1/workspace-restore", store.handleWorkspaceRestore)
+	mux.HandleFunc("/api/v1/workspace-restore", methodNotAllowed("POST"))
 	mux.HandleFunc("GET /api/v1/workspace-storage", store.handleWorkspaceStorage)
 	mux.HandleFunc("/api/v1/workspace-storage", methodNotAllowed("GET, HEAD"))
 	store.registerWord(mux, config.WordPython)

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ const (
 	backupVersion            = 1
 	backupManifestName       = "manifest.json"
 	backupManifestMax        = 16 << 20
+	maxBackupObjects         = backupManifestMax / (2 * sha256.Size)
 	firstBackupSchemaVersion = 50
 )
 
@@ -33,11 +35,11 @@ type backupFile struct {
 }
 
 type backupManifest struct {
-	Version       int          `json:"version"`
-	SchemaVersion int          `json:"schemaVersion"`
-	CreatedAt     string       `json:"createdAt"`
-	Database      backupFile   `json:"database"`
-	Objects       []backupFile `json:"objects"`
+	Version       int           `json:"version"`
+	SchemaVersion int           `json:"schemaVersion"`
+	CreatedAt     string        `json:"createdAt"`
+	Database      backupFile    `json:"database"`
+	Objects       backupObjects `json:"objects"`
 }
 
 func (s *Store) handleWorkspaceBackup(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +77,20 @@ func (s *Store) handleWorkspaceBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="research-workspace-`+time.Now().UTC().Format("20060102-150405Z")+`.zip"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.Copy(w, file)
+	_, _ = io.Copy(backupDownloadWriter{w, http.NewResponseController(w)}, file)
+}
+
+// Healthy downloads can continue indefinitely. A stalled client releases the transfer lock.
+type backupDownloadWriter struct {
+	io.Writer
+	*http.ResponseController
+}
+
+func (w backupDownloadWriter) Write(data []byte) (int, error) {
+	if err := w.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return 0, err
+	}
+	return w.Writer.Write(data)
 }
 
 func writeBackupError(w http.ResponseWriter, err error) {
@@ -189,23 +204,43 @@ func backupInventory(ctx context.Context, databasePath string) (int, []backupFil
 	if err := verifyBackupDatabase(ctx, db, version); err != nil {
 		return 0, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT sha256, size FROM materials
-		UNION SELECT sha256, size FROM workspace_versions
-		UNION SELECT sha256, size FROM project_draft_materials ORDER BY sha256, size`)
+	// Bound values before they cross into Go. UNION ALL avoids sorting or
+	// deduplicating unvalidated values in SQLite.
+	rows, err := db.QueryContext(ctx, `SELECT
+		CASE WHEN typeof(sha256) = 'text' AND octet_length(sha256) IN (64, 128) THEN sha256 ELSE '' END,
+		CASE WHEN typeof(size) = 'integer' THEN size ELSE -1 END
+		FROM (SELECT sha256, size FROM materials
+			UNION ALL SELECT sha256, size FROM workspace_versions
+			UNION ALL SELECT sha256, size FROM project_draft_materials)`)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer rows.Close()
 	objects := make([]backupFile, 0)
+	sizes := make(map[string]int64)
 	for rows.Next() {
 		var object backupFile
 		if err := rows.Scan(&object.SHA256, &object.Size); err != nil {
 			return 0, nil, err
 		}
-		if len(objects) > 0 && objects[len(objects)-1].SHA256 == object.SHA256 {
-			return 0, nil, fmt.Errorf("资料对象 %s 的索引长度不一致。", object.SHA256)
+		if !validBackupFile(object) {
+			return 0, nil, errors.New("资料库含有无效的对象引用。")
 		}
+		if size, found := sizes[object.SHA256]; found {
+			if size != object.Size {
+				return 0, nil, fmt.Errorf("资料对象 %s 的索引长度不一致。", object.SHA256)
+			}
+			continue
+		}
+		if len(objects) == maxBackupObjects {
+			return 0, nil, errors.New("资料对象数量超出备份清单上限。")
+		}
+		sizes[object.SHA256] = object.Size
 		objects = append(objects, object)
 	}
-	return version, objects, rows.Err()
+	if err := rows.Err(); err != nil {
+		return 0, nil, err
+	}
+	slices.SortFunc(objects, func(a, b backupFile) int { return strings.Compare(a.SHA256, b.SHA256) })
+	return version, objects, ctx.Err()
 }

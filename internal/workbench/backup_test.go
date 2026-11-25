@@ -3,9 +3,12 @@ package workbench
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -181,6 +184,56 @@ func TestWorkspaceBackupRestoresVersionsAndRejectsDamagedObjects(t *testing.T) {
 	if _, err := os.Stat(badDestination); !os.IsNotExist(err) {
 		t.Fatalf("failed restore published a directory: %v", err)
 	}
+
+	upload := func(body []byte, size int64, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1/api/v1/workspace-restore", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/zip")
+		req.ContentLength = size
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != status {
+			t.Fatalf("upload restore: got %d want %d: %s", response.Code, status, response.Body)
+		}
+		return response
+	}
+	upload(nil, (1<<30)+1, http.StatusRequestEntityTooLarge)
+	upload(damaged.Bytes(), int64(damaged.Len()), http.StatusUnprocessableEntity)
+	if copies, err := filepath.Glob(filepath.Join(source, "restored-*")); err != nil || len(copies) != 0 {
+		t.Fatalf("failed upload published a restore: %v (%v)", copies, err)
+	}
+	limitDestination := filepath.Join(root, "database-limit")
+	if err := restoreWorkspace(ctx, bytes.NewReader(archive), int64(len(archive)), limitDestination, 1); !errors.Is(err, errRestoreDatabaseSize) {
+		t.Fatalf("expected browser database size error, got %v", err)
+	}
+	if _, err := os.Lstat(limitDestination); !os.IsNotExist(err) {
+		t.Fatalf("size check published a restore: %v", err)
+	}
+
+	var receipt struct{ Directory string }
+	response = upload(archive, int64(len(archive)), http.StatusCreated)
+	if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil || filepath.Dir(receipt.Directory) != source ||
+		!strings.HasPrefix(filepath.Base(receipt.Directory), "restored-") {
+		t.Fatalf("unexpected restore destination: %+v (%v)", receipt, err)
+	}
+	if stages, err := filepath.Glob(filepath.Join(source, ".research-restore-*")); err != nil || len(stages) != 0 {
+		t.Fatalf("upload left staging data: %v (%v)", stages, err)
+	}
+	copied, err := Open(receipt.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = copied.Close() })
+	version, err := copied.workspaceVersion(ctx, project.ProjectID, first.VersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, err := copied.readWorkspaceDocument(version); err != nil || doc.Content != original {
+		t.Fatalf("browser restore did not preserve the historical version: %+v (%v)", doc, err)
+	}
+	if current, err := store.workspaceFile(ctx, project.ProjectID, first.Path); err != nil || current != latest {
+		t.Fatalf("browser restore changed the active workspace: %+v (%v)", current, err)
+	}
 }
 
 func TestWorkspaceBackupRestoresSchema50AndOpensWithCurrentVersion(t *testing.T) {
@@ -303,6 +356,35 @@ func TestWorkspaceBackupRejectsIncompleteDatabase(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBackupUploadChecksDirectoryRecords(t *testing.T) {
+	for _, count := range []int{3, 65535} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			var archive bytes.Buffer
+			writer := zip.NewWriter(&archive)
+			for i := range count {
+				if _, err := writer.CreateHeader(&zip.FileHeader{Name: fmt.Sprintf("objects/%064x", i), Method: zip.Store}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data, size := archive.Bytes(), int64(archive.Len())
+			if err := validateRestoreDirectory(bytes.NewReader(data), size); err != nil {
+				t.Fatalf("directory from the ZIP writer was rejected: %v", err)
+			}
+			if count == 3 {
+				footer := data[len(data)-22:]
+				binary.LittleEndian.PutUint16(footer[8:10], 2)
+				binary.LittleEndian.PutUint16(footer[10:12], 2)
+				if err := validateRestoreDirectory(bytes.NewReader(data), size); !errors.Is(err, zip.ErrFormat) {
+					t.Fatalf("expected three records with a count of two to be rejected: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkspaceBackupRejectsInvalidMemberRanges(t *testing.T) {
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
@@ -323,8 +405,17 @@ func TestWorkspaceBackupRejectsInvalidMemberRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backupArchiveEntries(reader, size); err != nil {
+	if _, err := backupArchiveEntries(t.Context(), reader, size); err != nil {
 		t.Fatalf("regular member ranges were rejected: %v", err)
+	}
+	readCtx, cancel := context.WithCancel(t.Context())
+	cancelable, err := zip.NewReader(restoreReaderAt{readCtx, bytes.NewReader(archive.Bytes())}, size)
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backupArchiveEntries(t.Context(), cancelable, size); !errors.Is(err, context.Canceled) {
+		t.Fatalf("member header read lost cancellation: %v", err)
 	}
 	first, second := reader.File[0], reader.File[1]
 	start, err := first.DataOffset()
@@ -336,11 +427,11 @@ func TestWorkspaceBackupRejectsInvalidMemberRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.CompressedSize64, first.UncompressedSize64 = uint64(secondStart-start+1), uint64(secondStart-start+1)
-	if _, err := backupArchiveEntries(reader, size); err == nil || !strings.Contains(err.Error(), "重叠") {
+	if _, err := backupArchiveEntries(t.Context(), reader, size); err == nil || !strings.Contains(err.Error(), "重叠") {
 		t.Fatalf("overlapping member ranges were accepted: %v", err)
 	}
 	first.CompressedSize64, first.UncompressedSize64 = uint64(size), uint64(size)
-	if _, err := backupArchiveEntries(reader, size); err == nil || !strings.Contains(err.Error(), "范围无效") {
+	if _, err := backupArchiveEntries(t.Context(), reader, size); err == nil || !strings.Contains(err.Error(), "范围无效") {
 		t.Fatalf("out-of-bounds member range was accepted: %v", err)
 	}
 }

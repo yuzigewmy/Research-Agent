@@ -2,6 +2,7 @@ package workbench
 
 import (
 	"archive/zip"
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -20,9 +21,6 @@ func RestoreWorkspace(ctx context.Context, archivePath, destination string) erro
 	if err != nil {
 		return err
 	}
-	if err := requireNewWorkspace(destination); err != nil {
-		return err
-	}
 	archiveFile, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -32,11 +30,23 @@ func RestoreWorkspace(ctx context.Context, archivePath, destination string) erro
 	if err != nil {
 		return err
 	}
-	archive, err := zip.NewReader(archiveFile, info.Size())
+	return restoreWorkspace(ctx, archiveFile, info.Size(), destination, 0)
+}
+
+var errRestoreDatabaseSize = errors.New("备份数据库超过浏览器恢复上限。")
+
+func restoreWorkspace(ctx context.Context, source io.ReaderAt, archiveSize int64, destination string, databaseLimit int64) error {
+	if err := requireNewWorkspace(destination); err != nil {
+		return err
+	}
+	archive, err := zip.NewReader(restoreReaderAt{ctx, source}, archiveSize)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err != nil {
 		return err
 	}
-	entries, err := backupArchiveEntries(archive, info.Size())
+	entries, err := backupArchiveEntries(ctx, archive, archiveSize)
 	if err != nil {
 		return err
 	}
@@ -46,6 +56,12 @@ func RestoreWorkspace(ctx context.Context, archivePath, destination string) erro
 	}
 	if len(entries) != len(manifest.Objects)+2 {
 		return errors.New("备份成员数量与清单不一致。")
+	}
+	if databaseLimit > 0 && manifest.Database.Size > databaseLimit {
+		return errRestoreDatabaseSize
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(destination), ".research-restore-")
 	if err != nil {
@@ -69,9 +85,6 @@ func RestoreWorkspace(ctx context.Context, archivePath, destination string) erro
 		return err
 	}
 	for _, object := range objects {
-		if !validBackupFile(object) {
-			return errors.New("备份含有无效的对象引用。")
-		}
 		if err := extractBackupFile(ctx, entries, "objects/"+object.SHA256, filepath.Join(objectDir, object.SHA256), object); err != nil {
 			return err
 		}
@@ -85,17 +98,38 @@ func RestoreWorkspace(ctx context.Context, archivePath, destination string) erro
 	return os.Rename(stage, destination)
 }
 
-func backupArchiveEntries(archive *zip.Reader, archiveSize int64) (map[string]*zip.File, error) {
+type restoreReaderAt struct {
+	context.Context
+	io.ReaderAt
+}
+
+func (r restoreReaderAt) ReadAt(buffer []byte, offset int64) (int, error) {
+	if err := r.Err(); err != nil {
+		return 0, err
+	}
+	return r.ReaderAt.ReadAt(buffer, offset)
+}
+
+func backupArchiveEntries(ctx context.Context, archive *zip.Reader, archiveSize int64) (map[string]*zip.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	type span struct{ start, end int64 }
 	entries := make(map[string]*zip.File, len(archive.File))
 	ranges := make([]span, 0, len(archive.File))
 	for _, entry := range archive.File {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if entries[entry.Name] != nil || entry.Method != zip.Store || !entry.Mode().IsRegular() ||
 			entry.CompressedSize64 != entry.UncompressedSize64 {
 			return nil, errors.New("备份压缩包含有重复或不受支持的成员。")
 		}
 		offset, err := entry.DataOffset()
-		if err != nil || offset < 0 || offset > archiveSize || entry.CompressedSize64 > uint64(archiveSize-offset) {
+		if err != nil {
+			return nil, err
+		}
+		if offset < 0 || offset > archiveSize || entry.CompressedSize64 > uint64(archiveSize-offset) {
 			return nil, errors.New("备份成员的数据范围无效。")
 		}
 		if entry.CompressedSize64 != 0 {
@@ -109,7 +143,7 @@ func backupArchiveEntries(archive *zip.Reader, archiveSize int64) (map[string]*z
 			return nil, errors.New("备份成员的数据范围重叠。")
 		}
 	}
-	return entries, nil
+	return entries, ctx.Err()
 }
 
 func verifyBackupDatabase(ctx context.Context, db *sql.DB, version int) error {
@@ -126,12 +160,8 @@ func verifyBackupDatabase(ctx context.Context, db *sql.DB, version int) error {
 	if err != nil {
 		return err
 	}
-	actual, err := readBackupSchema(ctx, db)
-	if err != nil {
+	if err := checkBackupSchema(ctx, db, want); err != nil {
 		return err
-	}
-	if !slices.Equal(actual, want) {
-		return errors.New("备份数据库的结构与当前资料库版本不一致。")
 	}
 	var integrity string
 	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check(1)`).Scan(&integrity); err != nil {
@@ -155,8 +185,7 @@ type backupSchemaObject struct{ kind, name, table, definition string }
 // Compare schema objects without their page offsets, which VACUUM can change.
 // https://www.sqlite.org/schematab.html
 func readBackupSchema(ctx context.Context, db *sql.DB) ([]backupSchemaObject, error) {
-	rows, err := db.QueryContext(ctx, `SELECT type, name, tbl_name, COALESCE(sql, '')
-		FROM main.sqlite_schema ORDER BY type, name`)
+	rows, err := db.QueryContext(ctx, `SELECT type, name, tbl_name, COALESCE(sql, '') FROM main.sqlite_schema`)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +201,45 @@ func readBackupSchema(ctx context.Context, db *sql.DB) ([]backupSchemaObject, er
 	return objects, rows.Err()
 }
 
+func checkBackupSchema(ctx context.Context, db *sql.DB, want []backupSchemaObject) error {
+	remaining := make(map[backupSchemaObject]struct{}, len(want))
+	var maxName, maxDefinition int
+	for _, object := range want {
+		remaining[object] = struct{}{}
+		maxName = max(maxName, len(object.name), len(object.table))
+		maxDefinition = max(maxDefinition, len(object.definition))
+	}
+	// Check against the version's known DDL without sorting or copying arbitrary schema text.
+	rows, err := db.QueryContext(ctx, `SELECT
+		CASE WHEN octet_length(type) <= 14 THEN type ELSE '' END,
+		CASE WHEN octet_length(name) <= ?1 THEN name ELSE '' END,
+		CASE WHEN octet_length(tbl_name) <= ?1 THEN tbl_name ELSE '' END,
+		CASE WHEN sql IS NULL THEN '' WHEN octet_length(sql) <= ?2 THEN sql ELSE ' ' END
+		FROM main.sqlite_schema LIMIT ?3`, 2*maxName, 2*maxDefinition, len(want)+1)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	mismatch := errors.New("备份数据库的结构与对应资料库版本不一致。")
+	for rows.Next() {
+		var object backupSchemaObject
+		if err := rows.Scan(&object.kind, &object.name, &object.table, &object.definition); err != nil {
+			return err
+		}
+		if _, found := remaining[object]; !found {
+			return mismatch
+		}
+		delete(remaining, object)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(remaining) != 0 {
+		return mismatch
+	}
+	return nil
+}
+
 func requireNewWorkspace(destination string) error {
 	_, err := os.Lstat(destination)
 	switch {
@@ -182,6 +250,39 @@ func requireNewWorkspace(destination string) error {
 	default:
 		return err
 	}
+}
+
+type backupObjects []backupFile
+
+func (objects *backupObjects) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	opening, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if opening == nil {
+		*objects = nil
+		return nil
+	}
+	if opening != json.Delim('[') {
+		return errors.New("备份对象清单需要使用数组。")
+	}
+	files := make(backupObjects, 0)
+	for decoder.More() {
+		if len(files) == maxBackupObjects {
+			return errors.New("资料对象数量超出备份清单上限。")
+		}
+		var file backupFile
+		if err := decoder.Decode(&file); err != nil {
+			return err
+		}
+		if !validBackupFile(file) {
+			return errors.New("备份清单含有无效的对象引用。")
+		}
+		files = append(files, file)
+	}
+	*objects = files
+	return nil
 }
 
 func readBackupManifest(entry *zip.File) (backupManifest, error) {
