@@ -128,3 +128,5 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 设置 `RESEARCH_IMAGE_MODEL_NAME` 和可选的 `RESEARCH_IMAGE_MODEL_QUALITY` 后，在「模型连接」选择「图片生成」测试。质量默认为 `auto`，也可填写模型支持的质量档。生图沿用同一服务地址和凭据，通过 `/images/generations` 接收单张内联 PNG，上限为 8 MiB。 [图像生成接口](https://developers.openai.com/api/reference/resources/images/methods/generate.md)
 
 在「项目资料」展开「生成科研图片」，填写图形说明并选定尺寸。任务会保存说明、模型、质量档和尺寸，通过校验的 PNG 自动进入项目资料，可直接下载或复查。每个项目同时处理一笔生图请求。重新打开面板可查回最新记录，重放已接受的请求仍取得原回执。
+
+生成任务结束后，可选择「按原规格重绘」。确认页列出原任务的说明、尺寸和当前接入的模型及质量。确认后创建新任务，回执显示原生成记录编号。提交响应丢失时可重试同一重绘请求，取回已接受的回执。
