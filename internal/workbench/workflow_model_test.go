@@ -190,6 +190,7 @@ func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER notify_task_status; DROP TABLE task_notifications;
+		DROP TABLE image_generation_sources;
 		DROP TABLE image_generations;
 		DROP TABLE image_reviews;
 		ALTER TABLE workflow_requests DROP COLUMN requested_model_id;

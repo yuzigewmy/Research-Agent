@@ -48,13 +48,17 @@ func TestImageGenerationKeepsRequestAndMaterialAcrossRestart(t *testing.T) {
 	}
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
+		call := calls.Add(1)
+		wantModel, wantQuality := "image-before", "low"
+		if call == 2 {
+			wantModel, wantQuality = "image-after", "high"
+		}
 		var request struct {
 			Model, Prompt, Size, Quality string
 		}
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/images/generations" || json.NewDecoder(r.Body).Decode(&request) != nil ||
-			request.Model != "image-before" || request.Prompt != prompt || request.Size != "1536x1024" || request.Quality != "low" {
-			t.Errorf("generation request did not use the saved configuration: %+v", request)
+		if call > 2 || r.Method != http.MethodPost || r.URL.Path != "/v1/images/generations" || json.NewDecoder(r.Body).Decode(&request) != nil ||
+			request.Model != wantModel || request.Prompt != prompt || request.Size != "1536x1024" || request.Quality != wantQuality {
+			t.Errorf("generation request %d did not use the saved configuration: %+v", call, request)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -111,7 +115,17 @@ func TestImageGenerationKeepsRequestAndMaterialAcrossRestart(t *testing.T) {
 	if err != nil || claimed.Status != taskRunning || claimed.TaskID != interrupted.GenerationID || calls.Load() != 0 {
 		t.Fatalf("could not set up a claimed generation: %+v (%v)", claimed, err)
 	}
-	// The backup observes a queued task before the original workspace dispatches it.
+	redraw := fmt.Sprintf(`{"requestId":"redraw-1","sourceGenerationId":%q}`, queued.GenerationID)
+	if res := request(handler, http.MethodPost, path, redraw, http.StatusConflict); !strings.Contains(res.Body.String(), "IMAGE_GENERATION_SOURCE_ACTIVE") {
+		t.Fatalf("redraw accepted an active source: %s", res.Body)
+	}
+	request(handler, http.MethodPost, otherPath, redraw, http.StatusNotFound)
+	request(handler, http.MethodPost, path, strings.TrimSuffix(redraw, "}")+`,"size":"1024x1024"}`, http.StatusBadRequest)
+
+	// Preserve the queued receipts in the previous schema before reopening.
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE image_generation_sources; PRAGMA user_version = 53`); err != nil {
+		t.Fatal(err)
+	}
 	var archive bytes.Buffer
 	if err := store.writeWorkspaceBackup(ctx, t.TempDir(), &archive); err != nil {
 		t.Fatal(err)
@@ -204,5 +218,63 @@ func TestImageGenerationKeepsRequestAndMaterialAcrossRestart(t *testing.T) {
 	}
 	if materials, err := store.listMaterials(ctx, otherID, "", 0, 1); err != nil || len(materials) != 0 {
 		t.Fatalf("late generation output was published: %+v (%v)", materials, err)
+	}
+
+	// Queue a redraw using the new deployment configuration, then restart before dispatch.
+	store.tasks.mu.Lock()
+	store.tasks.closing = true
+	store.tasks.mu.Unlock()
+	redrawn := receipt(request(handler, http.MethodPost, path, redraw, http.StatusAccepted)).Generation
+	if redrawn == nil || redrawn.GenerationID == queued.GenerationID || redrawn.SourceGenerationID != queued.GenerationID ||
+		redrawn.Status != taskQueued || redrawn.Prompt != prompt || redrawn.Size != queued.Size ||
+		redrawn.Model != "image-after" || redrawn.Quality != "high" {
+		t.Fatalf("redraw did not freeze the original specification and current model: %+v", redrawn)
+	}
+	request(handler, http.MethodPost, path, strings.Replace(redraw, queued.GenerationID, redrawn.GenerationID, 1), http.StatusConflict)
+	request(handler, http.MethodPost, path, strings.Replace(start, "generation-1", "redraw-1", 1), http.StatusConflict)
+	var redrawArchive bytes.Buffer
+	if err := store.writeWorkspaceBackup(ctx, t.TempDir(), &redrawArchive); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResumeQueuedTasks(ctx, model); err != nil {
+		t.Fatal(err)
+	}
+	store.tasks.wg.Wait()
+	offline = NewHandler(store, nil, HandlerConfig{})
+	redrawResult := receipt(request(offline, http.MethodPost, path, redraw, http.StatusOK)).Generation
+	if redrawResult == nil || redrawResult.GenerationID != redrawn.GenerationID || redrawResult.SourceGenerationID != queued.GenerationID ||
+		redrawResult.Status != taskSucceeded || redrawResult.Material == nil || redrawResult.Material.SHA256 != digest ||
+		redrawResult.Material.MaterialID == completed.Material.MaterialID || calls.Load() != 2 {
+		t.Fatalf("redraw replay changed the saved task or original image: %+v, calls %d", redrawResult, calls.Load())
+	}
+	if original := request(offline, http.MethodGet, materialPath, "", http.StatusOK); !bytes.Equal(original.Body.Bytes(), picture.Bytes()) {
+		t.Fatal("redraw changed the original material")
+	}
+
+	redrawDestination := filepath.Join(t.TempDir(), "restored")
+	if err := restoreWorkspace(ctx, bytes.NewReader(redrawArchive.Bytes()), int64(redrawArchive.Len()), redrawDestination, maxRestoreDatabaseBytes); err != nil {
+		t.Fatal(err)
+	}
+	redrawCopy, err := Open(redrawDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer redrawCopy.Close()
+	redrawCopyHandler := NewHandler(redrawCopy, nil, config)
+	if err := redrawCopy.ResumeQueuedTasks(ctx, model); err != nil {
+		t.Fatal(err)
+	}
+	copiedRedraw := receipt(request(redrawCopyHandler, http.MethodPost, path, redraw, http.StatusOK)).Generation
+	redrawCopy.tasks.wg.Wait()
+	if copiedRedraw == nil || copiedRedraw.GenerationID != redrawn.GenerationID || copiedRedraw.SourceGenerationID != queued.GenerationID ||
+		copiedRedraw.Status != taskInterrupted || calls.Load() != 2 {
+		t.Fatalf("restored redraw lost its lineage or dispatched again: %+v, calls %d", copiedRedraw, calls.Load())
 	}
 }

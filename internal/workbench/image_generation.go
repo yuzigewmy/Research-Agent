@@ -35,28 +35,43 @@ const imageGenerationSchema = `
 	PRAGMA user_version = 53;
 `
 
+const imageGenerationSourcesSchema = `
+	CREATE TABLE image_generation_sources (
+		project_id TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		source_task_id TEXT NOT NULL CHECK (source_task_id <> task_id),
+		PRIMARY KEY (project_id, task_id),
+		FOREIGN KEY (project_id, task_id) REFERENCES image_generations(project_id, task_id),
+		FOREIGN KEY (project_id, source_task_id) REFERENCES image_generations(project_id, task_id)
+	);
+	PRAGMA user_version = 54;
+`
+
 var (
 	errImageGenerationBusy       = errors.New("此项目已有排队或运行中的生图任务。请查看该任务的进度。")
 	errImageGenerationConnection = errors.New("生图任务记录的服务地址已变更。请核对当前连接后再提交。")
 	errImageGenerationOutput     = errors.New("生图服务返回的 PNG 未通过文件或尺寸校验。可以重新生成。")
+	errImageGenerationSource     = errors.New("请等原生图任务结束并核对结果，再按原规格重绘。")
 )
 
 type imageGeneration struct {
-	GenerationID string    `json:"generationId"`
-	Status       string    `json:"status"`
-	Prompt       string    `json:"prompt"`
-	Size         string    `json:"size"`
-	Quality      string    `json:"quality"`
-	Model        string    `json:"model"`
-	CreatedAt    string    `json:"createdAt"`
-	Message      string    `json:"message,omitempty"`
-	Material     *Material `json:"material,omitempty"`
+	GenerationID       string    `json:"generationId"`
+	SourceGenerationID string    `json:"sourceGenerationId,omitempty"`
+	Status             string    `json:"status"`
+	Prompt             string    `json:"prompt"`
+	Size               string    `json:"size"`
+	Quality            string    `json:"quality"`
+	Model              string    `json:"model"`
+	CreatedAt          string    `json:"createdAt"`
+	Message            string    `json:"message,omitempty"`
+	Material           *Material `json:"material,omitempty"`
 }
 
 type imageGenerationInput struct {
-	RequestID string `json:"requestId"`
-	Prompt    string `json:"prompt"`
-	Size      string `json:"size"`
+	RequestID          string `json:"requestId"`
+	Prompt             string `json:"prompt"`
+	Size               string `json:"size"`
+	SourceGenerationID string `json:"sourceGenerationId"`
 }
 
 type imageGenerationResponse struct {
@@ -122,9 +137,17 @@ func (api imageGenerations) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
-	width, _ := imageGenerationDimensions(input.Size)
-	if !validRequestID(input.RequestID) || !validTaskInstruction(input.Prompt) || width == 0 {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的请求编号、8 KiB 以内的生图说明和支持的图片尺寸。")
+	if !validRequestID(input.RequestID) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的请求编号。")
+		return
+	}
+	if input.SourceGenerationID != "" {
+		if !validRequestID(input.SourceGenerationID) || input.Prompt != "" || input.Size != "" {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "按原规格重绘时，请只指定原生图记录和请求编号。")
+			return
+		}
+	} else if width, _ := imageGenerationDimensions(input.Size); !validTaskInstruction(input.Prompt) || width == 0 {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供 8 KiB 以内的生图说明和支持的图片尺寸。")
 		return
 	}
 	projectID := r.PathValue("id")
@@ -155,6 +178,8 @@ func writeImageGenerationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "没有找到该项目或生图记录。")
 	case errors.Is(err, errImageGenerationBusy):
 		writeError(w, http.StatusConflict, "IMAGE_GENERATION_BUSY", errImageGenerationBusy.Error())
+	case errors.Is(err, errImageGenerationSource):
+		writeError(w, http.StatusConflict, "IMAGE_GENERATION_SOURCE_ACTIVE", errImageGenerationSource.Error())
 	case errors.Is(err, errModelUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "IMAGE_GENERATION_UNAVAILABLE", "请先在服务端配置生图模型。")
 	default:
@@ -163,8 +188,11 @@ func writeImageGenerationError(w http.ResponseWriter, err error) {
 }
 
 func lookupImageGeneration(ctx context.Context, db workspaceQuery, projectID, generationID string) (*imageGeneration, error) {
-	query := `SELECT t.task_id, t.status, g.prompt, g.size, g.quality, t.model_name, t.created_at, t.message, COALESCE(g.material_id, '')
-		FROM image_generations g JOIN tasks t USING (project_id, task_id) WHERE g.project_id = ?`
+	query := `SELECT t.task_id, t.status, g.prompt, g.size, g.quality, t.model_name, t.created_at, t.message,
+		COALESCE(g.material_id, ''), COALESCE(src.source_task_id, '')
+		FROM image_generations g JOIN tasks t USING (project_id, task_id)
+		LEFT JOIN image_generation_sources src ON src.project_id = g.project_id AND src.task_id = g.task_id
+		WHERE g.project_id = ?`
 	args := []any{projectID}
 	if generationID != "" {
 		query += ` AND g.task_id = ?`
@@ -176,7 +204,7 @@ func lookupImageGeneration(ctx context.Context, db workspaceQuery, projectID, ge
 	var materialID string
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&generation.GenerationID, &generation.Status,
 		&generation.Prompt, &generation.Size, &generation.Quality, &generation.Model, &generation.CreatedAt,
-		&generation.Message, &materialID); err != nil {
+		&generation.Message, &materialID, &generation.SourceGenerationID); err != nil {
 		return nil, err
 	}
 	if generation.Status == taskSucceeded {
@@ -207,13 +235,27 @@ func (s *Store) queueImageGeneration(ctx context.Context, projectID string, inpu
 		if err != nil {
 			return nil, false, err
 		}
-		if generation.Prompt != input.Prompt || generation.Size != input.Size {
+		if generation.SourceGenerationID != input.SourceGenerationID ||
+			(input.SourceGenerationID == "" && (generation.Prompt != input.Prompt || generation.Size != input.Size)) {
 			return nil, false, errRequestConflict
 		}
 		return generation, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, false, err
+	}
+
+	if input.SourceGenerationID != "" {
+		source, err := lookupImageGeneration(ctx, tx, projectID, input.SourceGenerationID)
+		if err != nil {
+			return nil, false, err
+		}
+		switch source.Status {
+		case taskSucceeded, taskFailed, taskCancelled, taskInterrupted:
+			input.Prompt, input.Size = source.Prompt, source.Size
+		default:
+			return nil, false, errImageGenerationSource
+		}
 	}
 
 	var busy bool
@@ -228,17 +270,28 @@ func (s *Store) queueImageGeneration(ctx context.Context, projectID string, inpu
 	if role.Model == "" {
 		return nil, false, errModelUnavailable
 	}
-	generation := &imageGeneration{GenerationID: rand.Text(), Status: taskQueued, Prompt: input.Prompt,
-		Size: input.Size, Quality: role.quality, Model: role.Model, CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+	generation := &imageGeneration{GenerationID: rand.Text(), SourceGenerationID: input.SourceGenerationID,
+		Status: taskQueued, Prompt: input.Prompt, Size: input.Size, Quality: role.quality,
+		Model: role.Model, CreatedAt: time.Now().UTC().Format(createdAtLayout)}
+	instruction := "生成科研图片"
+	if generation.SourceGenerationID != "" {
+		instruction = "按原规格重绘科研图片"
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
 		(project_id, task_id, instruction, status, created_at, queued_seq, kind, model_name, model_connection)
-		VALUES (?, ?, '生成科研图片', 'QUEUED', ?, `+nextTaskQueuePosition+`, ?, ?, ?)`,
-		projectID, generation.GenerationID, generation.CreatedAt, projectID, imageGenerationTask, role.Model, role.connection); err != nil {
+		VALUES (?, ?, ?, 'QUEUED', ?, `+nextTaskQueuePosition+`, ?, ?, ?)`,
+		projectID, generation.GenerationID, instruction, generation.CreatedAt, projectID, imageGenerationTask, role.Model, role.connection); err != nil {
 		return nil, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO image_generations (project_id, task_id, prompt, size, quality)
 		VALUES (?, ?, ?, ?, ?)`, projectID, generation.GenerationID, generation.Prompt, generation.Size, generation.Quality); err != nil {
 		return nil, false, err
+	}
+	if generation.SourceGenerationID != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO image_generation_sources (project_id, task_id, source_task_id)
+			VALUES (?, ?, ?)`, projectID, generation.GenerationID, generation.SourceGenerationID); err != nil {
+			return nil, false, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO task_requests (project_id, task_id, request_id, action, expected_revision)
 		VALUES (?, ?, ?, ?, 0)`, projectID, generation.GenerationID, input.RequestID, imageGenerationTask); err != nil {
