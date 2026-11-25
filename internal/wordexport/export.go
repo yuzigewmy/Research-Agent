@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -24,6 +25,21 @@ var workerScript string
 // system or virtual environment site-packages.
 func Export(ctx context.Context, pythonExecutable string, source string) ([]byte, error) {
 	return exportDocument(ctx, pythonExecutable, strings.NewReader(source))
+}
+
+var docxVersionPattern = regexp.MustCompile(`^[0-9][0-9A-Za-z.+-]{0,39}$`)
+
+// Probe exports and reopens a fixed sample in the configured environment.
+func Probe(ctx context.Context, pythonExecutable string) (string, error) {
+	output, err := exportDocument(ctx, pythonExecutable, strings.NewReader("# 组件检查\n\nWord 样例。\n"), "--probe")
+	if err != nil {
+		return "", err
+	}
+	version := strings.TrimSpace(string(output))
+	if !docxVersionPattern.MatchString(version) {
+		return "", errors.New("Word component probe returned an invalid version")
+	}
+	return version, nil
 }
 
 // Figure describes an already validated flow diagram and its editable caption.

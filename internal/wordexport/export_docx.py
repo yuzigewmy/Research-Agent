@@ -286,6 +286,14 @@ def main():
         add_figures(document, payload["figures"], payload["fontPath"])
     output = BytesIO()
     document.save(output)
+    if sys.argv[1:] == ["--probe"]:
+        from docx import __version__
+
+        output.seek(0)
+        if Document(output).paragraphs[0].text != "组件检查":
+            raise ValueError("Word probe did not preserve the sample heading")
+        print(__version__)
+        return
     sys.stdout.buffer.write(output.getbuffer())
 
 
