@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { MaterialImageGeneration } from './MaterialImageGeneration'
+import { MaterialImagePreview } from './MaterialImagePreview'
 import { MaterialImageReview } from './MaterialImageReview'
-import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
+import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
 import { errorMessage } from './projects'
 import { turnReferenceLimit } from './turns'
@@ -248,13 +249,13 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           const hasText = !isPdf && !isArchive && (material.kind === 'text' || isWord)
           const imageType = material.kind === 'file' && /\.(png|jpe?g)$/i.test(material.name)
             ? (/\.png$/i.test(material.name) ? 'PNG' : 'JPEG') : undefined
-          const canReviewImage = !!imageType && material.size > 0 && material.size <= 8 * 1024 * 1024
+          const canViewImage = !!imageType && material.size > 0 && material.size <= 8 * 1024 * 1024
           const reviewOpen = imageReviewId === material.materialId
           const reviewRegion = `${headingId}-image-review-${material.materialId}`
           const typeLabel = imageType ?? (isArchive ? archiveFormatLabel(material.name)
             : isPdf ? 'PDF' : isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件')
-          const canPreview = isPdf || hasText
-          const previewLabel = isOpen ? '收起预览' : isPdf ? '预览 PDF' : '预览'
+          const canPreview = isPdf || canViewImage || hasText
+          const previewLabel = isOpen ? '收起预览' : isPdf ? '预览 PDF' : canViewImage ? '预览图片' : '预览'
           const downloadPath = materialDownloadPath(projectId, material.materialId)
           const wordScopeId = isWord ? `${previewRegion}-scope` : undefined
           const referenced = referenceIds.includes(material.materialId)
@@ -277,7 +278,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                   aria-describedby={wordScopeId} onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
                 <a className="button outline" href={downloadPath}
                   aria-label={`下载原件：${material.name}`} download>下载原件</a>
-                {canReviewImage && <button className="button outline" type="button"
+                {canViewImage && <button className="button outline" type="button"
                   aria-label={`${reviewOpen ? '收起图片复查' : '图片复查'}：${material.name}`}
                   aria-expanded={reviewOpen} aria-controls={reviewRegion}
                   onClick={() => setImageReviewId(reviewOpen ? undefined : material.materialId)}>
@@ -288,7 +289,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                   aria-describedby={atLimit ? referenceLimitHint : undefined}
                   onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
               </div>
-              {canReviewImage && <div className="material-preview" id={reviewRegion} hidden={!reviewOpen}>
+              {canViewImage && <div className="material-preview" id={reviewRegion} hidden={!reviewOpen}>
                 {reviewOpen && <MaterialImageReview projectId={projectId} material={material} />}
               </div>}
               {canPreview && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
@@ -297,7 +298,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                     <PdfPreview key={downloadPath} url={downloadPath} quoteBlocked={atLimit}
                       onQuote={onPdfQuote && ((page, text) => onPdfQuote(material, page, text))} />
                   </Suspense>
-                ) : <MaterialPreviewContent material={material} projectId={projectId} />)}
+                ) : canViewImage ? <MaterialImagePreview key={material.materialId} name={material.name}
+                  url={materialImagePreviewPath(projectId, material.materialId)} />
+                  : <MaterialPreviewContent material={material} projectId={projectId} />)}
               </div>}
             </li>
           )

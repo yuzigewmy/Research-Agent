@@ -92,3 +92,7 @@ export function getMaterialPreview(projectId: string, materialId: string, signal
 export function materialDownloadPath(projectId: string, materialId: string) {
   return `${materialPath(projectId, materialId)}/download`
 }
+
+export function materialImagePreviewPath(projectId: string, materialId: string) {
+  return `${materialPath(projectId, materialId)}/image-preview`
+}
