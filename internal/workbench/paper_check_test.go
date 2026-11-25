@@ -89,3 +89,129 @@ func TestPaperCheckIgnoresDisclosureInsideFourBacktickExample(t *testing.T) {
 		t.Fatalf("disclosure heading inside the example was counted:\n%s", report)
 	}
 }
+
+func TestPaperCheckReportsDuplicateCaptionNumbers(t *testing.T) {
+	mixed := strings.Join([]string{
+		"# 题目",
+		"",
+		"## 摘要",
+		"正文引用见图 1、Figure 1 和表 1，不单独成题注。",
+		"",
+		"图 1：首次中文图",
+		"表 1: 首次中文表",
+		"图 2：另一图号",
+		"",
+		"```text",
+		"图 1：围栏内不计入",
+		"Table 1: Fence caption",
+		"```",
+		"",
+		"> 图 1：引用块不计入",
+		"> Table 2: Quote caption",
+		"",
+		"Figure 1. Same figure class",
+		"Table 1: Same table class",
+		"图1：中文标识后无空格",
+		"**图 01：整行加粗且前导零**",
+		"**Table 01: Bold leading zero**",
+		"Figure 2. Second figure duplicates",
+		"表 2: 与图 2 互不冲突",
+		"Figure1. No space after English marker",
+		"图 3 没有标点所以不计",
+		"见图 2：正文里的冒号也不计",
+		"Table 3: English table first",
+		"表 3：与 Table 3 同类",
+		"Figure 1.2. Segmented identifier",
+	}, "\n")
+
+	var capped []string
+	capped = append(capped, "图 1：首次")
+	for i := 0; i < 25; i++ {
+		capped = append(capped, "Figure 1. duplicate")
+	}
+
+	tests := []struct {
+		name    string
+		source  string
+		want    []string
+		absent  []string
+		notices int
+	}{
+		{
+			name:   "中英文同类重复且图表不冲突、围栏引用块和正文不计",
+			source: mixed,
+			want: []string{
+				"# 稿件结构检查",
+				"稿件 SHA-256",
+				"摘要：已识别，第 3 行。",
+				"引言：请核对，未识别到对应标题。",
+				"AI 使用披露：未识别到对应标题。请按投稿要求核对。",
+				"重复图表编号：图 1，初次第 6 行，重复第 18 行。",
+				"重复图表编号：表 1，初次第 7 行，重复第 19 行。",
+				"重复图表编号：图 1，初次第 6 行，重复第 20 行。",
+				"重复图表编号：图 1，初次第 6 行，重复第 21 行。",
+				"重复图表编号：表 1，初次第 7 行，重复第 22 行。",
+				"重复图表编号：图 2，初次第 8 行，重复第 23 行。",
+				"重复图表编号：表 3，初次第 28 行，重复第 29 行。",
+			},
+			absent: []string{
+				"初次第 6 行，重复第 7 行",
+				"初次第 8 行，重复第 24 行",
+				"重复第 4 行",
+				"重复第 11 行",
+				"重复第 12 行",
+				"重复第 15 行",
+				"重复第 16 行",
+				"重复第 25 行",
+				"重复第 26 行",
+				"重复第 27 行",
+				"重复第 30 行",
+				"初次第 4 行",
+				"初次第 11 行",
+				"初次第 15 行",
+				"表 2，初次",
+				"第 4 行有待补标记",
+			},
+			notices: 7,
+		},
+		{
+			name:   "重复提醒最多二十条",
+			source: strings.Join(capped, "\n"),
+			want: []string{
+				"# 稿件结构检查",
+				"稿件 SHA-256",
+				"摘要：请核对，未识别到对应标题。",
+				"重复图表编号：图 1，初次第 1 行，重复第 2 行。",
+				"重复图表编号：图 1，初次第 1 行，重复第 21 行。",
+			},
+			absent: []string{
+				"重复第 22 行",
+			},
+			notices: 20,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := paperCheck(tt.source)
+			for _, want := range tt.want {
+				if !strings.Contains(report, want) {
+					t.Fatalf("report missing %q:\n%s", want, report)
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(report, absent) {
+					t.Fatalf("report unexpectedly contains %q:\n%s", absent, report)
+				}
+			}
+			var notices int
+			for _, line := range strings.Split(report, "\n") {
+				if strings.Contains(line, "重复图表编号") {
+					notices++
+				}
+			}
+			if notices != tt.notices {
+				t.Fatalf("duplicate notices = %d, want %d:\n%s", notices, tt.notices, report)
+			}
+		})
+	}
+}
