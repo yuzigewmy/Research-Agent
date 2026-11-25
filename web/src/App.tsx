@@ -12,6 +12,7 @@ import { errorMessage } from './projects'
 import type { Project } from './projects'
 import type { TaskLink } from './tasks'
 import { WorkspaceBackup } from './WorkspaceBackup'
+import { WorkspaceComponents } from './WorkspaceComponents'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
@@ -119,6 +120,7 @@ function Workbench() {
       </header>
       <ModelConnection />
       <WorkspaceBackup />
+      <WorkspaceComponents />
       <div className="workbench-grid">
         <section className="project-panel" aria-labelledby="workspace-title">
           <header className="panel-heading">
