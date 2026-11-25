@@ -26,6 +26,7 @@ function ConnectionDetails() {
   const options = config.kind === 'ready' ? config.status.modelOptions ?? [] : []
   const selected = options.find((option) => option.id === modelId) ?? options[0]
   const modelInfo = selected ?? (config.kind === 'ready' ? config.status : undefined)
+  const vision = selected?.id === 'vision'
 
   useEffect(() => {
     const controller = new AbortController()
@@ -91,11 +92,13 @@ function ConnectionDetails() {
         <div><dt>模型</dt><dd><bdi>{modelInfo?.model || '未提供'}</bdi></dd></div>
         <div><dt>推理档</dt><dd><bdi>{modelInfo?.reasoningEffort || '默认'}</bdi></dd></div>
       </dl>
-      <p className="model-connection-note">测试会发送一条固定消息，验证所选模型的文本流式回复。</p>
+      <p className="model-connection-note">{vision
+        ? '测试会发送内置方块图，核对模型读取的数量。'
+        : '测试会发送一条固定消息，验证所选模型的文本流式回复。'}</p>
       <button className="button outline" type="button" disabled={result?.kind === 'testing'}
         aria-describedby={result?.kind === 'error' ? testErrorId : undefined} onClick={() => void test()}>测试连接</button>
       {result?.kind === 'testing' && <p className="model-connection-note" role="status">正在测试连接…</p>}
-      {result?.kind === 'success' && <p role="status">模型连接正常。</p>}
+      {result?.kind === 'success' && <p role="status">{vision ? '测试通过，模型已读出图中方块的数量。' : '模型连接正常。'}</p>}
       {result?.kind === 'error' && <p className="form-error" id={testErrorId} role="alert">{result.message}</p>}
     </> : <p className="model-connection-note" role="status">模型未配置。</p>)}
   </div>

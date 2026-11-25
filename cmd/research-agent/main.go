@@ -92,6 +92,8 @@ func run(address, dataDir, webDir string) error {
 		ReviewReasoningEffort:       os.Getenv("RESEARCH_REVIEW_MODEL_REASONING_EFFORT"),
 		EditModelName:               os.Getenv("RESEARCH_EDIT_MODEL_NAME"),
 		EditReasoningEffort:         os.Getenv("RESEARCH_EDIT_MODEL_REASONING_EFFORT"),
+		VisionModelName:             os.Getenv("RESEARCH_VISION_MODEL_NAME"),
+		VisionReasoningEffort:       os.Getenv("RESEARCH_VISION_MODEL_REASONING_EFFORT"),
 		WordPython:                  os.Getenv("RESEARCH_WORD_PYTHON"),
 		SoftwarePDFFont:             os.Getenv("RESEARCH_PDF_FONT"),
 	})

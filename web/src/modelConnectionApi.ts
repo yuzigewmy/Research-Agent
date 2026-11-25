@@ -6,6 +6,7 @@ export const connectionModelLabels = {
   workflow: '工作流备选',
   review: '审稿',
   edit: '改稿',
+  vision: '视觉识别',
 } as const
 
 export type ConnectionModelId = keyof typeof connectionModelLabels

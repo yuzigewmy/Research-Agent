@@ -35,6 +35,8 @@ type HandlerConfig struct {
 	ReviewReasoningEffort       string
 	EditModelName               string
 	EditReasoningEffort         string
+	VisionModelName             string
+	VisionReasoningEffort       string
 	WordPython                  string
 	SoftwarePDFFont             string
 	literature                  literatureSource
@@ -53,6 +55,10 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 		connectionOptions = append(connectionOptions, conversationOptions...)
 		connectionOptions = append(connectionOptions, workflowOptions[1:]...)
 		connectionOptions = append(connectionOptions, modelOption{ID: "review", modelSnapshot: reviewModel}, modelOption{ID: "edit", modelSnapshot: editModel})
+		if name := strings.TrimSpace(config.VisionModelName); name != "" {
+			connectionOptions = append(connectionOptions, modelOption{ID: visionModelID,
+				modelSnapshot: snapshotModel(config.Model, name, config.VisionReasoningEffort)})
+		}
 	}
 	registerModelConnection(mux, config.Model, connectionOptions)
 	conversation{store: store, model: config.Model, editModel: editModel, workflowModels: flowModels, modelOptions: conversationOptions}.register(mux)

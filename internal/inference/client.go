@@ -96,7 +96,7 @@ type chatTool struct {
 
 type chatRequest struct {
 	Model               string     `json:"model"`
-	Messages            []Message  `json:"messages"`
+	Messages            any        `json:"messages"`
 	Stream              bool       `json:"stream"`
 	ReasoningEffort     string     `json:"reasoning_effort,omitempty"`
 	MaxCompletionTokens int        `json:"max_completion_tokens,omitempty"`
@@ -143,6 +143,10 @@ func (c *Client) stream(ctx context.Context, messages []Message, outputTokens in
 		parallel := false
 		payload.ParallelToolCalls = &parallel
 	}
+	return c.sendStream(ctx, payload, toolName, emit)
+}
+
+func (c *Client) sendStream(ctx context.Context, payload chatRequest, toolName string, emit func(string) error) (json.RawMessage, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

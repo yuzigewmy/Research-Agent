@@ -102,7 +102,7 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 工作台只连接用户自行配置的模型服务，不提供平台计费、充值、余额或账单。启动前设置 `RESEARCH_MODEL_BASE_URL` 和 `RESEARCH_MODEL_NAME`。模型服务需要支持 Chat Completions 流式接口。按服务要求在运行环境设置 `RESEARCH_MODEL_API_KEY`。基地址填写服务前缀，例如 `https://api.deepseek.com`，应用会附加 `/chat/completions`。项目和已有会话可离线浏览。一个数据目录运行一个服务实例。
 
-展开首页「模型连接」，通过「模型用途」查看全局默认、已配置的对话和工作流备选，以及审稿和改稿的模型名称与推理档位。点击「测试连接」会向所选模型发送一条固定消息，最多等待 30 秒。测试验证文本流式回复，结果保留在当前面板。服务地址和凭据由部署环境管理。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
+展开首页「模型连接」，通过「模型用途」查看全局默认、已配置的对话和工作流备选，以及审稿和改稿的模型名称与推理档位。点击「测试连接」会验证所选角色的回复，最多等待 30 秒。文本角色收到固定消息，视觉角色收到内置测试图，结果保留在当前面板。服务地址和凭据由部署环境管理。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
 
 使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。默认对话的 8192 token 上限包含推理和正文。
 
@@ -113,3 +113,5 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 设置 `RESEARCH_REVIEW_MODEL_NAME` 和可选的 `RESEARCH_REVIEW_MODEL_REASONING_EFFORT` 后，新建的模拟评审和多轮审稿使用同一服务上的专用模型。评审详情显示提交时的模型及推理档。重试继续使用这份配置。未设置审稿模型时，新评审使用默认模型。
 
 设置 `RESEARCH_EDIT_MODEL_NAME` 和可选的 `RESEARCH_EDIT_MODEL_REASONING_EFFORT` 后，编辑器选区、对话改稿任务及评审意见的定向修订使用同一服务上的专用模型。任务入队时保存模型与推理档，刷新后可在建议详情中查看。
+
+设置 `RESEARCH_VISION_MODEL_NAME` 和可选的 `RESEARCH_VISION_MODEL_REASONING_EFFORT` 后，在「模型连接」选择「视觉识别」并点击「测试连接」。测试向同一模型服务发送一张内置 PNG，核对回复中的两列方块数量。结果保留在当前面板。 [Chat Completions 图像输入](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/#image-input)

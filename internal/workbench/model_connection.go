@@ -61,15 +61,22 @@ func testModelConnection(w http.ResponseWriter, r *http.Request, model *inferenc
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	var receivedText bool
-	err := model.Stream(ctx, []inference.Message{{Role: "user", Content: "这是一条连接测试，请只回复：正常。"}}, func(text string) error {
-		receivedText = receivedText || strings.TrimSpace(text) != ""
-		return nil
-	})
+	var passed bool
+	var err error
+	if option.ID == visionModelID {
+		passed, err = checkVisionModel(ctx, model)
+	} else {
+		err = model.Stream(ctx, []inference.Message{{Role: "user", Content: "这是一条连接测试，请只回复：正常。"}}, func(text string) error {
+			passed = passed || strings.TrimSpace(text) != ""
+			return nil
+		})
+	}
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		writeError(w, http.StatusGatewayTimeout, "MODEL_CONNECTION_TIMEOUT", "模型连接测试超时，请稍后重试。")
-	case err != nil || !receivedText:
+	case err == nil && !passed && option.ID == visionModelID:
+		writeError(w, http.StatusBadGateway, "VISION_TEST_MISMATCH", "测试图像未能通过识别。请核对模型的图像输入能力和推理档，再试一次。")
+	case err != nil || !passed:
 		writeError(w, http.StatusBadGateway, "MODEL_CONNECTION_FAILED", "模型未完成测试回复。请核对服务地址、模型和凭据后重试。")
 	default:
 		writeJSON(w, http.StatusOK, struct {
