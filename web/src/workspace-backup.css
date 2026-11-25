@@ -15,7 +15,21 @@
 .workspace-storage dl { display: flex; flex-wrap: wrap; gap: 0.375rem 1.5rem; }
 .workspace-storage-path { flex-basis: 100%; }
 .workspace-storage dt { color: var(--muted); font-size: 0.875rem; }
-.workspace-storage > .button { justify-self: start; }
+.workspace-storage-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.workspace-storage-actions .button:is(:disabled, [aria-disabled='true']) {
+  background: transparent;
+  cursor: default;
+  opacity: 0.62;
+}
+.workspace-cache-confirmation {
+  justify-self: start;
+  max-inline-size: 65ch;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+.workspace-cache-confirmation > p:first-child { font-size: 0.875rem; }
 
 .workspace-restore {
   border-block-start: 1px solid var(--line);
