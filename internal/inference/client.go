@@ -40,6 +40,7 @@ var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type Client struct {
 	endpoint        string
+	imageEndpoint   string
 	model           string
 	apiKey          string
 	reasoningEffort string
@@ -60,6 +61,7 @@ func New(config Config) (*Client, error) {
 	}
 	return &Client{
 		endpoint:        base.JoinPath("chat", "completions").String(),
+		imageEndpoint:   base.JoinPath("images", "generations").String(),
 		model:           config.Model,
 		apiKey:          config.APIKey,
 		reasoningEffort: config.ReasoningEffort,
