@@ -21,9 +21,11 @@ func (s *Store) registerMaterials(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path, s.handleUploadMaterial)
 	mux.HandleFunc("GET "+path+"/{materialId}/download", s.handleDownloadMaterial)
 	mux.HandleFunc("GET "+path+"/{materialId}/preview", s.handlePreviewMaterial)
+	mux.HandleFunc("GET "+path+"/{materialId}/image-preview", s.handleMaterialImagePreview)
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
 	mux.HandleFunc(path+"/{materialId}/download", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{materialId}/preview", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc(path+"/{materialId}/image-preview", methodNotAllowed("GET, HEAD"))
 }
 
 func (s *Store) handleListMaterials(w http.ResponseWriter, r *http.Request) {

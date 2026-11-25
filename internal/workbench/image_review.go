@@ -7,15 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path"
-	"strings"
 	"time"
 
 	"research-agent/internal/inference"
 )
 
 const imageReviewTask = "image-review"
-const maxImageReviewBytes = 8 << 20
 
 const imageReviewSchema = `
 	ALTER TABLE tasks RENAME COLUMN kind TO previous_kind;
@@ -35,8 +32,6 @@ const imageReviewSchema = `
 	CREATE INDEX image_reviews_by_material ON image_reviews(project_id, material_id);
 	PRAGMA user_version = 52;
 `
-
-var errImageReviewInput = errors.New("请使用有效的 PNG 或 JPEG 原件。文件上限为 8 MiB，长宽各不超过 4096 像素，总像素数不超过 400 万。")
 
 type imageReviewResponse struct {
 	Configured bool         `json:"configured"`
@@ -128,8 +123,8 @@ func writeImageReviewError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "没有找到该项目的资料或复查记录。")
 	case errors.Is(err, errModelUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "VISION_UNAVAILABLE", "请先在服务端配置视觉模型。")
-	case errors.Is(err, errImageReviewInput):
-		writeError(w, http.StatusUnprocessableEntity, "IMAGE_REVIEW_INPUT", errImageReviewInput.Error())
+	case errors.Is(err, errMaterialImage):
+		writeError(w, http.StatusUnprocessableEntity, "IMAGE_REVIEW_INPUT", errMaterialImage.Error())
 	default:
 		writeTaskError(w, "image review", err)
 	}
@@ -161,16 +156,6 @@ func scanImageReview(row *sql.Row) (*imageReview, error) {
 		}
 	}
 	return &review, nil
-}
-
-func imageReviewType(name string) string {
-	switch strings.ToLower(path.Ext(name)) {
-	case ".png":
-		return "png"
-	case ".jpg", ".jpeg":
-		return "jpeg"
-	}
-	return ""
 }
 
 func (s *Store) queueImageReview(ctx context.Context, projectID, materialID, requestID string, model modelSnapshot) (*imageReview, bool, error) {
@@ -210,8 +195,8 @@ func (s *Store) queueImageReview(ctx context.Context, projectID, materialID, req
 		if model.Model == "" {
 			return nil, false, errModelUnavailable
 		}
-		if imageReviewType(material.Name) == "" || material.Size <= 0 || material.Size > maxImageReviewBytes {
-			return nil, false, errImageReviewInput
+		if materialImageType(material.Name) == "" || material.Size <= 0 || material.Size > maxMaterialImageBytes {
+			return nil, false, errMaterialImage
 		}
 		review = &imageReview{ReviewID: rand.Text(), MaterialID: materialID, SourceSHA256: material.SHA256,
 			Status: taskQueued, Model: model.Model, ReasoningEffort: model.ReasoningEffort,

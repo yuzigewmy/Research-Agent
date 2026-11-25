@@ -106,7 +106,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 				switch {
 				case errors.Is(ctx.Err(), context.DeadlineExceeded):
 					message = "图片复查超时，请重试。"
-				case errors.Is(err, errImageReviewInput), errors.Is(err, errImageReviewConnection),
+				case errors.Is(err, errMaterialImage), errors.Is(err, errImageReviewConnection),
 					errors.Is(err, errImageReviewOutput), errors.Is(err, errImageReviewUnverifiable):
 					message = err.Error()
 				}

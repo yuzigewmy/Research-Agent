@@ -47,7 +47,7 @@ func validateGeneratedPNG(ctx context.Context, size string, body []byte) error {
 	if err != nil || config.Width != width || config.Height != height {
 		return errImageGenerationOutput
 	}
-	if err := validateImageReviewFile(ctx, "png", body); err != nil {
+	if err := validateMaterialImage(ctx, "png", body); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

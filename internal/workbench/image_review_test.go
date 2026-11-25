@@ -33,16 +33,16 @@ func TestImageReviewAcceptsCompleteImages(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := validateImageReviewFile(t.Context(), format, file.Bytes()); err != nil {
+			if err := validateMaterialImage(t.Context(), format, file.Bytes()); err != nil {
 				t.Fatalf("valid image was rejected: %v", err)
 			}
 			file.WriteString("an extra note")
-			if err := validateImageReviewFile(t.Context(), format, file.Bytes()); !errors.Is(err, errImageReviewInput) {
+			if err := validateMaterialImage(t.Context(), format, file.Bytes()); !errors.Is(err, errMaterialImage) {
 				t.Fatalf("expected trailing data to be rejected: %v", err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			if err := validateImageReviewFile(ctx, format, file.Bytes()); !errors.Is(err, context.Canceled) {
+			if err := validateMaterialImage(ctx, format, file.Bytes()); !errors.Is(err, context.Canceled) {
 				t.Fatalf("image validation lost cancellation: %v", err)
 			}
 		})
@@ -55,8 +55,8 @@ func TestImageReviewBoundsJPEGScanCount(t *testing.T) {
 	for _, count := range []int{32, 33} {
 		body := append(bytes.Clone(envelope), bytes.Repeat(scan, count)...)
 		body = append(body, 0xff, 0xd9)
-		err := checkImageReviewJPEG(t.Context(), body)
-		if (count == 32 && err != nil) || (count == 33 && !errors.Is(err, errImageReviewInput)) {
+		err := checkMaterialJPEG(t.Context(), body)
+		if (count == 32 && err != nil) || (count == 33 && !errors.Is(err, errMaterialImage)) {
 			t.Fatalf("JPEG envelope with %d scans: %v", count, err)
 		}
 	}
