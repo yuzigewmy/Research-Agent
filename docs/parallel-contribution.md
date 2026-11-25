@@ -62,6 +62,11 @@ git switch -c feat/material-name-search origin/main
 
 范围为 [paper_check.go](<../internal/workbench/paper_check.go>) 和同包的 `paper_check_test.go`。
 
+## 后续独立任务
+
+- `feat/workspace-text-zoom` 对应 F13。编辑器提供四档字号并保存浏览器偏好。Chrome 核对调整时的草稿与选区，以及刷新和跨项目恢复。 [编辑器](<../web/src/WorkspacePanel.tsx>) · [样式](<../web/src/workspace.css>)
+- `feat/manuscript-caption-number-check` 对应 F12、T16。稿件结构报告标出图和表各自的重复编号与源行号。用固定 Markdown 样例核对中英文题注、前导零、引用和代码围栏。 [结构检查](<../internal/workbench/paper_check.go>) · [结构检查回归](<../internal/workbench/paper_check_test.go>)
+
 ## 主线工作
 
 资料库迁移、备份与恢复、受限执行与作业恢复、模型与多模态接入、工作流状态和跨版本产物由主线推进。各分支分别审核，优先合并已通过的任务。合并一批后依据改动范围复跑关键路径。

@@ -16,3 +16,13 @@
 .workspace-storage-path { flex-basis: 100%; }
 .workspace-storage dt { color: var(--muted); font-size: 0.875rem; }
 .workspace-storage > .button { justify-self: start; }
+
+.workspace-restore {
+  border-block-start: 1px solid var(--line);
+  margin-block-start: 1rem;
+  padding-block-start: 0.75rem;
+  max-inline-size: 65ch;
+  overflow-wrap: anywhere;
+}
+.workspace-restore > .button { justify-self: start; }
+.workspace-restore p { font-size: 0.875rem; }

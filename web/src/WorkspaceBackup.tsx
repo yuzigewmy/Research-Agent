@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { errorMessage, request } from './projects'
+import { WorkspaceRestore } from './WorkspaceRestore'
 import './workspace-backup.css'
 
 type StorageUsage = {
@@ -69,6 +70,7 @@ export function WorkspaceBackup() {
     <form action="/api/v1/workspace-backup" method="post" target="_blank" rel="noopener">
       <button className="button outline" type="submit">下载工作区备份</button>
     </form>
-    <p>恢复时使用启动程序的 <code>--restore</code> 选项，将备份恢复到一个新的资料库目录。</p>
+    <WorkspaceRestore />
+    <p>使用启动程序的 <code>--restore</code> 选项可恢复更大的备份。</p>
   </details>
 }
