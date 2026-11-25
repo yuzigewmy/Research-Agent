@@ -28,7 +28,7 @@ export interface Task {
   revision: number
   status: TaskStatus
   createdAt: string
-  kind?: 'manuscript-check' | 'selection-edit' | 'focused-research' | 'experiment-comparison'
+  kind?: 'manuscript-check' | 'selection-edit' | 'focused-research' | 'experiment-comparison' | 'image-review'
   message?: string
   inputs?: TaskInputVersion[]
   sourceTurnId?: string
@@ -85,12 +85,12 @@ function isTask(value: unknown): value is Task {
     && typeof task.status === 'string' && Object.hasOwn(taskStatusLabels, task.status)
     && typeof task.createdAt === 'string' && Number.isFinite(Date.parse(task.createdAt))
     && (task.kind === undefined || task.kind === 'manuscript-check' || task.kind === 'selection-edit'
-      || task.kind === 'focused-research' || task.kind === 'experiment-comparison')
+      || task.kind === 'focused-research' || task.kind === 'experiment-comparison' || task.kind === 'image-review')
     && (task.message === undefined || typeof task.message === 'string')
     && (task.sourceTurnId === undefined || (typeof task.sourceTurnId === 'string' && task.sourceTurnId.length > 0))
     && (task.inputs === undefined || (Array.isArray(task.inputs) && task.inputs.length <= taskInputLimit
       && task.inputs.every(isTaskInputVersion)))
-    && (task.kind === undefined || (task.inputs !== undefined && task.inputs.length >= 1
+    && (task.kind === undefined || task.kind === 'image-review' || (task.inputs !== undefined && task.inputs.length >= 1
       && (task.kind === 'experiment-comparison'
         ? task.inputs.length === 1 && isCSVTaskPath(task.inputs[0].path)
         : (task.kind !== 'manuscript-check' || task.inputs.length === 1) && task.inputs.every(({ path }) => isMarkdownTaskPath(path)))))

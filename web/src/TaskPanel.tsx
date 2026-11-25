@@ -279,7 +279,7 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       {task.status === 'SUCCEEDED' && !isSelectionEdit && <div className="task-actions">
         <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>
           {isExperimentComparison ? '下载指标对比报告' : isManuscriptCheck ? '下载检查报告'
-            : isFocusedResearch ? '下载聚焦研究报告' : '下载 Markdown'}
+            : isFocusedResearch ? '下载聚焦研究报告' : task.kind === 'image-review' ? '下载图片复查报告' : '下载 Markdown'}
         </a>
         {isExperimentComparison && onReportSaved &&
           <ExperimentReportHandoff projectId={projectId} taskId={task.taskId} onSaved={onReportSaved} />}

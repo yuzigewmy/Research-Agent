@@ -114,4 +114,6 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 设置 `RESEARCH_EDIT_MODEL_NAME` 和可选的 `RESEARCH_EDIT_MODEL_REASONING_EFFORT` 后，编辑器选区、对话改稿任务及评审意见的定向修订使用同一服务上的专用模型。任务入队时保存模型与推理档，刷新后可在建议详情中查看。
 
-设置 `RESEARCH_VISION_MODEL_NAME` 和可选的 `RESEARCH_VISION_MODEL_REASONING_EFFORT` 后，在「模型连接」选择「视觉识别」并点击「测试连接」。测试向同一模型服务发送一张内置 PNG，核对回复中的两列方块数量。结果保留在当前面板。 [Chat Completions 图像输入](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/#image-input)
+设置 `RESEARCH_VISION_MODEL_NAME` 和可选的 `RESEARCH_VISION_MODEL_REASONING_EFFORT` 后，在「模型连接」选择「视觉识别」并点击「测试连接」。测试向同一模型服务发送一张内置 PNG，核对回复中的两列方块数量。结果保留在当前面板。 [Chat Completions 图像输入](https://developers.openai.com/api/docs/guides/images-vision#analyze-images)
+
+在「项目资料」上传 PNG 或 JPEG，打开该版本的「图片复查」，点击「开始图片复查」。工作台将通过校验的图片原件发送给已配置的视觉模型。支持 8 MiB 以内的图片，长宽各不超过 4096 像素，总像素数不超过 400 万。后台报告记录图中标签、关系和可见问题，可查询和下载。报告包含资料版本、原图 SHA-256、模型、推理档和复查规则版本。排队任务重启后按原配置继续，运行中断后可按原图重试。

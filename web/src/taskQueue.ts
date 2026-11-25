@@ -5,6 +5,7 @@ export const queueTaskKindLabels = {
   'focused-research': '聚焦研究',
   'manuscript-check': '只读稿件检查',
   'experiment-comparison': '配对指标对比',
+  'image-review': '图片复查',
   workflow: '工作流步骤',
   review: '稿件审查',
   'automatic-review': '多轮审稿',

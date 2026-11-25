@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { MaterialImageReview } from './MaterialImageReview'
 import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
 import { errorMessage } from './projects'
@@ -89,6 +90,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
   const [query, setQuery] = useState('')
   const [pageRequest, setPageRequest] = useState<{ q: string; cursor?: string }>({ q: '' })
   const [previewId, setPreviewId] = useState<string>()
+  const [imageReviewId, setImageReviewId] = useState<string>()
   const [uploading, setUploading] = useState<'files' | 'folder'>()
   const [uploadedCount, setUploadedCount] = useState(0)
   const [failures, setFailures] = useState<UploadFailure[]>([])
@@ -234,8 +236,13 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           const isWord = material.format === 'word'
           const isArchive = material.format === 'archive'
           const hasText = !isPdf && !isArchive && (material.kind === 'text' || isWord)
-          const typeLabel = isArchive ? archiveFormatLabel(material.name)
-            : isPdf ? 'PDF' : isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件'
+          const imageType = material.kind === 'file' && /\.(png|jpe?g)$/i.test(material.name)
+            ? (/\.png$/i.test(material.name) ? 'PNG' : 'JPEG') : undefined
+          const canReviewImage = !!imageType && material.size > 0 && material.size <= 8 * 1024 * 1024
+          const reviewOpen = imageReviewId === material.materialId
+          const reviewRegion = `${headingId}-image-review-${material.materialId}`
+          const typeLabel = imageType ?? (isArchive ? archiveFormatLabel(material.name)
+            : isPdf ? 'PDF' : isWord ? 'Word' : material.kind === 'text' ? '文本' : '文件')
           const canPreview = isPdf || hasText
           const previewLabel = isOpen ? '收起预览' : isPdf ? '预览 PDF' : '预览'
           const downloadPath = materialDownloadPath(projectId, material.materialId)
@@ -250,7 +257,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                   <span>{typeLabel}</span>
                   <span>{formatSize(material.size)}</span>
                   <time dateTime={material.createdAt}>{materialDate.format(new Date(material.createdAt))}</time>
-                  {(canPreview || isArchive) && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
+                  {(canPreview || isArchive || imageType) && <span>原文件 SHA-256 <code title={material.sha256}>{material.sha256.slice(0, 8)}</code></span>}
                 </div>
                 {isWord && <p className="material-note" id={wordScopeId}>正文和表格文字节选（预览最多 64 KiB，UTF-8）</p>}
               </div>
@@ -260,11 +267,20 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                   aria-describedby={wordScopeId} onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
                 <a className="button outline" href={downloadPath}
                   aria-label={`下载原件：${material.name}`} download>下载原件</a>
+                {canReviewImage && <button className="button outline" type="button"
+                  aria-label={`${reviewOpen ? '收起图片复查' : '图片复查'}：${material.name}`}
+                  aria-expanded={reviewOpen} aria-controls={reviewRegion}
+                  onClick={() => setImageReviewId(reviewOpen ? undefined : material.materialId)}>
+                  {reviewOpen ? '收起图片复查' : '图片复查'}
+                </button>}
                 {hasText && onReference && <button className="button outline" type="button"
                   aria-label={`引用资料：${material.name}`} aria-pressed={referenced} aria-disabled={atLimit}
                   aria-describedby={atLimit ? referenceLimitHint : undefined}
                   onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
               </div>
+              {canReviewImage && <div className="material-preview" id={reviewRegion} hidden={!reviewOpen}>
+                {reviewOpen && <MaterialImageReview projectId={projectId} material={material} />}
+              </div>}
               {canPreview && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
                 {isOpen && (isPdf ? (
                   <Suspense fallback={<p className="material-note" role="status">正在加载 PDF 查看器…</p>}>
