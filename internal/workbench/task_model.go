@@ -22,7 +22,8 @@ var (
 const defaultModelID = "default"
 
 type modelOption struct {
-	ID string `json:"id"`
+	ID           string `json:"id"`
+	ImageQuality string `json:"imageQuality,omitempty"`
 	modelSnapshot
 }
 

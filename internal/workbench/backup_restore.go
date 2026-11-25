@@ -89,6 +89,11 @@ func restoreWorkspace(ctx context.Context, source io.ReaderAt, archiveSize int64
 			return err
 		}
 	}
+	if schema >= 53 {
+		if err := interruptRestoredImageGenerations(ctx, databasePath); err != nil {
+			return err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -96,6 +101,19 @@ func restoreWorkspace(ctx context.Context, source io.ReaderAt, archiveSize int64
 		return err
 	}
 	return os.Rename(stage, destination)
+}
+
+func interruptRestoredImageGenerations(ctx context.Context, databasePath string) error {
+	// The source workspace may have dispatched these tasks after the snapshot.
+	db, err := sql.Open("sqlite", workspaceSQLiteURI(databasePath, "mode=rw&_pragma=trusted_schema(OFF)"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `UPDATE tasks SET status = 'INTERRUPTED', revision = revision + 1, queued_seq = NULL, message = ?
+		WHERE kind = ? AND status = 'QUEUED'`,
+		"这是备份中的排队记录。请先核对原工作区的生图结果，再决定是否重新生成。", imageGenerationTask)
+	return err
 }
 
 type restoreReaderAt struct {

@@ -18,7 +18,7 @@ import (
 
 const (
 	workspaceDatabase      = "projects.sqlite3"
-	workspaceSchemaVersion = 52
+	workspaceSchemaVersion = 53
 	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
@@ -76,12 +76,7 @@ func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(objectsDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create object directory: %w", err)
 	}
-	filename = filepath.ToSlash(filename)
-	if !strings.HasPrefix(filename, "/") {
-		filename = "/" + filename
-	}
-	dsn := url.URL{Scheme: "file", Path: filename, RawQuery: "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=journal_mode(WAL)"}
-	db, err := sql.Open("sqlite", dsn.String())
+	db, err := sql.Open("sqlite", workspaceSQLiteURI(filename, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=journal_mode(WAL)"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -91,6 +86,15 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return &Store{db: db, objectsDir: objectsDir, turns: turnWorkers{active: make(map[string]context.CancelFunc)}}, nil
+}
+
+func workspaceSQLiteURI(filename, options string) string {
+	filename = filepath.ToSlash(filename)
+	if !strings.HasPrefix(filename, "/") {
+		filename = "/" + filename
+	}
+	dsn := url.URL{Scheme: "file", Path: filename, RawQuery: options}
+	return dsn.String()
 }
 
 // Close stops replies and research tasks before releasing the database connection.
@@ -378,6 +382,11 @@ func migrate(db *sql.DB, target int) error {
 	}
 	if version < 52 && target >= 52 {
 		if _, err := tx.Exec(imageReviewSchema); err != nil {
+			return err
+		}
+	}
+	if version < 53 && target >= 53 {
+		if _, err := tx.Exec(imageGenerationSchema); err != nil {
 			return err
 		}
 	}

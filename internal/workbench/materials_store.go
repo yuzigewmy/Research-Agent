@@ -113,13 +113,17 @@ func (s *Store) saveMaterial(ctx context.Context, projectID, name string, body i
 		return Material{}, false, err
 	}
 
-	material, err := scanMaterial(s.db.QueryRowContext(ctx, `INSERT INTO materials
+	return insertMaterial(ctx, s.db, projectID, staged)
+}
+
+func insertMaterial(ctx context.Context, db workspaceQuery, projectID string, staged Material) (Material, bool, error) {
+	material, err := scanMaterial(db.QueryRowContext(ctx, `INSERT INTO materials
 		(material_id, project_id, name, sha256, size, kind, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, name, sha256) DO NOTHING
 		RETURNING `+materialColumns, rand.Text(), projectID, staged.Name, staged.SHA256, staged.Size, staged.Kind,
 		time.Now().UTC().Format(createdAtLayout)))
 	if errors.Is(err, sql.ErrNoRows) {
-		material, err = scanMaterial(s.db.QueryRowContext(ctx, `SELECT `+materialColumns+`
+		material, err = scanMaterial(db.QueryRowContext(ctx, `SELECT `+materialColumns+`
 			FROM materials WHERE project_id = ? AND name = ? AND sha256 = ?`, projectID, staged.Name, staged.SHA256))
 		return material, false, err
 	}
@@ -153,7 +157,11 @@ func scanMaterial(row interface{ Scan(...any) error }) (Material, error) {
 }
 
 func (s *Store) getMaterial(ctx context.Context, projectID, materialID string) (Material, error) {
-	return scanMaterial(s.db.QueryRowContext(ctx, `SELECT `+materialColumns+`
+	return lookupMaterial(ctx, s.db, projectID, materialID)
+}
+
+func lookupMaterial(ctx context.Context, db workspaceQuery, projectID, materialID string) (Material, error) {
+	return scanMaterial(db.QueryRowContext(ctx, `SELECT `+materialColumns+`
 		FROM materials WHERE project_id = ? AND material_id = ?`, projectID, materialID))
 }
 

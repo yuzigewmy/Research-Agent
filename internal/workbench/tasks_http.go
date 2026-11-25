@@ -260,6 +260,15 @@ func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Source-SHA256", review.SourceSHA256)
 		writeTextAttachment(w, r, "image-review.json", "application/json", string(body))
 		return
+	case imageGenerationTask:
+		generation, err := lookupImageGeneration(r.Context(), api.store.db, r.PathValue("id"), r.PathValue("taskId"))
+		if err != nil {
+			writeImageGenerationError(w, err)
+			return
+		}
+		w.Header().Set("X-Source-SHA256", generation.Material.SHA256)
+		api.store.serveMaterial(w, r, *generation.Material)
+		return
 	}
 	writeMarkdown(w, r, filename, artifact.markdown)
 }

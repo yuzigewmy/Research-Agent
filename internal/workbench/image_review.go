@@ -180,8 +180,7 @@ func (s *Store) queueImageReview(ctx context.Context, projectID, materialID, req
 	}
 	defer tx.Rollback()
 
-	material, err := scanMaterial(tx.QueryRowContext(ctx, `SELECT `+materialColumns+`
-		FROM materials WHERE project_id = ? AND material_id = ?`, projectID, materialID))
+	material, err := lookupMaterial(ctx, tx, projectID, materialID)
 	if err != nil {
 		return nil, false, err
 	}

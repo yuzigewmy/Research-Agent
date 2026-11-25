@@ -86,6 +86,8 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 			deadline = 5 * time.Second
 		case imageReviewTask:
 			deadline = imageReviewTimeout
+		case imageGenerationTask:
+			deadline = imageGenerationTimeout
 		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
 		worker.taskID, worker.stop = task.TaskID, stop
@@ -106,6 +108,14 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 					message = "图片复查超时，请重试。"
 				case errors.Is(err, errImageReviewInput), errors.Is(err, errImageReviewConnection),
 					errors.Is(err, errImageReviewOutput), errors.Is(err, errImageReviewUnverifiable):
+					message = err.Error()
+				}
+			case imageGenerationTask:
+				message = "未收到可保存的图片。请核对模型服务中的结果后决定是否重新生成。"
+				switch {
+				case errors.Is(ctx.Err(), context.DeadlineExceeded):
+					message = "等待图片超时。模型服务可能已经处理该请求。"
+				case errors.Is(err, errImageGenerationConnection), errors.Is(err, errImageGenerationOutput):
 					message = err.Error()
 				}
 			case experimentComparisonTask:
@@ -189,14 +199,18 @@ func (workers *taskWorkers) close() {
 type taskResult struct {
 	markdown         string
 	jsonArtifact     string
+	imageMaterial    Material
 	findings         []reviewFinding
 	topicData        string
 	reviewStopReason string
 }
 
 func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
-	if task.Kind == imageReviewTask {
+	switch task.Kind {
+	case imageReviewTask:
 		return s.runImageReview(ctx, model, projectID, task)
+	case imageGenerationTask:
+		return s.runImageGeneration(ctx, model, projectID, task)
 	}
 	if task.model.Model != "" {
 		if task.model.connection != model.ConnectionFingerprint() {

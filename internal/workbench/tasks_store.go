@@ -130,6 +130,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 			WHEN kind = 'manuscript-check' THEN '服务重启中断了稿件检查，可以重新提出检查。'
 			WHEN kind = 'experiment-comparison' THEN '服务重启中断了指标对比，可以用已保存的数据重新提交。'
 			WHEN kind = 'image-review' THEN '服务重启中断了图片复查，可以用原图重试。'
+			WHEN kind = 'image-generation' THEN '服务重启时未保存生图结果。模型服务可能已经处理该请求。'
 			ELSE '服务重启中断了已确认的任务，可以提议一项新任务。'
 		END
 		WHERE status IN ('RUNNING', 'CANCELLING') OR (status = 'QUEUED' AND kind = '' AND ` + standaloneTask + `)`)
@@ -398,6 +399,16 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 	if task.automaticReview && status == taskSucceeded {
 		if _, err := tx.ExecContext(ctx, `UPDATE automatic_reviews SET stop_reason = ?
 			WHERE project_id = ? AND task_id = ?`, result.reviewStopReason, projectID, task.TaskID); err != nil {
+			return err
+		}
+	}
+	if task.Kind == imageGenerationTask && status == taskSucceeded {
+		material, _, err := insertMaterial(ctx, tx, projectID, result.imageMaterial)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE image_generations SET material_id = ? WHERE project_id = ? AND task_id = ?`,
+			material.MaterialID, projectID, task.TaskID); err != nil {
 			return err
 		}
 	}

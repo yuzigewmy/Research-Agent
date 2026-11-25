@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -170,14 +169,9 @@ func copyBackupFile(ctx context.Context, destination io.Writer, source io.Reader
 }
 
 func backupInventory(ctx context.Context, databasePath string) (int, []backupFile, error) {
-	path := filepath.ToSlash(databasePath)
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
 	// This staged database has no WAL and is unchanged while the inventory is read.
 	// https://sqlite.org/uri.html#recognized_query_parameters
-	dsn := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1&_pragma=trusted_schema(OFF)"}
-	db, err := sql.Open("sqlite", dsn.String())
+	db, err := sql.Open("sqlite", workspaceSQLiteURI(databasePath, "mode=ro&immutable=1&_pragma=trusted_schema(OFF)"))
 	if err != nil {
 		return 0, nil, err
 	}

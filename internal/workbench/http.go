@@ -37,6 +37,8 @@ type HandlerConfig struct {
 	EditReasoningEffort         string
 	VisionModelName             string
 	VisionReasoningEffort       string
+	ImageModelName              string
+	ImageModelQuality           string
 	WordPython                  string
 	SoftwarePDFFont             string
 	literature                  literatureSource
@@ -51,6 +53,14 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	if name := strings.TrimSpace(config.VisionModelName); name != "" {
 		visionModel = snapshotModel(config.Model, name, config.VisionReasoningEffort)
 	}
+	var generationRole imageGenerationRole
+	if name := strings.TrimSpace(config.ImageModelName); config.Model != nil && name != "" {
+		quality := strings.TrimSpace(config.ImageModelQuality)
+		if quality == "" {
+			quality = "auto"
+		}
+		generationRole = imageGenerationRole{modelSnapshot: snapshotModel(config.Model, name, ""), quality: quality}
+	}
 	conversationOptions := configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort)
 	workflowOptions := configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort)
 	flowModels := configureWorkflowModels(workflowOptions, config.WorkflowModelTemplates)
@@ -61,6 +71,10 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 		connectionOptions = append(connectionOptions, modelOption{ID: "review", modelSnapshot: reviewModel}, modelOption{ID: "edit", modelSnapshot: editModel})
 		if visionModel.Model != "" {
 			connectionOptions = append(connectionOptions, modelOption{ID: visionModelID, modelSnapshot: visionModel})
+		}
+		if generationRole.Model != "" {
+			connectionOptions = append(connectionOptions, modelOption{ID: imageGenerationModelID,
+				ImageQuality: generationRole.quality, modelSnapshot: generationRole.modelSnapshot})
 		}
 	}
 	registerModelConnection(mux, config.Model, connectionOptions)
@@ -73,6 +87,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)
 	imageReviews{store: store, model: config.Model, role: visionModel}.register(mux)
+	imageGenerations{store: store, model: config.Model, role: generationRole}.register(mux)
 	store.registerWorkspace(mux)
 	mux.HandleFunc("POST /api/v1/workspace-backup", store.handleWorkspaceBackup)
 	mux.HandleFunc("/api/v1/workspace-backup", methodNotAllowed("POST"))
