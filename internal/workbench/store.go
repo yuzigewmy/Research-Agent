@@ -18,7 +18,7 @@ import (
 
 const (
 	workspaceDatabase      = "projects.sqlite3"
-	workspaceSchemaVersion = 51
+	workspaceSchemaVersion = 52
 	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
@@ -373,6 +373,11 @@ func migrate(db *sql.DB, target int) error {
 	}
 	if version < 51 && target >= 51 {
 		if _, err := tx.Exec(experimentComparisonSchema); err != nil {
+			return err
+		}
+	}
+	if version < 52 && target >= 52 {
+		if _, err := tx.Exec(imageReviewSchema); err != nil {
 			return err
 		}
 	}

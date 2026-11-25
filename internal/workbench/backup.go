@@ -163,21 +163,9 @@ func validBackupFile(file backupFile) bool {
 	return file.Size >= 0 && validObjectDigest(file.SHA256)
 }
 
-type backupReader struct {
-	context.Context
-	io.Reader
-}
-
-func (r backupReader) Read(buf []byte) (int, error) {
-	if err := r.Err(); err != nil {
-		return 0, err
-	}
-	return r.Reader.Read(buf)
-}
-
 func copyBackupFile(ctx context.Context, destination io.Writer, source io.Reader) (backupFile, error) {
 	hash := sha256.New()
-	bytes, err := io.Copy(io.MultiWriter(destination, hash), backupReader{ctx, source})
+	bytes, err := io.Copy(io.MultiWriter(destination, hash), contextReader{ctx, source})
 	return backupFile{SHA256: hex.EncodeToString(hash.Sum(nil)), Size: bytes}, err
 }
 

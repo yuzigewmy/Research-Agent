@@ -47,6 +47,10 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 	editModel := snapshotModel(config.Model, config.EditModelName, config.EditReasoningEffort)
 	reviewModel := snapshotModel(config.Model, config.ReviewModelName, config.ReviewReasoningEffort)
+	var visionModel modelSnapshot
+	if name := strings.TrimSpace(config.VisionModelName); name != "" {
+		visionModel = snapshotModel(config.Model, name, config.VisionReasoningEffort)
+	}
 	conversationOptions := configuredModelOptions(config.Model, alternateConversationModelID, config.ConversationModelName, config.ConversationReasoningEffort)
 	workflowOptions := configuredModelOptions(config.Model, alternateWorkflowModelID, config.WorkflowModelName, config.WorkflowReasoningEffort)
 	flowModels := configureWorkflowModels(workflowOptions, config.WorkflowModelTemplates)
@@ -55,9 +59,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 		connectionOptions = append(connectionOptions, conversationOptions...)
 		connectionOptions = append(connectionOptions, workflowOptions[1:]...)
 		connectionOptions = append(connectionOptions, modelOption{ID: "review", modelSnapshot: reviewModel}, modelOption{ID: "edit", modelSnapshot: editModel})
-		if name := strings.TrimSpace(config.VisionModelName); name != "" {
-			connectionOptions = append(connectionOptions, modelOption{ID: visionModelID,
-				modelSnapshot: snapshotModel(config.Model, name, config.VisionReasoningEffort)})
+		if visionModel.Model != "" {
+			connectionOptions = append(connectionOptions, modelOption{ID: visionModelID, modelSnapshot: visionModel})
 		}
 	}
 	registerModelConnection(mux, config.Model, connectionOptions)
@@ -69,6 +72,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	workflows{store: store, model: config.Model, models: flowModels,
 		softwarePDFFont: strings.TrimSpace(config.SoftwarePDFFont), wordPython: strings.TrimSpace(config.WordPython)}.register(mux)
 	store.registerMaterials(mux)
+	imageReviews{store: store, model: config.Model, role: visionModel}.register(mux)
 	store.registerWorkspace(mux)
 	mux.HandleFunc("POST /api/v1/workspace-backup", store.handleWorkspaceBackup)
 	mux.HandleFunc("/api/v1/workspace-backup", methodNotAllowed("POST"))

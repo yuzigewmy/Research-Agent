@@ -81,8 +81,11 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		if task.automaticReview {
 			deadline = 15 * time.Minute
 		}
-		if task.Kind == experimentComparisonTask {
+		switch task.Kind {
+		case experimentComparisonTask:
 			deadline = 5 * time.Second
+		case imageReviewTask:
+			deadline = imageReviewTimeout
 		}
 		ctx, stop := context.WithTimeout(context.Background(), deadline)
 		worker.taskID, worker.stop = task.TaskID, stop
@@ -96,6 +99,15 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 				message = "稿件检查未完成。请核对已保存的稿件后重新提出检查。"
 			case focusedResearchTask:
 				message = "聚焦研究未完成。请核对输入和模型连接后重新提出任务。"
+			case imageReviewTask:
+				message = "图片复查未完成。请核对视觉模型连接后重试。"
+				switch {
+				case errors.Is(ctx.Err(), context.DeadlineExceeded):
+					message = "图片复查超时，请重试。"
+				case errors.Is(err, errImageReviewInput), errors.Is(err, errImageReviewConnection),
+					errors.Is(err, errImageReviewOutput), errors.Is(err, errImageReviewUnverifiable):
+					message = err.Error()
+				}
 			case experimentComparisonTask:
 				message = "未能完成本地计算。请核对数据文件后重新提交。"
 				var invalid experimentDataError
@@ -183,6 +195,9 @@ type taskResult struct {
 }
 
 func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client, projectID string, task Task) (taskResult, error) {
+	if task.Kind == imageReviewTask {
+		return s.runImageReview(ctx, model, projectID, task)
+	}
 	if task.model.Model != "" {
 		if task.model.connection != model.ConnectionFingerprint() {
 			if task.selectionEdit {

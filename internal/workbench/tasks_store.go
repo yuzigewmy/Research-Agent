@@ -129,6 +129,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 			WHEN workflow_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
 			WHEN kind = 'manuscript-check' THEN '服务重启中断了稿件检查，可以重新提出检查。'
 			WHEN kind = 'experiment-comparison' THEN '服务重启中断了指标对比，可以用已保存的数据重新提交。'
+			WHEN kind = 'image-review' THEN '服务重启中断了图片复查，可以用原图重试。'
 			ELSE '服务重启中断了已确认的任务，可以提议一项新任务。'
 		END
 		WHERE status IN ('RUNNING', 'CANCELLING') OR (status = 'QUEUED' AND kind = '' AND ` + standaloneTask + `)`)

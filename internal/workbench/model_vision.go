@@ -30,7 +30,7 @@ func checkVisionModel(ctx context.Context, model *inference.Client) (bool, error
 		return false, err
 	}
 	var reply strings.Builder
-	err := model.StreamPNG(ctx, visionProbePrompt, encoded.Bytes(), func(text string) error {
+	err := model.StreamImage(ctx, visionProbePrompt, "png", encoded.Bytes(), 256, func(text string) error {
 		if len(text) > 256-reply.Len() {
 			return errors.New("视觉诊断回复过长")
 		}

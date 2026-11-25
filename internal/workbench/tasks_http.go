@@ -2,6 +2,7 @@ package workbench
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -243,6 +244,21 @@ func (api researchTasks) artifact(w http.ResponseWriter, r *http.Request) {
 	case experimentComparisonTask:
 		w.Header().Set("X-Source-SHA256", artifact.sourceSHA256)
 		writeTextAttachment(w, r, "experiment-comparison.json", "application/json", artifact.jsonArtifact)
+		return
+	case imageReviewTask:
+		review, err := scanImageReview(api.store.db.QueryRowContext(r.Context(), selectImageReview+` AND i.task_id = ?`,
+			r.PathValue("id"), r.PathValue("taskId")))
+		if err != nil {
+			writeImageReviewError(w, err)
+			return
+		}
+		body, err := json.MarshalIndent(review, "", "  ")
+		if err != nil {
+			writeStoreError(w, "encode image review", err)
+			return
+		}
+		w.Header().Set("X-Source-SHA256", review.SourceSHA256)
+		writeTextAttachment(w, r, "image-review.json", "application/json", string(body))
 		return
 	}
 	writeMarkdown(w, r, filename, artifact.markdown)

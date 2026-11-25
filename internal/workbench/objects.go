@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
@@ -9,6 +10,18 @@ import (
 )
 
 var errObjectDigest = errors.New("资料对象摘要无效。")
+
+type contextReader struct {
+	context.Context
+	io.Reader
+}
+
+func (r contextReader) Read(buf []byte) (int, error) {
+	if err := r.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(buf)
+}
 
 func validObjectDigest(digest string) bool {
 	return len(digest) == 2*sha256.Size && !strings.ContainsFunc(digest, func(r rune) bool {

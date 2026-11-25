@@ -58,7 +58,7 @@ func (s *Store) handleWorkspaceRestore(w http.ResponseWriter, r *http.Request) {
 	defer upload.Close()
 
 	body := http.MaxBytesReader(w, r.Body, maxRestoreUploadBytes)
-	size, err := io.Copy(upload, backupReader{ctx, body})
+	size, err := io.Copy(upload, contextReader{ctx, body})
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		var fileError *os.PathError
