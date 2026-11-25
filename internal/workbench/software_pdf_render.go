@@ -2,8 +2,12 @@ package workbench
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/signintech/gopdf"
@@ -22,12 +26,54 @@ var (
 
 var softwarePDFNewlines = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\t", "    ")
 
-func renderSoftwarePDF(ctx context.Context, font, kind, title, version string, sections []softwarePDFSection) ([]byte, int, error) {
+var softwarePDFEngineVersion, softwarePDFEngineIdentity = func() (string, string) {
+	if build, ok := debug.ReadBuildInfo(); ok {
+		for _, dependency := range build.Deps {
+			if dependency.Path != "github.com/signintech/gopdf" {
+				continue
+			}
+			if dependency.Replace != nil {
+				dependency = dependency.Replace
+			}
+			if dependency.Version != "" && dependency.Version != "(devel)" {
+				return dependency.Version, dependency.Path + "@" + dependency.Version + ":" + dependency.Sum
+			}
+			break
+		}
+	}
+	// Local renderer builds may only reuse entries within the same process.
+	return "", rand.Text()
+}()
+
+const maxSoftwarePDFFontBytes = 64 << 20
+
+// Use the same bytes for the cache key and the renderer.
+func loadSoftwarePDFFont(ctx context.Context, path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxSoftwarePDFFontBytes {
+		return nil, errSoftwarePDFFont
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errSoftwarePDFFont
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(contextReader{ctx, file}, maxSoftwarePDFFontBytes+1))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err != nil || len(body) == 0 || len(body) > maxSoftwarePDFFontBytes {
+		return nil, errSoftwarePDFFont
+	}
+	return body, nil
+}
+
+func renderSoftwarePDF(ctx context.Context, font []byte, kind, title, version string, sections []softwarePDFSection) ([]byte, int, error) {
 	var pdf gopdf.GoPdf
 	pdf.Start(gopdf.Config{PageSize: *gopdf.PageSizeA4})
 	// gopdf embeds the used TrueType glyphs and supplies a Unicode text map.
 	// https://github.com/signintech/gopdf/blob/v0.38.6/README.md#features
-	if err := pdf.AddTTFFont("material", font); err != nil {
+	if err := pdf.AddTTFFontData("material", font); err != nil {
 		return nil, 0, fmt.Errorf("%w: %v", errSoftwarePDFFont, err)
 	}
 	if err := pdf.SetFont("material", "", 10); err != nil {

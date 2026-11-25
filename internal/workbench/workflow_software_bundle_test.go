@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"testing"
@@ -159,6 +160,64 @@ func TestSoftwareWorkflowBundleBindsFilesToCompletedRevision(t *testing.T) {
 			t.Fatalf("wrong manifest record for %s: %+v", file.name, entry)
 		}
 	}
+
+	t.Run("reuses rendered PDF across downloads and bundles", func(t *testing.T) {
+		font := os.Getenv("SOFTWARE_PDF_TEST_FONT")
+		if font == "" {
+			t.Skip("set SOFTWARE_PDF_TEST_FONT to a local Chinese TrueType font")
+		}
+		handler = NewHandler(store, nil, HandlerConfig{SoftwarePDFFont: font})
+		artifact := projectsPath + "/" + registration.ProjectID + "/workflow/" + completed.RunID +
+			"/steps/program/artifacts/" + artifactIDs["software-registration-program.txt"]
+		first := get(artifact+"/pdf", http.StatusOK)
+		if first.Header().Get("X-PDF-Cache") != "miss" {
+			t.Fatalf("first render had unexpected cache status: %v", first.Header())
+		}
+		bundle := get(bundlePath(registration, completed, revision), http.StatusOK)
+		archive, err := zip.NewReader(bytes.NewReader(bundle.Body.Bytes()), int64(bundle.Body.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pdf, err := fs.ReadFile(archive, "software-registration-program.pdf")
+		if err != nil || !bytes.Equal(pdf, first.Body.Bytes()) {
+			t.Fatalf("bundle did not reuse the single-file PDF: %v", err)
+		}
+		if reused := get(artifact+"/pdf", http.StatusOK); reused.Header().Get("X-PDF-Cache") != "hit" || !bytes.Equal(reused.Body.Bytes(), pdf) {
+			t.Fatalf("repeat download did not reuse the cached PDF: %v", reused.Header())
+		}
+
+		usage, err := store.workspaceStorage(ctx)
+		if err != nil || usage.CacheCount != 2 || usage.CacheBytes <= int64(len(pdf)) || usage.CacheUnavailable {
+			t.Fatalf("cache usage did not include both rendered PDFs: %+v (%v)", usage, err)
+		}
+		var backup bytes.Buffer
+		if err := store.writeWorkspaceBackup(ctx, t.TempDir(), &backup); err != nil {
+			t.Fatal(err)
+		}
+		backupZIP, err := zip.NewReader(bytes.NewReader(backup.Bytes()), int64(backup.Len()))
+		if err != nil || len(backupZIP.File) != 2 {
+			t.Fatalf("backup included rebuildable cache files: %v", err)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1/api/v1/workspace-cache/clear", nil))
+		var receipt struct {
+			RemovedBytes int64
+			RemovedCount int
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &receipt); response.Code != http.StatusOK || err != nil ||
+			receipt.RemovedCount != usage.CacheCount || receipt.RemovedBytes != usage.CacheBytes {
+			t.Fatalf("clear receipt did not match cache usage: %d %s (%v)", response.Code, response.Body, err)
+		}
+		if used, err := store.workspaceStorage(ctx); err != nil || used.CacheCount != 0 || used.CacheBytes != 0 {
+			t.Fatalf("cache stayed after clear: %+v (%v)", used, err)
+		}
+		if got := get(artifact, http.StatusOK).Body.String(); got != program {
+			t.Fatal("clearing cache changed the source artifact")
+		}
+		if rebuilt := get(artifact+"/pdf", http.StatusOK); rebuilt.Header().Get("X-PDF-Cache") != "miss" || !bytes.HasPrefix(rebuilt.Body.Bytes(), []byte("%PDF-")) {
+			t.Fatalf("PDF could not be rebuilt after clear: %v", rebuilt.Header())
+		}
+	})
 
 	for _, tc := range []struct {
 		path, code string

@@ -10,12 +10,15 @@ import (
 )
 
 type workspaceStorage struct {
-	Directory     string `json:"directory"`
-	SchemaVersion int    `json:"schemaVersion"`
-	DatabaseBytes int64  `json:"databaseBytes"`
-	ObjectBytes   int64  `json:"objectBytes"`
-	ObjectCount   int    `json:"objectCount"`
-	TotalBytes    int64  `json:"totalBytes"`
+	Directory        string `json:"directory"`
+	SchemaVersion    int    `json:"schemaVersion"`
+	DatabaseBytes    int64  `json:"databaseBytes"`
+	ObjectBytes      int64  `json:"objectBytes"`
+	ObjectCount      int    `json:"objectCount"`
+	CacheBytes       int64  `json:"cacheBytes"`
+	CacheCount       int    `json:"cacheCount"`
+	CacheUnavailable bool   `json:"cacheUnavailable,omitempty"`
+	TotalBytes       int64  `json:"totalBytes"`
 }
 
 func (s *Store) handleWorkspaceStorage(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +63,15 @@ func (s *Store) workspaceStorage(ctx context.Context) (workspaceStorage, error) 
 		usage.ObjectBytes += info.Size()
 		usage.ObjectCount++
 	}
-	usage.TotalBytes = usage.DatabaseBytes + usage.ObjectBytes
+	cache, err := s.softwarePDFCacheUsage(ctx, false)
+	if err := ctx.Err(); err != nil {
+		return workspaceStorage{}, err
+	}
+	if err != nil {
+		usage.CacheUnavailable = true
+	} else {
+		usage.CacheBytes, usage.CacheCount = cache.bytes, cache.count
+	}
+	usage.TotalBytes = usage.DatabaseBytes + usage.ObjectBytes + usage.CacheBytes
 	return usage, nil
 }

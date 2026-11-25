@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type softwarePDFSection struct {
@@ -90,7 +91,17 @@ func (api workflows) softwareIdentificationPDF(w http.ResponseWriter, r *http.Re
 		writeStoreError(w, "read software PDF settings", err)
 		return
 	}
-	body, pages, err := renderSoftwareArtifactPDF(ctx, api.softwarePDFFont, title, settings.Version, key, artifact.markdown)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	font, err := loadSoftwarePDFFont(ctx, api.softwarePDFFont)
+	if err != nil {
+		writeSoftwarePDFError(w, err)
+		return
+	}
+	body, pages, reused, err := api.store.cachedSoftwarePDF(ctx, font, softwarePDFSource{
+		projectID: projectID, artifactID: artifact.ArtifactID, title: title, version: settings.Version,
+		kind: key, text: artifact.markdown,
+	})
 	if err != nil {
 		writeSoftwarePDFError(w, err)
 		return
@@ -102,12 +113,17 @@ func (api workflows) softwareIdentificationPDF(w http.ResponseWriter, r *http.Re
 	w.Header().Set("X-Source-Artifact-ID", artifact.ArtifactID)
 	w.Header().Set("X-Source-SHA256", fmt.Sprintf("%x", sha256.Sum256([]byte(artifact.markdown))))
 	w.Header().Set("X-PDF-Page-Count", strconv.Itoa(pages))
+	if reused {
+		w.Header().Set("X-PDF-Cache", "hit")
+	} else {
+		w.Header().Set("X-PDF-Cache", "miss")
+	}
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
 	}
 }
 
-func renderSoftwareArtifactPDF(ctx context.Context, font, title, version, key, text string) ([]byte, int, error) {
+func renderSoftwareArtifactPDF(ctx context.Context, font []byte, title, version, key, text string) ([]byte, int, error) {
 	if key == "manuscript" {
 		return renderSoftwarePDF(ctx, font, "文档鉴别材料", title, version, []softwarePDFSection{{text: text}})
 	}

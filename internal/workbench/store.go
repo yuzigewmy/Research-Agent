@@ -53,11 +53,12 @@ type projectCursor struct {
 
 // Store holds the workspace database and serializes access through one connection.
 type Store struct {
-	db         *sql.DB
-	tasks      taskWorkers
-	turns      turnWorkers
-	objectsDir string
-	backupMu   sync.Mutex
+	db               *sql.DB
+	tasks            taskWorkers
+	turns            turnWorkers
+	objectsDir       string
+	backupMu         sync.Mutex
+	softwarePDFCache softwarePDFCache
 }
 
 // Open creates the data directory if necessary and opens and migrates its database.

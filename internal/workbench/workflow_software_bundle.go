@@ -80,11 +80,18 @@ func (s *Store) readSoftwareBundle(ctx context.Context, projectID, runID string,
 	return manifest, artifacts, nil
 }
 
-func (api workflows) packSoftwareBundle(ctx context.Context, manifest softwareBundleManifest, artifacts []softwareBundleArtifact) ([]byte, error) {
+func (api workflows) packSoftwareBundle(ctx context.Context, projectID string, manifest softwareBundleManifest, artifacts []softwareBundleArtifact) ([]byte, error) {
 	var buffer bytes.Buffer
 	archive := zip.NewWriter(&buffer)
+	var font []byte
 	if api.softwarePDFFont == "" {
 		manifest.Omitted = append(manifest.Omitted, "pdf")
+	} else {
+		var err error
+		font, err = loadSoftwarePDFFont(ctx, api.softwarePDFFont)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if api.wordPython == "" {
 		manifest.Omitted = append(manifest.Omitted, "docx")
@@ -109,8 +116,11 @@ func (api workflows) packSoftwareBundle(ctx context.Context, manifest softwareBu
 		if err := add(artifact.name, artifact.id, sourceDigest, data); err != nil {
 			return nil, err
 		}
-		if api.softwarePDFFont != "" && (artifact.key == "manuscript" || artifact.key == "program") {
-			pdf, _, err := renderSoftwareArtifactPDF(ctx, api.softwarePDFFont, manifest.Title, manifest.Version, artifact.key, artifact.text)
+		if font != nil && (artifact.key == "manuscript" || artifact.key == "program") {
+			pdf, _, _, err := api.store.cachedSoftwarePDF(ctx, font, softwarePDFSource{
+				projectID: projectID, artifactID: artifact.id, title: manifest.Title, version: manifest.Version,
+				kind: artifact.key, text: artifact.text,
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -164,7 +174,7 @@ func (api workflows) softwareBundle(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	body, err := api.packSoftwareBundle(ctx, manifest, artifacts)
+	body, err := api.packSoftwareBundle(ctx, r.PathValue("id"), manifest, artifacts)
 	if errors.Is(err, errSoftwareBundleWord) {
 		writeError(w, http.StatusUnprocessableEntity, "EXPORT_FAILED", "手册的 Word 导出失败。请检查排版组件后重试。")
 		return

@@ -97,6 +97,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux.HandleFunc("/api/v1/workspace-restore", methodNotAllowed("POST"))
 	mux.HandleFunc("GET /api/v1/workspace-storage", store.handleWorkspaceStorage)
 	mux.HandleFunc("/api/v1/workspace-storage", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc("POST /api/v1/workspace-cache/clear", store.handleWorkspaceCacheClear)
+	mux.HandleFunc("/api/v1/workspace-cache/clear", methodNotAllowed("POST"))
 	registerWorkspaceComponents(mux, webFS, wordPython, softwarePDFFont)
 	store.registerWord(mux, wordPython)
 	store.registerSurveys(mux)

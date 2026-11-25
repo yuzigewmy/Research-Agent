@@ -7,8 +7,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -135,12 +133,15 @@ func probeSoftwarePDF(ctx context.Context, font string) workspaceComponent {
 		return result
 	}
 	result.Status, result.Message = "unavailable", "无法读取配置的 TrueType 字体文件。"
-	info, err := os.Stat(font)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+	fontData, err := loadSoftwarePDFFont(ctx, font)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Message = "鉴别材料 PDF 样例检查超时，请重试。"
+		}
 		return result
 	}
-	result.Bytes = info.Size()
-	body, pages, err := renderSoftwareArtifactPDF(ctx, font, "组件检查", "V1.0", "manuscript", "中文和 English 样例。")
+	result.Bytes = int64(len(fontData))
+	body, pages, err := renderSoftwareArtifactPDF(ctx, fontData, "组件检查", "V1.0", "manuscript", "中文和 English 样例。")
 	switch {
 	case errors.Is(err, errSoftwarePDFGlyph):
 		result.Message = "当前字体缺少样例所用的字形，请更换支持中英文的字体。"
@@ -152,14 +153,7 @@ func probeSoftwarePDF(ctx context.Context, font string) workspaceComponent {
 		result.Message = "无法生成鉴别材料 PDF 样例。请检查配置的字体。"
 	default:
 		result.Status, result.Message = "ready", "已用配置的字体生成一页中英文鉴别材料 PDF。"
-		if build, ok := debug.ReadBuildInfo(); ok {
-			for _, dependency := range build.Deps {
-				if dependency.Path == "github.com/signintech/gopdf" {
-					result.Version = dependency.Version
-					break
-				}
-			}
-		}
+		result.Version = softwarePDFEngineVersion
 	}
 	return result
 }
