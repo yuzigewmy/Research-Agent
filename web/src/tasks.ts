@@ -183,6 +183,46 @@ export function taskArtifactPath(projectId: string, taskId: string) {
   return `${taskPath(projectId, taskId)}/artifact`
 }
 
+const comparisonMissing = { baseline: '缺少基线', variant: '缺少方案', both: '两列均缺失' } as const
+
+export type ComparisonEvidenceRow = { line: number } & (
+  { baseline: string; variant: string; missing?: undefined }
+  | { baseline?: undefined; variant?: undefined; missing: keyof typeof comparisonMissing }
+)
+
+export interface ComparisonEvidence {
+  input: TaskInputVersion
+  items: ComparisonEvidenceRow[]
+  pairedRows: number
+  skippedRows: number
+  nextCursor?: string
+}
+
+export function comparisonRowStatus(row: ComparisonEvidenceRow) {
+  return row.missing ? comparisonMissing[row.missing] : '参与计算'
+}
+
+function isComparisonRow(value: unknown): value is ComparisonEvidenceRow {
+  const row = value as Partial<ComparisonEvidenceRow> | null
+  return !!row && Number.isSafeInteger(row.line) && row.line! >= 2
+    && (row.missing === undefined ? typeof row.baseline === 'string' && typeof row.variant === 'string'
+      : Object.hasOwn(comparisonMissing, row.missing) && row.baseline === undefined && row.variant === undefined)
+}
+
+export function getComparisonEvidence(projectId: string, taskId: string, input: TaskInputVersion, cursor: string, signal: AbortSignal) {
+  const query = cursor ? `?${new URLSearchParams({ cursor })}` : ''
+  return request(`${taskArtifactPath(projectId, taskId)}/evidence${query}`, (value): value is ComparisonEvidence => {
+    const page = value as Partial<ComparisonEvidence> | null
+    if (!page || !isTaskInputVersion(page.input)) return false
+    const { versionId, sha256, path } = page.input
+    return versionId === input.versionId && sha256 === input.sha256 && path === input.path
+      && Number.isSafeInteger(page.pairedRows) && page.pairedRows! > 0
+      && Number.isSafeInteger(page.skippedRows) && page.skippedRows! >= 0
+      && Array.isArray(page.items) && page.items.every(isComparisonRow)
+      && (page.nextCursor === undefined || (typeof page.nextCursor === 'string' && /^[1-9]\d{0,3}$/.test(page.nextCursor)))
+  }, { signal })
+}
+
 export function saveComparisonReport(projectId: string, taskId: string, signal: AbortSignal) {
   return request(`${taskArtifactPath(projectId, taskId)}/workspace`, isFileRecord, { method: 'POST', signal })
 }

@@ -112,7 +112,7 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 	}
 	request(http.MethodPost, projectsPath+"/"+other.ProjectID+"/tasks", body, http.StatusUnprocessableEntity)
 	request(http.MethodPost, base, strings.Replace(body, `"kind":"experiment-comparison",`, "", 1), http.StatusConflict)
-	second := save(first.SHA256, "2,4\n4,8\n9,\n")
+	second := save(first.SHA256, strings.Repeat("2,4\n4,8\n", 26)+"\"9\nignored\",\n,\n")
 	taskPath := base + "/" + task.TaskID
 	request(http.MethodPost, taskPath+"/confirm", fmt.Sprintf(`{"requestId":"old","expectedRevision":%d}`, task.Revision), http.StatusConflict)
 	task = decodeTask(request(http.MethodPatch, taskPath,
@@ -152,12 +152,40 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 	if err := json.Unmarshal(result.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	want := experimentMetrics{PairedRows: 2, SkippedRows: 1, BaselineMean: "3", VariantMean: "6", MeanDifference: "3"}
+	want := experimentMetrics{PairedRows: 52, SkippedRows: 2, BaselineMean: "3", VariantMean: "6", MeanDifference: "3"}
 	if result.Header().Get("Content-Type") != "application/json" || result.Header().Get("X-Source-SHA256") != second.SHA256 ||
 		report.Method != "paired-mean-v1" || report.Input.VersionID != second.VersionID || report.Input.SHA256 != second.SHA256 || report.Metrics != want {
 		t.Fatalf("wrong fixed result: %+v %v", report, result.Header())
 	}
 	request(http.MethodGet, projectsPath+"/"+other.ProjectID+"/tasks/"+task.TaskID+"/artifact", "", http.StatusNotFound)
+
+	evidencePath := taskPath + "/artifact/evidence"
+	request(http.MethodGet, strings.Replace(evidencePath, project.ProjectID, other.ProjectID, 1), "", http.StatusNotFound)
+	request(http.MethodGet, evidencePath+"?cursor=-1", "", http.StatusBadRequest)
+	readPage := func(route string) (page struct {
+		Input                   taskInput
+		Items                   []experimentRow
+		PairedRows, SkippedRows int
+		NextCursor              string
+	}) {
+		t.Helper()
+		if err := json.Unmarshal(request(http.MethodGet, route, "", http.StatusOK).Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	firstPage := readPage(evidencePath)
+	if firstPage.Input != report.Input || firstPage.PairedRows != 52 || firstPage.SkippedRows != 2 ||
+		len(firstPage.Items) != 50 || firstPage.NextCursor != "50" ||
+		firstPage.Items[0] != (experimentRow{Line: 2, Baseline: "2", Variant: "4"}) {
+		t.Fatalf("first evidence page did not match original report: %+v", firstPage)
+	}
+	lastPage := readPage(evidencePath + "?cursor=" + firstPage.NextCursor)
+	if lastPage.Input != report.Input || lastPage.NextCursor != "" || len(lastPage.Items) != 4 ||
+		lastPage.Items[2] != (experimentRow{Line: 54, Missing: "variant"}) ||
+		lastPage.Items[3] != (experimentRow{Line: 56, Missing: "both"}) {
+		t.Fatalf("last evidence page did not locate the skipped records: %+v", lastPage)
+	}
 
 	publication := taskPath + "/artifact/workspace"
 	request(http.MethodPost, projectsPath+"/"+other.ProjectID+"/tasks/"+task.TaskID+"/artifact/workspace", "", http.StatusNotFound)

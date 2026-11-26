@@ -74,72 +74,105 @@ func experimentMean(sum, count *big.Rat) json.Number {
 	return json.Number(new(big.Float).SetPrec(256).SetRat(mean).Text('g', 34))
 }
 
-func compareExperimentMetrics(ctx context.Context, source string) (experimentMetrics, error) {
+type experimentRow struct {
+	Line     int    `json:"line"`
+	Baseline string `json:"baseline,omitempty"`
+	Variant  string `json:"variant,omitempty"`
+	Missing  string `json:"missing,omitempty"`
+}
+
+type experimentComparisonReport struct {
+	Method  string            `json:"method"`
+	Input   taskInput         `json:"input"`
+	Metrics experimentMetrics `json:"metrics"`
+}
+
+func scanExperimentRows(ctx context.Context, source string, visit func(experimentRow, *big.Rat, *big.Rat)) error {
 	if err := ctx.Err(); err != nil {
-		return experimentMetrics{}, err
+		return err
 	}
 	if !utf8.ValidString(source) || strings.ContainsRune(source, 0) {
-		return experimentMetrics{}, experimentDataError("请选择不含空字符的 UTF-8 CSV 文件。")
+		return experimentDataError("请选择不含空字符的 UTF-8 CSV 文件。")
 	}
 	reader := csv.NewReader(strings.NewReader(strings.TrimPrefix(source, "\ufeff")))
 	reader.ReuseRecord = true
 	header, err := reader.Read()
 	if err != nil {
-		return experimentMetrics{}, experimentDataError("无法读取 CSV 表头。请核对逗号分隔和引号。")
+		return experimentDataError("无法读取 CSV 表头。请核对逗号分隔和引号。")
 	}
 	baseline, variant := -1, -1
 	for index, name := range header {
 		switch strings.TrimSpace(name) {
 		case "baseline":
 			if baseline != -1 {
-				return experimentMetrics{}, experimentDataError("表头中的 baseline 列重复。")
+				return experimentDataError("表头中的 baseline 列重复。")
 			}
 			baseline = index
 		case "variant":
 			if variant != -1 {
-				return experimentMetrics{}, experimentDataError("表头中的 variant 列重复。")
+				return experimentDataError("表头中的 variant 列重复。")
 			}
 			variant = index
 		}
 	}
 	if baseline == -1 || variant == -1 {
-		return experimentMetrics{}, experimentDataError("CSV 表头必须包含 baseline 和 variant 两列。")
+		return experimentDataError("CSV 表头必须包含 baseline 和 variant 两列。")
 	}
-	var metrics experimentMetrics
-	var bases, variants big.Rat
-	for {
+	for index := 0; ; index++ {
 		if err := ctx.Err(); err != nil {
-			return experimentMetrics{}, err
+			return err
 		}
 		row, err := reader.Read()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
 			var parse *csv.ParseError
 			if errors.As(err, &parse) {
-				return experimentMetrics{}, experimentDataError(fmt.Sprintf("CSV 第 %d 行的分隔格式或列数有误。", parse.StartLine))
+				return experimentDataError(fmt.Sprintf("CSV 第 %d 行的分隔格式或列数有误。", parse.StartLine))
 			}
-			return experimentMetrics{}, err
+			return err
 		}
-		if metrics.PairedRows+metrics.SkippedRows == maxExperimentRows {
-			return experimentMetrics{}, experimentDataError("数据超过 10,000 行。请缩小输入范围后重新提交。")
+		if index == maxExperimentRows {
+			return experimentDataError("数据超过 10,000 行。请缩小输入范围后重新提交。")
 		}
+		line, _ := reader.FieldPos(0)
 		base := strings.TrimSpace(row[baseline])
 		alternative := strings.TrimSpace(row[variant])
 		if base == "" || alternative == "" {
-			metrics.SkippedRows++
+			missing := "variant"
+			if base == "" {
+				missing = "baseline"
+				if alternative == "" {
+					missing = "both"
+				}
+			}
+			visit(experimentRow{Line: line, Missing: missing}, nil, nil)
 			continue
 		}
 		baselineValue := parseExperimentMetric(base)
 		variantValue := parseExperimentMetric(alternative)
 		if baselineValue == nil || variantValue == nil {
-			line, _ := reader.FieldPos(0)
-			return experimentMetrics{}, experimentDataError(fmt.Sprintf("CSV 第 %d 行的指标须为十进制数。单个值最多 %d 字节，绝对值不超过 1e100，指数的绝对值不超过 999。", line, maxExperimentMetricBytes))
+			return experimentDataError(fmt.Sprintf("CSV 第 %d 行的指标须为十进制数。单个值最多 %d 字节，绝对值不超过 1e100，指数的绝对值不超过 999。", line, maxExperimentMetricBytes))
+		}
+		visit(experimentRow{Line: line, Baseline: base, Variant: alternative}, baselineValue, variantValue)
+	}
+}
+
+func compareExperimentMetrics(ctx context.Context, source string) (experimentMetrics, error) {
+	var metrics experimentMetrics
+	var bases, variants big.Rat
+	err := scanExperimentRows(ctx, source, func(row experimentRow, baseline, variant *big.Rat) {
+		if row.Missing != "" {
+			metrics.SkippedRows++
+			return
 		}
 		metrics.PairedRows++
-		bases.Add(&bases, baselineValue)
-		variants.Add(&variants, variantValue)
+		bases.Add(&bases, baseline)
+		variants.Add(&variants, variant)
+	})
+	if err != nil {
+		return experimentMetrics{}, err
 	}
 	if metrics.PairedRows == 0 {
 		return experimentMetrics{}, experimentDataError("CSV 中没有完整的基线与方案配对。")
@@ -152,37 +185,41 @@ func compareExperimentMetrics(ctx context.Context, source string) (experimentMet
 	return metrics, nil
 }
 
-func (s *Store) runExperimentComparison(ctx context.Context, projectID string, input taskInput) (taskResult, error) {
+func (s *Store) readExperimentSource(ctx context.Context, projectID string, input taskInput) (string, error) {
 	file, err := s.workspaceVersion(ctx, projectID, input.VersionID)
 	if err != nil {
-		return taskResult{}, err
+		return "", err
 	}
 	if file.SHA256 != input.SHA256 || file.Path != input.Path {
-		return taskResult{}, experimentDataError("计算输入与确认的文件版本不一致。")
+		return "", experimentDataError("计算输入与确认的文件版本不一致。")
 	}
 	source, err := s.openObject(file.SHA256)
 	if err != nil {
-		return taskResult{}, err
+		return "", err
 	}
 	defer source.Close()
-	body, err := io.ReadAll(io.LimitReader(source, maxWorkspaceText+1))
+	body, err := io.ReadAll(io.LimitReader(contextReader{ctx, source}, maxWorkspaceText+1))
 	if err != nil {
-		return taskResult{}, err
+		return "", err
 	}
 	if len(body) > maxWorkspaceText {
-		return taskResult{}, experimentDataError("计算输入超过 512 KiB。")
+		return "", experimentDataError("计算输入超过 512 KiB。")
 	}
 	if fmt.Sprintf("%x", sha256.Sum256(body)) != input.SHA256 {
-		return taskResult{}, experimentDataError("计算输入未通过摘要校验。")
+		return "", experimentDataError("计算输入未通过摘要校验。")
 	}
-	metrics, err := compareExperimentMetrics(ctx, string(body))
+	return string(body), nil
+}
+
+func (s *Store) runExperimentComparison(ctx context.Context, projectID string, input taskInput) (taskResult, error) {
+	source, err := s.readExperimentSource(ctx, projectID, input)
 	if err != nil {
 		return taskResult{}, err
 	}
-	report, err := json.MarshalIndent(struct {
-		Method  string            `json:"method"`
-		Input   taskInput         `json:"input"`
-		Metrics experimentMetrics `json:"metrics"`
-	}{experimentComparisonMethod, input, metrics}, "", "  ")
+	metrics, err := compareExperimentMetrics(ctx, source)
+	if err != nil {
+		return taskResult{}, err
+	}
+	report, err := json.MarshalIndent(experimentComparisonReport{experimentComparisonMethod, input, metrics}, "", "  ")
 	return taskResult{jsonArtifact: string(report)}, err
 }

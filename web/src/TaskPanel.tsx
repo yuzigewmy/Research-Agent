@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { ExperimentEvidence } from './ExperimentEvidence'
 import { ExperimentReportHandoff } from './ExperimentReportHandoff'
 import { errorMessage, ProjectApiError } from './projects'
 import { selectionEditInstructionLimit } from './SelectionEdit'
@@ -291,6 +292,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         {isExperimentComparison && onReportSaved &&
           <ExperimentReportHandoff projectId={projectId} taskId={task.taskId} onSaved={onReportSaved} />}
       </div>}
+      {isExperimentComparison && task.status === 'SUCCEEDED' && currentInputs[0] &&
+        <ExperimentEvidence projectId={projectId} taskId={task.taskId} input={currentInputs[0]} />}
     </li>
   )
 }
