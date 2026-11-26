@@ -1,10 +1,31 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { diagramHeight, diagramWidth } from './diagram'
 import { ProjectApiError } from './projects'
-import { diagramSvgPath } from './workspace'
+import { diagramPdfPath, diagramSvgPath } from './workspace'
 import type { FileRecord } from './workspace'
 
-type Props = { projectId: string; file: FileRecord; historical?: boolean }
+type Props = { projectId: string; file: FileRecord; format: 'png' | 'pdf'; historical?: boolean }
+
+async function readPdf(projectId: string, file: FileRecord, signal: AbortSignal) {
+  const response = await fetch(diagramPdfPath(projectId, file.versionId), {
+    mode: 'same-origin', redirect: 'error', cache: 'no-store',
+    headers: { Accept: 'application/pdf' }, signal,
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: { message?: unknown } } | null
+    const message = body?.error?.message
+    throw new ProjectApiError(typeof message === 'string' ? message : `无法读取流程图 PDF（HTTP ${response.status}）。`, response.status)
+  }
+  if (response.headers.get('X-Source-Version-ID') !== file.versionId
+    || response.headers.get('X-Source-SHA256')?.toLowerCase() !== file.sha256.toLowerCase()) {
+    throw new ProjectApiError('流程图的来源摘要与所选版本不符。', 409)
+  }
+  const pdf = await response.blob()
+  if (pdf.type !== 'application/pdf' || await pdf.slice(0, 5).text() !== '%PDF-') {
+    throw new ProjectApiError('流程图服务返回的文件不是 PDF。', 422)
+  }
+  return pdf
+}
 
 async function readSvg(projectId: string, file: FileRecord, signal: AbortSignal) {
   const response = await fetch(diagramSvgPath(projectId, file.versionId), {
@@ -52,23 +73,28 @@ async function rasterize(svg: Blob, signal: AbortSignal) {
   }
 }
 
-function downloadPng(pngUrl: string, path: string) {
+function saveDownload(output: string | Blob, path: string, format: Props['format']) {
   const name = path.split('/').at(-1)?.replace(/\.flow\.json$/, '') || '流程图'
+  const url = typeof output === 'string' ? output : URL.createObjectURL(output)
   const link = document.createElement('a')
-  link.href = pngUrl
-  link.download = `${name}.png`
+  link.href = url
+  link.download = `${name}.${format}`
   link.hidden = true
   document.body.append(link)
-  link.click()
-  link.remove()
+  try {
+    link.click()
+  } finally {
+    link.remove()
+    if (typeof output !== 'string') window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  }
 }
 
-export function DiagramPngDownload({ projectId, file, historical = false }: Props) {
-  return <VersionPngDownload key={JSON.stringify([projectId, file.versionId, file.sha256, file.path])}
-    projectId={projectId} file={file} historical={historical} />
+export function DiagramDownload(props: Props) {
+  const { projectId, file, format } = props
+  return <VersionDownload key={JSON.stringify([projectId, file.versionId, file.sha256, file.path, format])} {...props} />
 }
 
-function VersionPngDownload({ projectId, file, historical }: Props) {
+function VersionDownload({ projectId, file, format, historical }: Props) {
   const id = useId()
   const currentRequest = useRef<AbortController | null>(null)
   const [busy, setBusy] = useState(false)
@@ -83,14 +109,14 @@ function VersionPngDownload({ projectId, file, historical }: Props) {
     setBusy(true)
     setError('')
     try {
-      const svg = await readSvg(projectId, file, signal)
-      const png = await rasterize(svg, signal)
+      const output = format === 'pdf' ? await readPdf(projectId, file, signal)
+        : await rasterize(await readSvg(projectId, file, signal), signal)
       signal.throwIfAborted()
-      downloadPng(png, file.path)
+      saveDownload(output, file.path, format)
     } catch (cause) {
       if (!controller.signal.aborted) {
-        const message = cause instanceof ProjectApiError ? cause.message : '无法完成 PNG 下载。'
-        setError(signal.aborted ? '生成 PNG 超时。' : message)
+        const message = cause instanceof ProjectApiError ? cause.message : `无法完成 ${format.toUpperCase()} 下载。`
+        setError(signal.aborted ? '流程图导出超时。' : message)
       }
     } finally {
       currentRequest.current = null
@@ -98,11 +124,11 @@ function VersionPngDownload({ projectId, file, historical }: Props) {
     }
   }
 
-  const label = historical ? '下载此版本 PNG' : '下载 PNG'
+  const label = `${historical ? '下载此版本' : '下载'} ${format.toUpperCase()}`
   return <>
     <button className="button outline" type="button" disabled={busy} aria-busy={busy}
       aria-describedby={error ? id : undefined} onClick={() => void download()}>
-      {busy ? '正在生成 PNG…' : label}
+      {busy ? `正在生成 ${format.toUpperCase()}…` : label}
     </button>
     {error && <p className="form-error" id={id} role="alert">{error}请再次点击「{label}」重试。</p>}
   </>

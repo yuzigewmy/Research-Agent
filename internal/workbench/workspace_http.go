@@ -13,7 +13,7 @@ import (
 
 const maxWorkspaceText = 512 << 10
 
-func (s *Store) registerWorkspace(mux *http.ServeMux) {
+func (s *Store) registerWorkspace(mux *http.ServeMux, pdfFont string) {
 	path := projectsPath + "/{id}/files"
 	mux.HandleFunc("GET "+path, s.handleListWorkspace(false))
 	mux.HandleFunc("GET "+path+"/text", s.handleWorkspaceText)
@@ -21,6 +21,7 @@ func (s *Store) registerWorkspace(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path+"/versions", s.handleListWorkspace(true))
 	mux.HandleFunc("GET "+path+"/versions/{versionId}", s.handleWorkspaceVersion)
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.svg", s.handleDiagramSVG)
+	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.pdf", s.handleDiagramPDF(pdfFont))
 	mux.HandleFunc("POST "+path+"/versions/{versionId}/restore", s.handleRestoreWorkspace)
 }
 

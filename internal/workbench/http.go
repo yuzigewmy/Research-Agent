@@ -90,7 +90,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerMaterials(mux)
 	imageReviews{store: store, model: config.Model, role: visionModel}.register(mux)
 	imageGenerations{store: store, model: config.Model, role: generationRole}.register(mux)
-	store.registerWorkspace(mux)
+	store.registerWorkspace(mux, softwarePDFFont)
 	mux.HandleFunc("POST /api/v1/workspace-backup", store.handleWorkspaceBackup)
 	mux.HandleFunc("/api/v1/workspace-backup", methodNotAllowed("POST"))
 	mux.HandleFunc("POST /api/v1/workspace-restore", store.handleWorkspaceRestore)

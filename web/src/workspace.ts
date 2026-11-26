@@ -111,6 +111,10 @@ export function diagramSvgPath(projectId: string, versionId: string) {
   return `${versionPath(projectId, versionId)}/diagram.svg`
 }
 
+export function diagramPdfPath(projectId: string, versionId: string) {
+  return `${versionPath(projectId, versionId)}/diagram.pdf`
+}
+
 export async function readText(projectId: string, path: string, signal: AbortSignal) {
   return request(`${filesPath(projectId)}/text?${new URLSearchParams({ path })}`, isDocument, { signal })
 }

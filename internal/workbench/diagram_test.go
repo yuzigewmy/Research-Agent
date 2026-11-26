@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -59,7 +60,7 @@ func TestDiagramExportsTheSelectedWorkspaceVersion(t *testing.T) {
 	first := save(path, original, "", http.StatusOK)
 	second := save(path, strings.Replace(original, "复核", "记录", 1), first.SHA256, http.StatusOK)
 	save(path, strings.Replace(original, "复核", "留样", 1), first.SHA256, http.StatusConflict)
-	save("notes.md", "## 记录", "", http.StatusOK)
+	notes := save("notes.md", "## 记录", "", http.StatusOK)
 	var list struct{ Items []WorkspaceFile }
 	res := request(http.MethodGet, base+"?kind=diagram", nil, http.StatusOK)
 	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil || len(list.Items) != 1 || list.Items[0].VersionID != second.VersionID {
@@ -78,4 +79,23 @@ func TestDiagramExportsTheSelectedWorkspaceVersion(t *testing.T) {
 	if !strings.Contains(svg, "采样 &lt;A&gt; &amp; B") || !strings.Contains(svg, "复核") || strings.Contains(svg, "记录") || !strings.Contains(svg, `<line `) {
 		t.Fatalf("SVG did not render the selected nodes and edges as data: %s", svg)
 	}
+
+	pdfPath := "/versions/" + first.VersionID + "/diagram.pdf"
+	request(http.MethodGet, other+pdfPath, nil, http.StatusNotFound)
+	request(http.MethodGet, base+"/versions/"+notes.VersionID+"/diagram.pdf", nil, http.StatusNotFound)
+	request(http.MethodGet, base+pdfPath, nil, http.StatusServiceUnavailable)
+	t.Run("configured PDF", func(t *testing.T) {
+		font := os.Getenv("SOFTWARE_PDF_TEST_FONT")
+		if font == "" {
+			t.Skip("configure a local Chinese TrueType font")
+		}
+		handler = NewHandler(store, nil, HandlerConfig{SoftwarePDFFont: font})
+		exported := request(http.MethodGet, base+pdfPath, nil, http.StatusOK)
+		disposition, params, err := mime.ParseMediaType(exported.Header().Get("Content-Disposition"))
+		if err != nil || disposition != "attachment" || params["filename"] != "采样流程.pdf" ||
+			exported.Header().Get("X-Source-SHA256") != first.SHA256 || exported.Header().Get("X-Source-Version-ID") != first.VersionID ||
+			exported.Header().Get("Content-Type") != "application/pdf" || !strings.HasPrefix(exported.Body.String(), "%PDF-") {
+			t.Fatalf("PDF download did not identify its source version: %v", exported.Header())
+		}
+	})
 }

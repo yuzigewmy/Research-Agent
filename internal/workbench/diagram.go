@@ -101,6 +101,16 @@ func parseDiagram(content string) (diagramDocument, error) {
 	return doc, nil
 }
 
+func diagramEdgePoints(from, to diagramNode) (x1, y1, x2, y2 float64, visible bool) {
+	dx, dy := float64(*to.X-*from.X), float64(*to.Y-*from.Y)
+	fraction := math.Min(nodeWidth/2/math.Abs(dx), nodeHeight/2/math.Abs(dy))
+	if fraction >= 0.5 {
+		return 0, 0, 0, 0, false
+	}
+	return float64(*from.X+nodeWidth/2) + dx*fraction, float64(*from.Y+nodeHeight/2) + dy*fraction,
+		float64(*to.X+nodeWidth/2) - dx*fraction, float64(*to.Y+nodeHeight/2) - dy*fraction, true
+}
+
 func renderDiagramSVG(diagram diagramDocument) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d">`, diagramWidth, diagramHeight, diagramWidth, diagramHeight)
@@ -111,15 +121,10 @@ func renderDiagramSVG(diagram diagramDocument) string {
 		nodes[node.ID] = node
 	}
 	for _, edge := range diagram.Edges {
-		from, to := nodes[edge.From], nodes[edge.To]
-		dx, dy := float64(*to.X-*from.X), float64(*to.Y-*from.Y)
-		fraction := math.Min(nodeWidth/2/math.Abs(dx), nodeHeight/2/math.Abs(dy))
-		if fraction >= 0.5 {
-			continue
+		x1, y1, x2, y2, visible := diagramEdgePoints(nodes[edge.From], nodes[edge.To])
+		if visible {
+			fmt.Fprintf(&out, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" stroke="#39534a" stroke-width="2" marker-end="url(#arrow)"/>`, x1, y1, x2, y2)
 		}
-		fmt.Fprintf(&out, `<line x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" stroke="#39534a" stroke-width="2" marker-end="url(#arrow)"/>`,
-			float64(*from.X+nodeWidth/2)+dx*fraction, float64(*from.Y+nodeHeight/2)+dy*fraction,
-			float64(*to.X+nodeWidth/2)-dx*fraction, float64(*to.Y+nodeHeight/2)-dy*fraction)
 	}
 	for _, node := range diagram.Nodes {
 		fmt.Fprintf(&out, `<rect x="%d" y="%d" width="%d" height="%d" rx="6" fill="#f5f8f6" stroke="#39534a" stroke-width="2"/>`,
