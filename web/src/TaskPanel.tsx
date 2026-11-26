@@ -276,6 +276,12 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
           {pending === `cancel:${task.taskId}` ? '正在提交…' : '取消任务'}
         </button>
       </div>}
+      {isExperimentComparison && task.status === 'INTERRUPTED' && <div className="task-actions">
+        <button className="button primary" type="button" aria-disabled={pending !== null}
+          onClick={() => { if (pending === null) void onAction({ kind: 'resume', task }) }}>
+          {pending === `resume:${task.taskId}` ? '正在提交…' : '按原数据继续'}
+        </button>
+      </div>}
       {task.status === 'SUCCEEDED' && !isSelectionEdit && <div className="task-actions">
         <a className="button outline" href={taskArtifactPath(projectId, task.taskId)} download>
           {isExperimentComparison ? '下载指标对比报告' : isManuscriptCheck ? '下载检查报告'

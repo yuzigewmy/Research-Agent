@@ -13,7 +13,7 @@ export const taskStatusLabels = {
 } as const
 
 export type TaskStatus = keyof typeof taskStatusLabels
-export type TaskAction = 'confirm' | 'cancel'
+export type TaskAction = 'confirm' | 'cancel' | 'resume'
 export type TaskLink = { taskId: string }
 
 export interface TaskInputVersion {

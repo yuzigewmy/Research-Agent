@@ -36,10 +36,11 @@ const (
 )
 
 const (
-	proposeTask = "propose"
-	editTask    = "edit"
-	confirmTask = "confirm"
-	cancelTask  = "cancel"
+	proposeTask          = "propose"
+	editTask             = "edit"
+	confirmTask          = "confirm"
+	cancelTask           = "cancel"
+	resumeComparisonTask = "resume"
 )
 
 var (
@@ -128,7 +129,7 @@ func recoverInterruptedTasks(tx *sql.Tx) error {
 			WHEN review_version_id IS NOT NULL THEN '服务重启中断了评审，可以按原稿版本重试。'
 			WHEN workflow_run_id IS NOT NULL THEN '服务重启中断了此步骤。可以从这里继续。'
 			WHEN kind = 'manuscript-check' THEN '服务重启中断了稿件检查，可以重新提出检查。'
-			WHEN kind = 'experiment-comparison' THEN '服务重启中断了指标对比，可以用已保存的数据重新提交。'
+			WHEN kind = 'experiment-comparison' THEN '服务重启中断了指标对比。可按原数据继续。'
 			WHEN kind = 'image-review' THEN '服务重启中断了图片复查，可以用原图重试。'
 			WHEN kind = 'image-generation' THEN '服务重启时未保存生图结果。模型服务可能已经处理该请求。'
 			ELSE '服务重启中断了已确认的任务，可以提议一项新任务。'
@@ -260,6 +261,8 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 				}
 				message = ""
 			}
+		case resumeComparisonTask:
+			message = ""
 		case confirmTask:
 			if len(task.Inputs) != 0 {
 				var changed bool
@@ -308,6 +311,12 @@ func nextTaskStatus(task Task, req taskRequest, modelConfigured bool) (string, e
 		}
 		return taskProposed, nil
 	}
+	if req.Action == resumeComparisonTask {
+		if task.Kind != experimentComparisonTask || task.Status != taskInterrupted {
+			return "", errTaskState
+		}
+		return taskQueued, nil
+	}
 	if req.Action == confirmTask {
 		if task.Status != taskProposed {
 			return "", errTaskState
@@ -333,9 +342,14 @@ func (s *Store) claimQueuedTask(ctx context.Context, projectID string, modelConf
 		return Task{}, err
 	}
 	defer tx.Rollback()
+	// An explicit resume receipt for this queued revision authorizes reusing the pinned input.
 	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET status = 'PROPOSED', revision = revision + 1, queued_seq = NULL,
 		message = CASE WHEN selection_edit = 1 THEN ? ELSE ? END
-		WHERE project_id = ? AND status = 'QUEUED' AND `+changedTaskInputs, selectionTaskChangedMessage, taskInputsChangedMessage, projectID); err != nil {
+		WHERE project_id = ? AND status = 'QUEUED' AND `+changedTaskInputs+`
+		AND NOT (kind = ? AND EXISTS (
+			SELECT 1 FROM task_requests r WHERE r.project_id = tasks.project_id AND r.task_id = tasks.task_id
+			AND r.action = ? AND r.expected_revision = tasks.revision - 1
+		))`, selectionTaskChangedMessage, taskInputsChangedMessage, projectID, experimentComparisonTask, resumeComparisonTask); err != nil {
 		return Task{}, err
 	}
 	task, err := scanTask(tx.QueryRowContext(ctx, `UPDATE tasks SET status = 'RUNNING', revision = revision + 1
@@ -386,8 +400,9 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 		review_findings = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '[]' END,
 		workflow_topic_data = CASE WHEN status = 'RUNNING' AND ? = 'SUCCEEDED' THEN ? ELSE '' END
 		WHERE project_id = ? AND task_id = ? AND status IN ('RUNNING', 'CANCELLING')
+		AND (kind <> ? OR revision = ? + CASE WHEN status = 'CANCELLING' THEN 1 ELSE 0 END)
 		RETURNING status`, status, message, status, result.markdown, status, result.jsonArtifact, status, findings,
-		status, result.topicData, projectID, task.TaskID).Scan(&status)
+		status, result.topicData, projectID, task.TaskID, experimentComparisonTask, task.Revision).Scan(&status)
 	if err != nil {
 		return err
 	}

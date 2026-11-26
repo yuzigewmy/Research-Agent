@@ -95,6 +95,9 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 
 		result, err := s.generateTaskResult(ctx, model, projectID, task)
 		status, message := planOutcome(ctx.Err(), err, task.TaskID)
+		if status == taskInterrupted && task.Kind == experimentComparisonTask {
+			message = "服务关闭中断了指标对比。可按原数据继续。"
+		}
 		if status == taskFailed {
 			switch task.Kind {
 			case manuscriptCheckTask:

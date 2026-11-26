@@ -213,4 +213,70 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 		t.Fatalf("late output overrode cancellation: %+v", cancelled)
 	}
 	request(http.MethodGet, stoppedPath+"/artifact", "", http.StatusNotFound)
+	request(http.MethodPost, stoppedPath+"/resume", fmt.Sprintf(`{"requestId":"resume-cancelled","expectedRevision":%d}`, claimed.Revision+2), http.StatusConflict)
+
+	// Simulate a service exit after claiming a calculation, then change the source.
+	body = strings.Replace(fmt.Sprintf(proposal, third.VersionID), `"compare"`, `"interrupted"`, 1)
+	interrupted := decodeTask(request(http.MethodPost, base, body, http.StatusCreated))
+	confirmation = taskRequest{ProjectID: project.ProjectID, TaskID: interrupted.TaskID, RequestID: "queue-interrupted", Action: confirmTask, ExpectedRevision: interrupted.Revision}
+	if _, _, err := store.applyTaskRequest(ctx, confirmation, false); err != nil {
+		t.Fatal(err)
+	}
+	beforeRestart, err := store.claimQueuedTask(ctx, project.ProjectID, false)
+	if err != nil || beforeRestart.TaskID != interrupted.TaskID {
+		t.Fatalf("wrong interrupted task: %+v (%v)", beforeRestart, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = NewHandler(store, nil, HandlerConfig{})
+	save(third.SHA256, "1,999\n")
+	resumePath := base + "/" + beforeRestart.TaskID
+	interrupted = decodeTask(request(http.MethodGet, resumePath, "", http.StatusOK))
+	if interrupted.Status != taskInterrupted {
+		t.Fatalf("unexpected state after restart: %+v", interrupted)
+	}
+	resume := fmt.Sprintf(`{"requestId":"resume-original","expectedRevision":%d}`, interrupted.Revision)
+	request(http.MethodPost, strings.Replace(resumePath, project.ProjectID, other.ProjectID, 1)+"/resume", resume, http.StatusNotFound)
+	// Hold the worker so a stale completion can be tested against the reclaimed task.
+	store.tasks.closing = true
+	resumed := decodeTask(request(http.MethodPost, resumePath+"/resume", resume, http.StatusAccepted))
+	if resumed.TaskID != beforeRestart.TaskID || resumed.Status != taskQueued || resumed.Inputs[0].SHA256 != third.SHA256 {
+		t.Fatalf("resume changed the task or its fixed input: %+v", resumed)
+	}
+	request(http.MethodPost, resumePath+"/resume", strings.Replace(resume, "resume-original", "resume-race", 1), http.StatusConflict)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = NewHandler(store, nil, HandlerConfig{})
+	reclaimed, err := store.claimQueuedTask(ctx, project.ProjectID, false)
+	if err != nil || reclaimed.TaskID != resumed.TaskID || reclaimed.Revision <= beforeRestart.Revision {
+		t.Fatalf("could not reclaim the original task: %+v (%v)", reclaimed, err)
+	}
+	if err := store.finishTask(ctx, project.ProjectID, beforeRestart, taskSucceeded, "", taskResult{jsonArtifact: `{}`}); err == nil {
+		t.Fatal("an earlier claim could still publish a result")
+	}
+	recalculated, err := store.runExperimentComparison(ctx, project.ProjectID, reclaimed.Inputs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.finishTask(ctx, project.ProjectID, reclaimed, taskSucceeded, "", recalculated); err != nil {
+		t.Fatal(err)
+	}
+	if saved := decodeTask(request(http.MethodPost, resumePath+"/resume", resume, http.StatusOK)); saved.TaskID != resumed.TaskID || saved.Status != taskSucceeded {
+		t.Fatalf("resume replay changed the task: %+v", saved)
+	}
+	resumedReport := request(http.MethodGet, resumePath+"/artifact", "", http.StatusOK)
+	if err := json.Unmarshal(resumedReport.Body.Bytes(), &report); err != nil || report.Input.VersionID != third.VersionID ||
+		report.Input.SHA256 != third.SHA256 || report.Metrics.MeanDifference != "60" {
+		t.Fatalf("resumed calculation used the wrong version: %+v (%v)", report, err)
+	}
 }

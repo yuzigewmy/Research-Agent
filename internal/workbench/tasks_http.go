@@ -35,7 +35,7 @@ func (api researchTasks) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path+"/{taskId}", api.read)
 	mux.HandleFunc("PATCH "+path+"/{taskId}", api.edit)
 	mux.HandleFunc(path+"/{taskId}", methodNotAllowed("GET, HEAD, PATCH"))
-	for _, action := range []string{confirmTask, cancelTask} {
+	for _, action := range []string{confirmTask, cancelTask, resumeComparisonTask} {
 		mutation := path + "/{taskId}/" + action
 		mux.HandleFunc("POST "+mutation, api.change(action))
 		mux.HandleFunc(mutation, methodNotAllowed("POST"))
@@ -203,6 +203,9 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 	case req.Action == editTask && errors.Is(err, errTaskState):
 		writeError(w, http.StatusConflict, "TASK_STATE_CONFLICT", "只有待确认的任务可以修改说明。")
 		return
+	case req.Action == resumeComparisonTask && errors.Is(err, errTaskState):
+		writeError(w, http.StatusConflict, "TASK_STATE_CONFLICT", "只有已中断的配对指标对比任务可以按原数据继续。")
+		return
 	case err != nil:
 		writeTaskError(w, "apply task request", err)
 		return
@@ -212,7 +215,7 @@ func (api researchTasks) apply(w http.ResponseWriter, r *http.Request, req taskR
 		switch req.Action {
 		case proposeTask:
 			status = http.StatusCreated
-		case confirmTask:
+		case confirmTask, resumeComparisonTask:
 			api.store.kickTaskQueue(req.ProjectID, api.model)
 			status = http.StatusAccepted
 		case cancelTask:
