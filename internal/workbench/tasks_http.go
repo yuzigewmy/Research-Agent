@@ -44,6 +44,8 @@ func (api researchTasks) register(mux *http.ServeMux) {
 	mux.HandleFunc(path+"/{taskId}/artifact", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("GET "+path+"/{taskId}/artifact/evidence", api.comparisonEvidence)
 	mux.HandleFunc(path+"/{taskId}/artifact/evidence", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc("GET "+path+"/{taskId}/artifact/plot.svg", api.comparisonPlot)
+	mux.HandleFunc(path+"/{taskId}/artifact/plot.svg", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("POST "+path+"/{taskId}/artifact/workspace", api.saveComparisonReport)
 	mux.HandleFunc(path+"/{taskId}/artifact/workspace", methodNotAllowed("POST"))
 }

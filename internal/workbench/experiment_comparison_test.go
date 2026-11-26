@@ -187,6 +187,19 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 		t.Fatalf("last evidence page did not locate the skipped records: %+v", lastPage)
 	}
 
+	plotPath := taskPath + "/artifact/plot.svg"
+	request(http.MethodGet, strings.Replace(plotPath, project.ProjectID, other.ProjectID, 1), "", http.StatusNotFound)
+	plot := request(http.MethodGet, plotPath, "", http.StatusOK)
+	if plot.Header().Get("X-Source-Version-ID") != second.VersionID || plot.Header().Get("X-Source-SHA256") != second.SHA256 ||
+		plot.Header().Get("Content-Type") != "image/svg+xml; charset=utf-8" || strings.Count(plot.Body.String(), "<circle ") != 52 ||
+		!strings.Contains(plot.Body.String(), `<circle cx="124.00" cy="312.00" r="3" data-line="2">`) ||
+		strings.Contains(plot.Body.String(), `data-line="54"`) {
+		t.Fatalf("plot did not use the original input and complete pairs: %v", plot.Header())
+	}
+	if repeated := request(http.MethodGet, plotPath, "", http.StatusOK); repeated.Body.String() != plot.Body.String() {
+		t.Fatal("plot export changed across repeat downloads")
+	}
+
 	publication := taskPath + "/artifact/workspace"
 	request(http.MethodPost, projectsPath+"/"+other.ProjectID+"/tasks/"+task.TaskID+"/artifact/workspace", "", http.StatusNotFound)
 	saveReport := func() WorkspaceFile {

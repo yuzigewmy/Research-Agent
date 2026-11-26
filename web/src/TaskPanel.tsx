@@ -289,6 +289,9 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
             : isFocusedResearch ? '下载聚焦研究报告' : task.kind === 'image-review' ? '下载图片复查报告'
             : task.kind === 'image-generation' ? '下载生成图片' : '下载 Markdown'}
         </a>
+        {isExperimentComparison && <a className="button outline" href={`${taskArtifactPath(projectId, task.taskId)}/plot.svg`} download>
+          下载配对散点图
+        </a>}
         {isExperimentComparison && onReportSaved &&
           <ExperimentReportHandoff projectId={projectId} taskId={task.taskId} onSaved={onReportSaved} />}
       </div>}

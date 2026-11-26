@@ -13,6 +13,43 @@ import (
 
 const experimentEvidencePageSize = 50
 
+var errExperimentEvidence = errors.New("comparison evidence does not match the recorded input")
+
+func (s *Store) readExperimentEvidence(ctx context.Context, projectID, taskID string) (experimentComparisonReport, string, error) {
+	var report experimentComparisonReport
+	artifact, err := s.readTaskArtifact(ctx, projectID, taskID)
+	if err != nil {
+		return report, "", err
+	}
+	if artifact.kind != experimentComparisonTask {
+		return report, "", sql.ErrNoRows
+	}
+	task, err := lookupTask(ctx, s.db, projectID, taskID)
+	if err != nil {
+		return report, "", err
+	}
+	if err := json.Unmarshal([]byte(artifact.jsonArtifact), &report); err != nil ||
+		report.Method != experimentComparisonMethod || len(task.Inputs) != 1 || report.Input != task.Inputs[0] {
+		return report, "", errExperimentEvidence
+	}
+	source, err := s.readExperimentSource(ctx, projectID, report.Input)
+	if err != nil {
+		return report, "", errExperimentEvidence
+	}
+	return report, source, nil
+}
+
+func writeExperimentEvidenceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "没有可查看的配对计算证据。")
+	case errors.Is(err, errExperimentEvidence):
+		writeError(w, http.StatusUnprocessableEntity, "EVIDENCE_UNAVAILABLE", "暂时无法核对报告对应的 CSV 原件和计算记录。")
+	default:
+		writeStoreError(w, "read experiment evidence", err)
+	}
+}
+
 func (api researchTasks) comparisonEvidence(w http.ResponseWriter, r *http.Request) {
 	cursor, err := eventCursor(r.URL.Query().Get("cursor"))
 	if err != nil || cursor >= maxExperimentRows {
@@ -21,33 +58,9 @@ func (api researchTasks) comparisonEvidence(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	projectID, taskID := r.PathValue("id"), r.PathValue("taskId")
-	artifact, err := api.store.readTaskArtifact(ctx, projectID, taskID)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && artifact.kind != experimentComparisonTask {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "没有可查看的配对计算证据。")
-		return
-	}
+	report, source, err := api.store.readExperimentEvidence(ctx, r.PathValue("id"), r.PathValue("taskId"))
 	if err != nil {
-		writeStoreError(w, "read experiment report for evidence", err)
-		return
-	}
-	unavailable := func() {
-		writeError(w, http.StatusUnprocessableEntity, "EVIDENCE_UNAVAILABLE", "暂时无法核对报告对应的 CSV 原件和计算记录。")
-	}
-	task, err := lookupTask(ctx, api.store.db, projectID, taskID)
-	if err != nil {
-		writeTaskError(w, "read task for experiment evidence", err)
-		return
-	}
-	var report experimentComparisonReport
-	if err := json.Unmarshal([]byte(artifact.jsonArtifact), &report); err != nil ||
-		report.Method != experimentComparisonMethod || len(task.Inputs) != 1 || report.Input != task.Inputs[0] {
-		unavailable()
-		return
-	}
-	source, err := api.store.readExperimentSource(ctx, projectID, report.Input)
-	if err != nil {
-		unavailable()
+		writeExperimentEvidenceError(w, err)
 		return
 	}
 	page := struct {
@@ -69,7 +82,7 @@ func (api researchTasks) comparisonEvidence(w http.ResponseWriter, r *http.Reque
 		}
 	})
 	if err != nil || page.PairedRows != report.Metrics.PairedRows || page.SkippedRows != report.Metrics.SkippedRows {
-		unavailable()
+		writeExperimentEvidenceError(w, errExperimentEvidence)
 		return
 	}
 	if next := int(cursor) + len(page.Items); next < page.PairedRows+page.SkippedRows {
