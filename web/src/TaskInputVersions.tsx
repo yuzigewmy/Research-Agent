@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { errorMessage } from './projects'
+import { TaskCsvDirectoryImport } from './TaskCsvDirectoryImport'
 import { isCSVTaskPath, isMarkdownTaskPath, taskInputLimit } from './tasks'
 import type { TaskInputVersion } from './tasks'
 import { listFiles, readVersion } from './workspace'
@@ -147,13 +148,14 @@ function FilePicker({ projectId, inputs, disabled, format, single, onChange }: P
   const choices = [...inputs.filter(({ path }) => !listedPaths.has(path)), ...page.items]
     .filter(({ path }) => matchesFormat(path))
   return <div className="task-input-body">
+    {format === 'csv' && <TaskCsvDirectoryImport projectId={projectId} disabled={disabled} onImported={() => load()} />}
     <div className="task-actions">
       <button className="button outline" type="button" disabled={loading} onClick={() => load()}>刷新文件列表</button>
     </div>
     {loading && <p className="task-note" role="status">正在读取工作区文件…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
     {!loading && !error && !choices.length && <p className="task-note">
-      {format === 'csv' ? '请先在文本工作区保存一份 CSV 数据。'
+      {format === 'csv' ? '工作区暂无已保存的 CSV 文件。'
         : format === 'markdown' ? '工作区暂无已保存的 Markdown 文件。' : '工作区暂无已保存的文件。'}
     </p>}
     {choices.length > 0 && <ul className="task-input-list task-input-choices" role="list" aria-label="可选工作区文件">
