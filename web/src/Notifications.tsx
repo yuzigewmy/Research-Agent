@@ -5,6 +5,7 @@ import { listNotifications, markNotificationRead, readReviewLink } from './notif
 import type { NotificationPage, TaskNotification } from './notificationApi'
 import { ProjectDate } from './ProjectDetails'
 import { taskStatusLabels } from './tasks'
+import type { WorkbenchLanguage } from './WorkbenchPreferences'
 import './notifications.css'
 
 const pollInterval = 5_000
@@ -42,8 +43,9 @@ function notificationTarget(item: TaskNotification): ProjectTarget {
   return item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
 }
 
-export function Notifications({ hrefFor, onOpen, onNavigate }: NotificationLinks & {
+export function Notifications({ hrefFor, onOpen, onNavigate, language = 'zh-CN' }: NotificationLinks & {
   onNavigate: (projectId: string, target: ProjectTarget) => void
+  language?: WorkbenchLanguage
 }) {
   const [open, setOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -193,7 +195,10 @@ export function Notifications({ hrefFor, onOpen, onNavigate }: NotificationLinks
       trigger.current?.focus()
     }}>
     <summary className="button outline" ref={trigger}>
-      通知 <span aria-live="polite">{unreadCount > 0 ? `${unreadCount} 条未读` : ''}</span>
+      {language === 'en' ? 'Notifications' : '通知'}{' '}
+      <span aria-live="polite">
+        {unreadCount > 0 ? (language === 'en' ? `${unreadCount} unread` : `${unreadCount} 条未读`) : ''}
+      </span>
     </summary>
     {open && <NotificationHistory hrefFor={hrefFor} onOpen={(event, projectId, target) => {
       if (event.defaultPrevented) return

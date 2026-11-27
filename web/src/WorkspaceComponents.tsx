@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { errorMessage, request } from './projects'
 import './workspace-components.css'
 
-const componentIds = ['pdf.preview', 'docx.export', 'pdf.software.export'] as const
+const componentIds = ['pdf.preview', 'docx.export', 'pdf.software.export', 'latex.compiler', 'script.python'] as const
 type ComponentId = (typeof componentIds)[number]
 
 const componentLabels = {
   'pdf.preview': { name: 'PDF 查看资源', size: '组件资源' },
   'docx.export': { name: 'Word 导出', size: '样例文件' },
   'pdf.software.export': { name: '鉴别材料 PDF', size: '字体文件' },
+  'latex.compiler': { name: 'LaTeX 编译器', size: '组件大小' },
+  'script.python': { name: '受限脚本 Python', size: '组件大小' },
 } satisfies Record<ComponentId, { name: string; size: string }>
 
 const statusLabels = { ready: '可用', unconfigured: '未配置', unavailable: '不可用' } as const

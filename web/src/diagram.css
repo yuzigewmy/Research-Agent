@@ -26,3 +26,15 @@
 .diagram-edge-list { padding-inline-start: 1.375rem; margin: 0; overflow-wrap: anywhere; }
 .diagram-edge-list > li { padding-block: 0.25rem; }
 .diagram-panel .diagram-status { color: var(--muted); font-size: 0.875rem; }
+.diagram-panel-body { display: grid; gap: 0.75rem; margin-block-start: 0.5rem; }
+.diagram-panel-body .outline[aria-pressed='true'] { background: var(--selected); border-color: var(--green); }
+.diagram-html-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.diagram-preview-label { font-size: 0.9375rem; font-weight: 650; }
+.diagram-manuscript-link { display: grid; gap: 0.5rem; }
+@media (max-width: 52rem) {
+  .diagram-html-split { grid-template-columns: minmax(0, 1fr); }
+}

@@ -82,6 +82,52 @@ h2 { font-size: 1.25rem; font-weight: 650; }
 .workbench-theme { display: flex; align-items: center; gap: 0.5rem; }
 .workbench-theme select { inline-size: auto; }
 
+.workbench-assistant {
+  margin-block-start: 1.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: grid;
+  gap: 0.625rem;
+}
+.workbench-assistant-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+.workbench-assistant-controls, .workbench-assistant-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+}
+.workbench-assistant-body {
+  display: grid;
+  gap: 0.5rem;
+  padding-block-start: 0.5rem;
+  border-block-start: 1px solid var(--line);
+}
+.workbench-assistant-body[hidden] { display: none; }
+.workbench-assistant-btn {
+  min-block-size: 2.125rem;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.875rem;
+}
+.workbench-assistant-btn[aria-pressed='true'] {
+  background: var(--selected);
+  border-color: var(--green);
+}
+.workbench-assistant-fallback {
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
+  background: var(--background);
+  font-size: 0.875rem;
+}
+
 .project-panel {
   min-inline-size: 0;
   padding: 1.5rem;
