@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 )
@@ -385,6 +386,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return WorkflowRun{}, false, err
 	}
+	prevStatus := current.Status
 	if action != workflowStart {
 		if current.RunID != req.RunID || current.Revision != req.ExpectedRevision {
 			return WorkflowRun{}, false, errTaskRevision
@@ -592,6 +594,34 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
+	eventKind := projectEventWorkflowStep
+	eventSummary := fmt.Sprintf("工作流执行操作 %s（%s）", action, run.Status)
+	eventPayload := map[string]any{
+		"runId":       run.RunID,
+		"workflowKey": run.WorkflowKey,
+		"action":      action,
+		"status":      run.Status,
+		"revision":    run.Revision,
+	}
+	if req.StepKey != "" {
+		eventPayload["stepKey"] = req.StepKey
+	}
+	switch action {
+	case workflowPause:
+		eventKind = projectEventWorkflowCheckpoint
+		eventSummary = fmt.Sprintf("工作流已暂停（%s）", run.Status)
+	case workflowContinue, workflowSelectTopic:
+		if prevStatus == workflowWaiting || prevStatus == workflowWaitingTopic || prevStatus == workflowPaused || prevStatus == workflowRangeCompleted {
+			eventKind = projectEventWorkflowCheckpoint
+			eventPayload["fromStatus"] = prevStatus
+			eventSummary = fmt.Sprintf("已确认工作流检查点继续（%s）", run.Status)
+		}
+	case workflowRerun:
+		eventSummary = fmt.Sprintf("已发起重跑步骤 %s", req.StepKey)
+	}
+	if err := appendProjectEvent(ctx, tx, projectID, eventKind, run.RunID, eventSummary, eventPayload); err != nil {
+		return WorkflowRun{}, false, err
+	}
 	return run, true, nil
 }
 
@@ -635,6 +665,8 @@ func enqueueWorkflowStep(ctx context.Context, tx *sql.Tx, projectID, runID strin
 }
 
 func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task Task, status string) error {
+	stepStatus := status
+	completedStep := task.workflowStep
 	step := task.workflowStep
 	var stages []workflowStage
 	if status == taskSucceeded {
@@ -687,10 +719,45 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET
+	var finalRunStatus, workflowKey string
+	if err := tx.QueryRowContext(ctx, `UPDATE workflow_runs SET
 		status = CASE WHEN ? = 'CANCELLED' AND status = 'PAUSING' THEN 'PAUSED' ELSE ? END,
-		step_no = ?, revision = revision + 1 WHERE run_id = ?`, status, status, step, task.workflowRunID); err != nil {
+		step_no = ?, revision = revision + 1 WHERE run_id = ? RETURNING status, workflow_key`,
+		status, status, step, task.workflowRunID).Scan(&finalRunStatus, &workflowKey); err != nil {
 		return err
+	}
+	if len(stages) == 0 {
+		stages = workflowStages[workflowKey]
+	}
+	completedStepKey := ""
+	if completedStep >= 0 && completedStep < len(stages) {
+		completedStepKey = stages[completedStep].key
+	}
+	if err := appendProjectEvent(ctx, tx, projectID, projectEventWorkflowStep, task.workflowRunID,
+		fmt.Sprintf("工作流步骤 %s 状态更新为 %s", completedStepKey, stepStatus), map[string]any{
+			"runId":          task.workflowRunID,
+			"workflowKey":    workflowKey,
+			"stepKey":        completedStepKey,
+			"stepIndex":      completedStep,
+			"status":         stepStatus,
+			"workflowStatus": finalRunStatus,
+		}); err != nil {
+		return err
+	}
+	if finalRunStatus == workflowWaiting || finalRunStatus == workflowWaitingTopic || finalRunStatus == workflowRangeCompleted || finalRunStatus == workflowPaused {
+		nextStepKey := ""
+		if step >= 0 && step < len(stages) {
+			nextStepKey = stages[step].key
+		}
+		if err := appendProjectEvent(ctx, tx, projectID, projectEventWorkflowCheckpoint, task.workflowRunID,
+			fmt.Sprintf("工作流到达检查点或暂停（%s）", finalRunStatus), map[string]any{
+				"runId":       task.workflowRunID,
+				"workflowKey": workflowKey,
+				"status":      finalRunStatus,
+				"nextStepKey": nextStepKey,
+			}); err != nil {
+			return err
+		}
 	}
 	if status == taskQueued {
 		return enqueueWorkflowStep(ctx, tx, projectID, task.workflowRunID, step, stages[step])

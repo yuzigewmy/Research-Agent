@@ -129,6 +129,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
 	store.registerProjectArchiveAndDelete(mux)
 	store.registerProjectMemory(mux)
+	store.registerProjectEvents(mux)
 	mux.HandleFunc("GET "+projectsPath+"/{id}", store.handleGetProject)
 	mux.HandleFunc("PATCH "+projectsPath+"/{id}", store.handlePatchProject)
 	mux.HandleFunc("DELETE "+projectsPath+"/{id}", store.handleDeleteProject)

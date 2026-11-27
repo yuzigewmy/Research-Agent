@@ -189,7 +189,7 @@ func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, `ALTER TABLE project_patch_requests DROP COLUMN max_output_tokens; ALTER TABLE project_patch_requests DROP COLUMN max_model_runs; ALTER TABLE projects DROP COLUMN max_output_tokens; ALTER TABLE projects DROP COLUMN max_model_runs; DROP TABLE script_run_artifacts; DROP TABLE script_runs; DROP TABLE survey_analysis_plans; DROP TRIGGER notify_review_status; DROP TRIGGER notify_workflow_status; DROP TRIGGER notify_task_status; DROP TABLE task_notifications;
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE IF EXISTS project_events; ALTER TABLE project_patch_requests DROP COLUMN max_output_tokens; ALTER TABLE project_patch_requests DROP COLUMN max_model_runs; ALTER TABLE projects DROP COLUMN max_output_tokens; ALTER TABLE projects DROP COLUMN max_model_runs; DROP TABLE script_run_artifacts; DROP TABLE script_runs; DROP TABLE survey_analysis_plans; DROP TRIGGER notify_review_status; DROP TRIGGER notify_workflow_status; DROP TRIGGER notify_task_status; DROP TABLE task_notifications;
 		DROP TRIGGER cancel_experiment_attempt;
 		DROP TABLE experiment_attempts;
 		DROP TABLE remote_comparisons;

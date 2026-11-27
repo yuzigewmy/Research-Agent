@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -293,6 +294,18 @@ func (s *Store) applyTaskRequest(ctx context.Context, req taskRequest, modelConf
 	if err != nil {
 		return Task{}, false, err
 	}
+	if req.Action == proposeTask || nextStatus != "" {
+		if err := appendProjectEvent(ctx, tx, req.ProjectID, projectEventTaskUpdated, task.TaskID,
+			fmt.Sprintf("任务状态更新为 %s", task.Status), map[string]any{
+				"taskId":   task.TaskID,
+				"status":   task.Status,
+				"revision": task.Revision,
+				"kind":     task.Kind,
+				"action":   req.Action,
+			}); err != nil {
+			return Task{}, false, err
+		}
+	}
 	return task, true, tx.Commit()
 }
 
@@ -434,6 +447,40 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE image_generations SET material_id = ? WHERE project_id = ? AND task_id = ?`,
 			material.MaterialID, projectID, task.TaskID); err != nil {
+			return err
+		}
+	}
+	switch {
+	case task.reviewVersionID != "":
+		if err := appendProjectEvent(ctx, tx, projectID, projectEventReviewUpdated, task.TaskID,
+			fmt.Sprintf("模拟评审状态更新为 %s", status), map[string]any{
+				"reviewId":  task.TaskID,
+				"reviewType": "manuscript_review",
+				"versionId": task.reviewVersionID,
+				"status":    status,
+			}); err != nil {
+			return err
+		}
+	case task.automaticReview:
+		payload := map[string]any{
+			"reviewId":   task.TaskID,
+			"reviewType": "automatic_review",
+			"status":     status,
+		}
+		if result.reviewStopReason != "" {
+			payload["stopReason"] = result.reviewStopReason
+		}
+		if err := appendProjectEvent(ctx, tx, projectID, projectEventReviewUpdated, task.TaskID,
+			fmt.Sprintf("多轮审稿状态更新为 %s", status), payload); err != nil {
+			return err
+		}
+	case task.workflowRunID == "":
+		if err := appendProjectEvent(ctx, tx, projectID, projectEventTaskUpdated, task.TaskID,
+			fmt.Sprintf("任务状态更新为 %s", status), map[string]any{
+				"taskId": task.TaskID,
+				"status": status,
+				"kind":   task.Kind,
+			}); err != nil {
 			return err
 		}
 	}

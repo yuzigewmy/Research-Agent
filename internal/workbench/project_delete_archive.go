@@ -290,6 +290,7 @@ func (s *Store) deleteProject(ctx context.Context, projectID string, input delet
 		`DELETE FROM literature_citations WHERE project_id = ?`,
 		`DELETE FROM materials WHERE project_id = ?`,
 		`DELETE FROM workspace_versions WHERE project_id = ?`,
+		`DELETE FROM project_events WHERE project_id = ?`,
 		`DELETE FROM project_patch_requests WHERE project_id = ?`,
 		`UPDATE project_drafts SET project_id = NULL WHERE project_id = ?`,
 		`DELETE FROM projects WHERE project_id = ?`,

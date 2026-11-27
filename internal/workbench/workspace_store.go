@@ -180,9 +180,22 @@ func (s *Store) insertWorkspaceVersion(ctx context.Context, tx *sql.Tx, projectI
 			return WorkspaceFile{}, err
 		}
 	}
-	return scanWorkspaceFile(tx.QueryRowContext(ctx, `INSERT INTO workspace_versions
+	saved, err := scanWorkspaceFile(tx.QueryRowContext(ctx, `INSERT INTO workspace_versions
 		(version_id, project_id, path, sha256, size, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING `+workspaceFileColumns,
 		rand.Text(), projectID, file.Path, file.SHA256, file.Size, time.Now().UTC().Format(createdAtLayout)))
+	if err != nil {
+		return WorkspaceFile{}, err
+	}
+	if err := appendProjectEvent(ctx, tx, projectID, projectEventFileSaved, saved.VersionID,
+		fmt.Sprintf("已保存文件 %s", saved.Path), map[string]any{
+			"path":         saved.Path,
+			"versionId":    saved.VersionID,
+			"sha256Prefix": sha256Prefix(saved.SHA256),
+			"size":         saved.Size,
+		}); err != nil {
+		return WorkspaceFile{}, err
+	}
+	return saved, nil
 }
 
 func (s *Store) saveTextObject(digest, content string) error {

@@ -421,21 +421,51 @@ func (s *Store) transitionScriptRun(runID, query string, args ...any) bool {
 func (s *Store) finalizeScriptRunCancelled(runID, stdout, stderr string, stdoutTrunc, stderrTrunc bool) {
 	ctx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		slog.Error("begin finalize cancelled script run", "run_id", runID, "error", err)
+		return
+	}
+	defer tx.Rollback()
 	now := time.Now().UTC().Format(createdAtLayout)
-	_, err := s.db.ExecContext(ctx, `UPDATE script_runs
+	var projectID, scriptPath string
+	err = tx.QueryRowContext(ctx, `UPDATE script_runs
 		SET status = 'CANCELLED', phase = ?, exit_code = NULL,
 			stdout = ?, stderr = ?, stdout_truncated = ?, stderr_truncated = ?,
 			artifacts_json = '[]', error_message = '', finished_at = ?
-		WHERE run_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING')`,
-		scriptPhaseCancelled, stdout, stderr, boolToInt(stdoutTrunc), boolToInt(stderrTrunc), now, runID)
+		WHERE run_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING')
+		RETURNING project_id, script_path`,
+		scriptPhaseCancelled, stdout, stderr, boolToInt(stdoutTrunc), boolToInt(stderrTrunc), now, runID).Scan(&projectID, &scriptPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return
+	}
 	if err != nil {
 		slog.Error("finalize cancelled script run", "run_id", runID, "error", err)
+		return
+	}
+	if err := appendProjectEvent(ctx, tx, projectID, projectEventScriptUpdated, runID,
+		fmt.Sprintf("受限脚本 %s 已取消", scriptPath), map[string]any{
+			"runId":      runID,
+			"scriptPath": scriptPath,
+			"status":     scriptStatusCancelled,
+		}); err != nil {
+		slog.Error("append cancelled script event", "run_id", runID, "error", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		slog.Error("commit cancelled script run", "run_id", runID, "error", err)
 	}
 }
 
 func (s *Store) finalizeScriptRunTerminal(runID, status, phase string, exitCode *int, stdout, stderr string, stdoutTrunc, stderrTrunc bool, artifacts []ScriptRunArtifact, errMsg string) {
 	ctx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		slog.Error("begin finalize script run", "run_id", runID, "status", status, "error", err)
+		return
+	}
+	defer tx.Rollback()
 	now := time.Now().UTC().Format(createdAtLayout)
 	var code sql.NullInt64
 	if exitCode != nil {
@@ -447,15 +477,37 @@ func (s *Store) finalizeScriptRunTerminal(runID, status, phase string, exitCode 
 			encoded = string(raw)
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE script_runs
+	var projectID, scriptPath string
+	err = tx.QueryRowContext(ctx, `UPDATE script_runs
 		SET status = ?, phase = ?, exit_code = ?,
 			stdout = ?, stderr = ?, stdout_truncated = ?, stderr_truncated = ?,
 			artifacts_json = ?, error_message = ?, finished_at = ?
-		WHERE run_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING')`,
+		WHERE run_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING')
+		RETURNING project_id, script_path`,
 		status, phase, code, stdout, stderr, boolToInt(stdoutTrunc), boolToInt(stderrTrunc),
-		encoded, errMsg, now, runID)
+		encoded, errMsg, now, runID).Scan(&projectID, &scriptPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return
+	}
 	if err != nil {
 		slog.Error("finalize script run", "run_id", runID, "status", status, "error", err)
+		return
+	}
+	payload := map[string]any{
+		"runId":      runID,
+		"scriptPath": scriptPath,
+		"status":     status,
+	}
+	if exitCode != nil {
+		payload["exitCode"] = *exitCode
+	}
+	if err := appendProjectEvent(ctx, tx, projectID, projectEventScriptUpdated, runID,
+		fmt.Sprintf("受限脚本 %s 状态更新为 %s", scriptPath, status), payload); err != nil {
+		slog.Error("append terminal script event", "run_id", runID, "status", status, "error", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		slog.Error("commit finalize script run", "run_id", runID, "status", status, "error", err)
 	}
 }
 
@@ -469,8 +521,9 @@ func (s *Store) finalizeScriptRunSucceeded(runID string, exitCode *int, stdout, 
 	}
 	defer tx.Rollback()
 
-	var currentStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM script_runs WHERE run_id = ?`, runID).Scan(&currentStatus); err != nil {
+	var projectID, scriptPath, currentStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT project_id, script_path, status FROM script_runs WHERE run_id = ?`, runID).
+		Scan(&projectID, &scriptPath, &currentStatus); err != nil {
 		slog.Error("read script run status before commit", "run_id", runID, "error", err)
 		return
 	}
@@ -487,6 +540,12 @@ func (s *Store) finalizeScriptRunSucceeded(runID string, exitCode *int, stdout, 
 				slog.Error("cancel late script run", "run_id", runID, "error", err)
 				return
 			}
+			_ = appendProjectEvent(ctx, tx, projectID, projectEventScriptUpdated, runID,
+				fmt.Sprintf("受限脚本 %s 已取消", scriptPath), map[string]any{
+					"runId":      runID,
+					"scriptPath": scriptPath,
+					"status":     scriptStatusCancelled,
+				})
 			_ = tx.Commit()
 		}
 		return
@@ -519,6 +578,20 @@ func (s *Store) finalizeScriptRunSucceeded(runID string, exitCode *int, stdout, 
 		scriptPhaseSucceeded, code, stdout, stderr, boolToInt(stdoutTrunc), boolToInt(stderrTrunc),
 		string(encoded), now, runID); err != nil {
 		slog.Error("update succeeded script run", "run_id", runID, "error", err)
+		return
+	}
+	payload := map[string]any{
+		"runId":         runID,
+		"scriptPath":    scriptPath,
+		"status":        scriptStatusSucceeded,
+		"artifactCount": len(artifacts),
+	}
+	if exitCode != nil {
+		payload["exitCode"] = *exitCode
+	}
+	if err := appendProjectEvent(ctx, tx, projectID, projectEventScriptUpdated, runID,
+		fmt.Sprintf("受限脚本 %s 已完成", scriptPath), payload); err != nil {
+		slog.Error("append succeeded script event", "run_id", runID, "error", err)
 		return
 	}
 	if err := tx.Commit(); err != nil {

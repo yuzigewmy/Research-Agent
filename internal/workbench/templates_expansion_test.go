@@ -345,8 +345,8 @@ func TestTemplatesExpansionProjectBudgetAndMigrationV66(t *testing.T) {
 	defer store.Close()
 
 	var schemaVer int
-	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&schemaVer); err != nil || schemaVer != 66 {
-		t.Fatalf("expected schema version 66, got %d (%v)", schemaVer, err)
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&schemaVer); err != nil || schemaVer != workspaceSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d (%v)", workspaceSchemaVersion, schemaVer, err)
 	}
 	upgraded, err := store.getProject(ctx, "p-v63")
 	if err != nil || upgraded.MaxModelRuns != 0 || upgraded.MaxOutputTokens != 0 || upgraded.ModelRunsUsed != 0 {

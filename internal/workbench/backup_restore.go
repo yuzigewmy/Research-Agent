@@ -203,7 +203,7 @@ type backupSchemaObject struct{ kind, name, table, definition string }
 // Compare schema objects without their page offsets, which VACUUM can change.
 // https://www.sqlite.org/schematab.html
 func readBackupSchema(ctx context.Context, db *sql.DB) ([]backupSchemaObject, error) {
-	rows, err := db.QueryContext(ctx, `SELECT type, name, tbl_name, COALESCE(sql, '') FROM main.sqlite_schema`)
+	rows, err := db.QueryContext(ctx, `SELECT type, name, tbl_name, COALESCE(sql, '') FROM main.sqlite_schema WHERE name <> 'sqlite_sequence'`)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func checkBackupSchema(ctx context.Context, db *sql.DB, want []backupSchemaObjec
 		CASE WHEN octet_length(name) <= ?1 THEN name ELSE '' END,
 		CASE WHEN octet_length(tbl_name) <= ?1 THEN tbl_name ELSE '' END,
 		CASE WHEN sql IS NULL THEN '' WHEN octet_length(sql) <= ?2 THEN sql ELSE ' ' END
-		FROM main.sqlite_schema LIMIT ?3`, 2*maxName, 2*maxDefinition, len(want)+1)
+		FROM main.sqlite_schema WHERE name <> 'sqlite_sequence' LIMIT ?3`, 2*maxName, 2*maxDefinition, len(want)+1)
 	if err != nil {
 		return err
 	}
