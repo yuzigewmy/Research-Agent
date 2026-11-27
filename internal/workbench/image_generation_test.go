@@ -123,7 +123,7 @@ func TestImageGenerationKeepsRequestAndMaterialAcrossRestart(t *testing.T) {
 	request(handler, http.MethodPost, path, strings.TrimSuffix(redraw, "}")+`,"size":"1024x1024"}`, http.StatusBadRequest)
 
 	// Preserve the queued receipts in the previous schema before reopening.
-	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER cancel_experiment_attempt; DROP TABLE experiment_attempts; DROP TABLE remote_comparisons; DROP TRIGGER notify_review_status; DROP TRIGGER notify_workflow_status; DROP TABLE manuscript_pdf_citations; DROP TABLE manuscript_pdf_links; DROP TABLE manuscript_comparison_links; DROP TABLE image_generation_sources; PRAGMA user_version = 53`); err != nil {
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE project_patch_requests DROP COLUMN max_output_tokens; ALTER TABLE project_patch_requests DROP COLUMN max_model_runs; ALTER TABLE projects DROP COLUMN max_output_tokens; ALTER TABLE projects DROP COLUMN max_model_runs; DROP TABLE script_run_artifacts; DROP TABLE script_runs; DROP TABLE survey_analysis_plans; DROP TRIGGER cancel_experiment_attempt; DROP TABLE experiment_attempts; DROP TABLE remote_comparisons; DROP TRIGGER notify_review_status; DROP TRIGGER notify_workflow_status; DROP TABLE manuscript_pdf_citations; DROP TABLE manuscript_pdf_links; DROP TABLE manuscript_comparison_links; DROP TABLE image_generation_sources; PRAGMA user_version = 53`); err != nil {
 		t.Fatal(err)
 	}
 	var archive bytes.Buffer
