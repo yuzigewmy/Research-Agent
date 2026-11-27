@@ -25,6 +25,8 @@ import type {
   AcceptWorkflowInput, ContinueWorkflowInput, RerunWorkflowInput, SelectWorkflowTopicInput, SkipWorkflowInput,
   StartWorkflowInput, WorkflowModelId, WorkflowRun, WorkflowRunActionInput, WorkflowSnapshot,
 } from './workflow'
+import { WorkspaceArtifactBundleAdd } from './WorkspaceBundle'
+import type { BundleSelection } from './WorkspaceBundle'
 import type { FileRecord } from './workspace'
 import './workflow.css'
 
@@ -72,9 +74,10 @@ function WorkflowRunContext({ run }: { run: WorkflowRun }) {
   </>
 }
 
-function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWordConfigured }: {
+function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWordConfigured, bundleSelection }: {
   projectId: string
   run: WorkflowRun
+  bundleSelection: BundleSelection
   softwarePdfConfigured?: boolean
   patentWordConfigured?: boolean
   rerun?: {
@@ -103,7 +106,7 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWor
         const hasHistory = (step.artifactCount ?? 0) > 0 || step.status === 'SUCCEEDED' || step.status === 'STALE'
         const pdfStep = softwarePdfEnabled && isSoftwarePdfStep(step.key) ? step.key : undefined
         const patentFigures = run.workflowKey === 'patent-disclosure-v2' && step.key === 'figures'
-        return <li key={step.key}>
+        return <li key={step.key} data-workflow-step-key={step.key}>
           <div className="workflow-step-heading">
             <strong dir="auto">{step.title}</strong>
             <span className="workflow-step-status" data-status={step.status}>{stepStatusLabels[step.status]}</span>
@@ -120,6 +123,8 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWor
             {canDownload && <a className="workflow-download"
               href={workflowArtifactPath(projectId, run.runId, step.key, step.artifactId)}
               aria-label={`${downloadLabel}：${step.title}`} download>{downloadLabel}</a>}
+            {canDownload && <WorkspaceArtifactBundleAdd artifactId={step.artifactId} name={step.artifactName}
+              size={step.artifactSize} selection={bundleSelection} />}
             {canDownload && pdfStep && step.artifactId && (
               <WorkflowSoftwarePdfDownload projectId={projectId} runId={run.runId} stepKey={pdfStep}
                 stepTitle={step.title} artifactId={step.artifactId} />
@@ -156,7 +161,7 @@ function WorkflowSteps({ projectId, run, rerun, softwarePdfConfigured, patentWor
           {hasHistory && <WorkflowArtifactHistory projectId={projectId} runId={run.runId} stepKey={step.key}
             stepTitle={step.title} artifactId={step.artifactId} count={step.artifactCount}
             softwarePdfEnabled={pdfStep !== undefined} patentFigures={patentFigures}
-            patentWordConfigured={patentWordConfigured} />}
+            patentWordConfigured={patentWordConfigured} bundleSelection={bundleSelection} />}
         </li>
       })}
     </ol>
@@ -204,9 +209,10 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
 }
 
 export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, workflowRunLink,
-  acceptanceDraft, onClearAcceptanceDraft }: {
+  acceptanceDraft, onClearAcceptanceDraft, bundleSelection }: {
   projectId: string
   templateId: Exclude<TemplateId, 'freeform' | 'automatic_review' | 'interactive_survey' | 'engineering_project'>
+  bundleSelection: BundleSelection
   onManuscriptSaved: (path: string) => void
   refreshVersion?: number
   workflowRunLink?: WorkflowRunLink
@@ -580,7 +586,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     <WorkflowSoftwareSummary run={historicalRun} />
     <WorkflowPatentSummary run={historicalRun} />
     <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured}
-      patentWordConfigured={snapshot?.patentWordConfigured} />
+      patentWordConfigured={snapshot?.patentWordConfigured} bundleSelection={bundleSelection} />
     <WorkflowSoftwareBundleDownload projectId={projectId} run={historicalRun} />
   </>
 
@@ -622,7 +628,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       </p>}
       {run?.workflowKey === 'proposal-v2' && <p className="workflow-note">正文各节分别保存。本轮可从未完成的一节继续。</p>}
       {run && <WorkflowSteps projectId={projectId} run={run} softwarePdfConfigured={snapshot?.softwarePdfConfigured}
-        patentWordConfigured={snapshot?.patentWordConfigured} rerun={{
+        patentWordConfigured={snapshot?.patentWordConfigured} bundleSelection={bundleSelection} rerun={{
         selected: selectedRerun?.stepKey,
         disabled: rerunDisabled,
         pending: pending === 'rerun',

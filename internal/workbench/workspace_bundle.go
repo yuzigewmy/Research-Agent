@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,9 @@ type workspaceBundleEntry struct {
 	Path       string `json:"path"`
 	VersionID  string `json:"versionId,omitempty"`
 	MaterialID string `json:"materialId,omitempty"`
+	ArtifactID string `json:"artifactId,omitempty"`
+	RunID      string `json:"runId,omitempty"`
+	StepKey    string `json:"stepKey,omitempty"`
 	SHA256     string `json:"sha256"`
 	Size       int64  `json:"size"`
 	CreatedAt  string `json:"createdAt"`
@@ -63,7 +67,7 @@ func (s *Store) handleWorkspaceBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	seen := make(map[workspaceBundleItem]bool, count)
 	for _, item := range input.Items {
-		if (item.Kind != "version" && item.Kind != "material") || !validRequestID(item.ID) || seen[item] {
+		if (item.Kind != "version" && item.Kind != "material" && item.Kind != "artifact") || !validRequestID(item.ID) || seen[item] {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择有效且不重复的原件。")
 			return
 		}
@@ -104,6 +108,25 @@ func (s *Store) handleWorkspaceBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Store) workspaceBundleSource(ctx context.Context, projectID string, item workspaceBundleItem) (workspaceBundleEntry, error) {
+	if item.Kind == "artifact" {
+		entry := workspaceBundleEntry{Kind: item.Kind, ArtifactID: item.ID}
+		var workflow string
+		var step int
+		err := s.db.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, t.workflow_step, t.created_at, length(CAST(t.markdown AS BLOB))
+			FROM tasks t JOIN workflow_runs w ON w.run_id = t.workflow_run_id AND w.project_id = t.project_id
+			WHERE t.project_id = ? AND t.task_id = ? AND t.status = 'SUCCEEDED'`, projectID, item.ID).
+			Scan(&entry.RunID, &workflow, &step, &entry.CreatedAt, &entry.Size)
+		if err != nil {
+			return workspaceBundleEntry{}, err
+		}
+		stages := workflowStages[workflow]
+		if step < 0 || step >= len(stages) {
+			return workspaceBundleEntry{}, sql.ErrNoRows
+		}
+		entry.StepKey = stages[step].key
+		entry.Path = workflowArtifactFilename(workflow, stages[step])
+		return entry, nil
+	}
 	if item.Kind == "material" {
 		material, err := s.getMaterial(ctx, projectID, item.ID)
 		if err != nil {
@@ -134,8 +157,8 @@ func workspaceBundleName(number int, original string) string {
 func (s *Store) packWorkspaceBundle(ctx context.Context, manifest workspaceBundleManifest) ([]byte, error) {
 	var buffer bytes.Buffer
 	archive := zip.NewWriter(&buffer)
-	for _, file := range manifest.Files {
-		if err := s.addWorkspaceBundleEntry(ctx, archive, file); err != nil {
+	for i := range manifest.Files {
+		if err := s.addWorkspaceBundleEntry(ctx, archive, manifest.ProjectID, &manifest.Files[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -154,12 +177,25 @@ func (s *Store) packWorkspaceBundle(ctx context.Context, manifest workspaceBundl
 	return buffer.Bytes(), nil
 }
 
-func (s *Store) addWorkspaceBundleEntry(ctx context.Context, archive *zip.Writer, file workspaceBundleEntry) error {
-	source, err := s.openObject(file.SHA256)
-	if err != nil {
-		return err
+func (s *Store) addWorkspaceBundleEntry(ctx context.Context, archive *zip.Writer, projectID string, file *workspaceBundleEntry) error {
+	var source io.Reader
+	if file.Kind == "artifact" {
+		var text string
+		err := s.db.QueryRowContext(ctx, `SELECT markdown FROM tasks
+			WHERE project_id = ? AND task_id = ? AND workflow_run_id = ? AND status = 'SUCCEEDED'
+			AND length(CAST(markdown AS BLOB)) = ?`, projectID, file.ArtifactID, file.RunID, file.Size).Scan(&text)
+		if err != nil {
+			return err
+		}
+		source = strings.NewReader(text)
+	} else {
+		object, err := s.openObject(file.SHA256)
+		if err != nil {
+			return err
+		}
+		defer object.Close()
+		source = object
 	}
-	defer source.Close()
 	entry, err := archive.CreateHeader(&zip.FileHeader{Name: file.Name, Method: zip.Store})
 	if err != nil {
 		return err
@@ -169,8 +205,10 @@ func (s *Store) addWorkspaceBundleEntry(ctx context.Context, archive *zip.Writer
 	if err != nil {
 		return err
 	}
-	if written != file.Size || hex.EncodeToString(digest.Sum(nil)) != file.SHA256 {
+	actualDigest := hex.EncodeToString(digest.Sum(nil))
+	if written != file.Size || (file.Kind != "artifact" && actualDigest != file.SHA256) {
 		return fmt.Errorf("invalid content for workspace bundle entry %s", file.Name)
 	}
+	file.SHA256 = actualDigest
 	return nil
 }

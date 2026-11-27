@@ -131,6 +131,8 @@ type WorkflowStep struct {
 	Status          string                  `json:"status"`
 	Message         string                  `json:"message,omitempty"`
 	ArtifactID      string                  `json:"artifactId,omitempty"`
+	ArtifactName    string                  `json:"artifactName,omitempty"`
+	ArtifactSize    *int64                  `json:"artifactSize,omitempty"`
 	ArtifactCount   int                     `json:"artifactCount,omitempty"`
 	Source          *workflowArtifactSource `json:"source,omitempty"`
 	Model           string                  `json:"model,omitempty"`
@@ -227,7 +229,8 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		run.Steps[i] = WorkflowStep{Key: stage.key, Title: stage.title, Status: "PENDING", Model: model.Model, ReasoningEffort: model.ReasoningEffort}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT t.workflow_step, t.task_id, t.status, t.message, t.workflow_superseded, history.artifacts,
-		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, ''), t.workflow_topic_data
+		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, ''), t.workflow_topic_data,
+		CASE WHEN t.status = 'SUCCEEDED' THEN length(CAST(t.markdown AS BLOB)) ELSE 0 END
 		FROM tasks t JOIN (
 			SELECT MAX(ordinal) AS latest, COUNT(CASE WHEN status = 'SUCCEEDED' THEN 1 END) AS artifacts
 			FROM tasks WHERE workflow_run_id = ? GROUP BY workflow_step
@@ -239,11 +242,12 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	defer rows.Close()
 	for rows.Next() {
 		var index, count int
+		var size int64
 		var superseded bool
 		var id, status, message, topicData string
 		var source workflowArtifactSource
 		if err := rows.Scan(&index, &id, &status, &message, &superseded, &count,
-			&source.VersionID, &source.Path, &source.SHA256, &topicData); err != nil {
+			&source.VersionID, &source.Path, &source.SHA256, &topicData, &size); err != nil {
 			return WorkflowRun{}, err
 		}
 		step := &run.Steps[index]
@@ -260,6 +264,8 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		step.Status, step.Message = status, message
 		if status == taskSucceeded {
 			step.ArtifactID = id
+			step.ArtifactName = workflowArtifactFilename(run.WorkflowKey, stages[index])
+			step.ArtifactSize = &size
 			if source.VersionID != "" {
 				step.Source = &source
 			}

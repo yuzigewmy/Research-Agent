@@ -52,6 +52,8 @@ interface WorkflowStep extends WorkflowStepDefinition {
   reasoningEffort?: string
   message?: string
   artifactId?: string
+  artifactName?: string
+  artifactSize?: number
   artifactCount?: number
   source?: WorkflowArtifactSource
 }
@@ -60,6 +62,8 @@ interface WorkflowArtifact {
   artifactId: string
   createdAt: string
   current: boolean
+  name?: string
+  size?: number
   source?: WorkflowArtifactSource
 }
 
@@ -320,6 +324,14 @@ function isArtifactSource(value: unknown): value is WorkflowArtifactSource {
     && typeof source.sha256 === 'string' && /^[a-f\d]{64}$/i.test(source.sha256)
 }
 
+function isArtifactName(value: unknown) {
+  return value === undefined || (typeof value === 'string' && value.trim().length > 0)
+}
+
+function isArtifactSize(value: unknown) {
+  return value === undefined || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+}
+
 function isStep(value: unknown): value is WorkflowStep {
   const step = value as Partial<WorkflowStep> | null
   return !!step && typeof step.status === 'string' && Object.hasOwn(stepStatusLabels, step.status)
@@ -327,6 +339,7 @@ function isStep(value: unknown): value is WorkflowStep {
     && (step.reasoningEffort === undefined || typeof step.reasoningEffort === 'string')
     && (step.message === undefined || typeof step.message === 'string')
     && (step.artifactId === undefined || isPathId(step.artifactId))
+    && isArtifactName(step.artifactName) && isArtifactSize(step.artifactSize)
     && (step.artifactCount === undefined || (Number.isSafeInteger(step.artifactCount) && step.artifactCount >= 0))
     && (step.source === undefined || isArtifactSource(step.source))
     && isStepDefinition(step)
@@ -336,6 +349,7 @@ function isWorkflowArtifact(value: unknown): value is WorkflowArtifact {
   const artifact = value as Partial<WorkflowArtifact> | null
   return !!artifact && isPathId(artifact.artifactId) && typeof artifact.current === 'boolean'
     && typeof artifact.createdAt === 'string' && Number.isFinite(Date.parse(artifact.createdAt))
+    && isArtifactName(artifact.name) && isArtifactSize(artifact.size)
     && (artifact.source === undefined || isArtifactSource(artifact.source))
 }
 

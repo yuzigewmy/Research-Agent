@@ -234,7 +234,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
         <WorkflowPanel projectId={project.projectId} templateId={templateId} refreshVersion={workflowRefresh}
           workflowRunLink={workflowRunLink} acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
             current?.openId === openId ? undefined : current)}
-          onManuscriptSaved={addWorkspacePath} />}
+          onManuscriptSaved={addWorkspacePath} bundleSelection={bundleSelection} />}
       <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} onReportSaved={addWorkspacePath} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}

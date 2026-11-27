@@ -126,7 +126,7 @@ export const workspaceBundleLimit = 24
 export const workspaceBundleSizeLimitMiB = 32
 export const workspaceBundleSizeLimit = workspaceBundleSizeLimitMiB * 1024 * 1024
 
-export type WorkspaceBundleItem = { kind: 'version' | 'material'; id: string }
+export type WorkspaceBundleItem = { kind: 'version' | 'material' | 'artifact'; id: string }
 
 export function workspaceBundleItemKey({ kind, id }: WorkspaceBundleItem) {
   return `${kind}:${id}`
@@ -135,9 +135,9 @@ export function workspaceBundleItemKey({ kind, id }: WorkspaceBundleItem) {
 export async function readWorkspaceBundle(projectId: string, items: readonly WorkspaceBundleItem[], signal: AbortSignal) {
   const path = `${filesPath(projectId)}/bundle`
   if (!items.length || items.length > workspaceBundleLimit
-    || !items.every(({ kind, id }) => (kind === 'version' || kind === 'material') && isPathId(id))
+    || !items.every(({ kind, id }) => (kind === 'version' || kind === 'material' || kind === 'artifact') && isPathId(id))
     || new Set(items.map(workspaceBundleItemKey)).size !== items.length) {
-    throw new ProjectApiError(`请选择 1 至 ${workspaceBundleLimit} 个不同的文件版本或资料原件。`, 400)
+    throw new ProjectApiError(`请选择 1 至 ${workspaceBundleLimit} 个不同的文件版本、资料原件或工作流原始成果。`, 400)
   }
 
   const zipType = 'application/zip'

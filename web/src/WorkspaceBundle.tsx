@@ -31,6 +31,7 @@ const addLabels = {
   current: '将已保存版本加入 ZIP 清单',
   history: '将此版本加入 ZIP 清单',
   material: '将原件加入 ZIP 清单',
+  artifact: '将原始成果加入 ZIP 清单',
 }
 
 export function WorkspaceBundleAdd({ item, selection, source }: {
@@ -46,7 +47,7 @@ export function WorkspaceBundleAdd({ item, selection, source }: {
   else if (state === 'size-limit') label = '超出 ZIP 容量'
 
   return <button className="button outline" type="button" data-workspace-bundle-add={source}
-    aria-label={source === 'material' ? `${label}：${item.name}` : undefined}
+    aria-label={source === 'material' || source === 'artifact' ? `${label}：${item.name}` : undefined}
     aria-disabled={state !== 'available' || undefined} aria-describedby={limit ? bundleCountId : undefined}
     onClick={() => { if (state === 'available') selection.onAdd(item) }}>
     {label}
@@ -61,6 +62,16 @@ export function WorkspaceVersionBundleAdd({ version, selection, historical = fal
   const { versionId, path, size } = version
   return <WorkspaceBundleAdd item={{ kind: 'version', id: versionId, name: path, size }}
     source={historical ? 'history' : 'current'} selection={selection} />
+}
+
+export function WorkspaceArtifactBundleAdd({ artifactId, name, size, selection }: {
+  artifactId?: string
+  name?: string
+  size?: number
+  selection: BundleSelection
+}) {
+  if (artifactId === undefined || name === undefined || size === undefined) return null
+  return <WorkspaceBundleAdd item={{ kind: 'artifact', id: artifactId, name, size }} source="artifact" selection={selection} />
 }
 
 export function WorkspaceBundle({ projectId, selection: { items, onRemove } }: {
@@ -120,19 +131,24 @@ export function WorkspaceBundle({ projectId, selection: { items, onRemove } }: {
         {items.map((item) => {
           const { kind, id, name } = item
           const isVersion = kind === 'version'
+          const isArtifact = kind === 'artifact'
+          const originalLabel = isArtifact ? '工作流原始成果' : '项目资料原件'
           return <li key={workspaceBundleItemKey(item)} data-workspace-bundle-version={isVersion ? id : undefined}
-            data-workspace-bundle-material={isVersion ? undefined : id}>
+            data-workspace-bundle-material={kind === 'material' ? id : undefined}
+            data-workspace-bundle-artifact={isArtifact ? id : undefined}>
             <div>
               <bdi>{name}</bdi>
-              <p className="workspace-note">{isVersion ? <>文件版本 <bdi>{id}</bdi></> : '项目资料原件'}</p>
+              <p className="workspace-note">{isVersion ? <>文件版本 <bdi>{id}</bdi></> : originalLabel}</p>
             </div>
             <button className="button outline" type="button" data-workspace-bundle-remove
-              aria-label={isVersion ? `移除 ${name} 的版本 ${id}` : `移除原件 ${name}`} onClick={() => onRemove(item)}>移除</button>
+              aria-label={isVersion ? `移除 ${name} 的版本 ${id}` : `移除${isArtifact ? '原始成果' : '原件'} ${name}`}
+              onClick={() => onRemove(item)}>移除</button>
           </li>
         })}
       </ol>
       <p className="workspace-note">ZIP 中的 manifest.json 记录每项的来源、原路径或名称以及 SHA-256。</p>
-    </> : <p className="workspace-note">从文件编辑区、版本历史或项目资料加入文件。</p>}
+    </> : <p className="workspace-note">从文件编辑区、版本历史、项目资料或工作流加入文件。</p>}
+    <p className="workspace-note">工作流成果仅打包原始文件。</p>
     <div className="workspace-actions">
       <button className="button outline" type="button" data-workspace-bundle-download
         disabled={busy || !items.length} aria-busy={busy} aria-describedby={error ? 'workspace-bundle-error' : undefined}

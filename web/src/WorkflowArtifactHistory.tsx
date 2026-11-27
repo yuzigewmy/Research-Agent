@@ -4,6 +4,8 @@ import { WorkflowPatentFigureLinks } from './WorkflowPatentFigureLinks'
 import { WorkflowSoftwarePdfDownload } from './WorkflowSoftwarePdfDownload'
 import { isSoftwarePdfStep, listWorkflowArtifacts, workflowArtifactPath } from './workflow'
 import type { WorkflowArtifactPage } from './workflow'
+import { WorkspaceArtifactBundleAdd } from './WorkspaceBundle'
+import type { BundleSelection } from './WorkspaceBundle'
 
 const artifactDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
 
@@ -12,6 +14,7 @@ type ArtifactSource = {
   runId: string
   stepKey: string
   stepTitle: string
+  bundleSelection: BundleSelection
   softwarePdfEnabled?: boolean
   patentFigures?: boolean
   patentWordConfigured?: boolean
@@ -25,7 +28,8 @@ export function WorkflowArtifactHistory({ artifactId, count, ...source }: Artifa
   </details>
 }
 
-function ArtifactList({ projectId, runId, stepKey, stepTitle, softwarePdfEnabled, patentFigures, patentWordConfigured }: ArtifactSource) {
+function ArtifactList({ projectId, runId, stepKey, stepTitle, bundleSelection, softwarePdfEnabled, patentFigures,
+  patentWordConfigured }: ArtifactSource) {
   const id = useId()
   const [page, setPage] = useState<WorkflowArtifactPage>({ items: [] })
   const [query, setQuery] = useState<{ cursor?: string }>({})
@@ -56,14 +60,15 @@ function ArtifactList({ projectId, runId, stepKey, stepTitle, softwarePdfEnabled
 
   return <div className="workflow-artifact-page">
     {page.items.length > 0 && <ul className="workflow-artifact-list" aria-label={`${stepTitle}成果版本`}>
-      {page.items.map(({ artifactId, createdAt, current, source }, index) => {
+      {page.items.map(({ artifactId, createdAt, current, name, size, source }, index) => {
         const date = artifactDate.format(new Date(createdAt))
         const label = current ? '当前成果' : '历史成果'
         const versionLabelId = `${id}-version-${index}`
-        return <li key={artifactId}>
+        return <li key={artifactId} data-workflow-artifact-id={artifactId}>
           <span className="workflow-note" id={versionLabelId}>{label} · <time dateTime={createdAt}>{date}</time></span>
           <a className="workflow-download" href={workflowArtifactPath(projectId, runId, stepKey, artifactId)}
             aria-label={`下载${label}版本 ${stepTitle} ${date}`} download>下载此版本</a>
+          <WorkspaceArtifactBundleAdd artifactId={artifactId} name={name} size={size} selection={bundleSelection} />
           {softwarePdfEnabled && isSoftwarePdfStep(stepKey) && (
             <WorkflowSoftwarePdfDownload projectId={projectId} runId={runId} stepKey={stepKey} stepTitle={stepTitle}
               artifactId={artifactId} versionLabel={`${label} ${date}`} />

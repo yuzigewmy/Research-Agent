@@ -14,6 +14,8 @@ type workflowArtifactRecord struct {
 	CreatedAt  string                  `json:"createdAt"`
 	Current    bool                    `json:"current"`
 	Source     *workflowArtifactSource `json:"source,omitempty"`
+	Name       string                  `json:"name,omitempty"`
+	Size       *int64                  `json:"size,omitempty"`
 	ordinal    int64
 	markdown   string
 }
@@ -75,14 +77,14 @@ func (api workflows) artifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, projectID, runID := r.Context(), r.PathValue("id"), r.PathValue("runId")
-	step, _, err := workflowArtifactStep(ctx, api.store.db, projectID, runID, r.PathValue("key"))
+	step, name, err := workflowArtifactStep(ctx, api.store.db, projectID, runID, r.PathValue("key"))
 	if err != nil {
 		writeWorkflowArtifactError(w, err)
 		return
 	}
 	const limit = 30
 	rows, err := api.store.db.QueryContext(ctx, `SELECT t.ordinal, t.task_id, t.created_at, t.workflow_superseded = 0,
-		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, '')
+		COALESCE(v.version_id, ''), COALESCE(v.path, ''), COALESCE(v.sha256, ''), length(CAST(t.markdown AS BLOB))
 		FROM tasks t LEFT JOIN workspace_versions v ON v.version_id = t.workflow_source_version_id AND v.project_id = t.project_id
 		WHERE t.project_id = ? AND t.workflow_run_id = ? AND t.workflow_step = ? AND t.status = 'SUCCEEDED'
 		AND (? = 0 OR t.ordinal < ?) ORDER BY t.ordinal DESC LIMIT ?`, projectID, runID, step, cursor, cursor, limit+1)
@@ -98,8 +100,9 @@ func (api workflows) artifacts(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var record workflowArtifactRecord
 		var source workflowArtifactSource
+		var size int64
 		if err := rows.Scan(&record.ordinal, &record.ArtifactID, &record.CreatedAt, &record.Current,
-			&source.VersionID, &source.Path, &source.SHA256); err != nil {
+			&source.VersionID, &source.Path, &source.SHA256, &size); err != nil {
 			writeWorkflowArtifactError(w, err)
 			return
 		}
@@ -107,6 +110,7 @@ func (api workflows) artifacts(w http.ResponseWriter, r *http.Request) {
 			page.NextCursor = strconv.FormatInt(page.Items[limit-1].ordinal, 10)
 			break
 		}
+		record.Name, record.Size = name, &size
 		if source.VersionID != "" {
 			record.Source = &source
 		}

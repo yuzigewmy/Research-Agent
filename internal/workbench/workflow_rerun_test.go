@@ -1,9 +1,12 @@
 package workbench
 
 import (
+	"archive/zip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,7 +20,7 @@ import (
 
 func TestWorkflowRerunKeepsArtifactsAndUsesCurrentDependencies(t *testing.T) {
 	const (
-		oldScope = "# Initial research scope"
+		oldScope = "# 初版研究范围"
 		oldPlan  = "# Initial sampling plan"
 		oldCheck = "# Initial field checklist"
 		newScope = "# Revised research scope"
@@ -198,6 +201,42 @@ func TestWorkflowRerunKeepsArtifactsAndUsesCurrentDependencies(t *testing.T) {
 			delete(wantHistory, got)
 		}
 	}
+
+	if current := paused.Steps[0]; current.ArtifactName != "experiment-scope.md" || current.ArtifactSize == nil || *current.ArtifactSize != int64(len(newScope)) {
+		t.Fatalf("step did not report its original file: %+v", current)
+	}
+	const bundleSuffix = "/files/bundle"
+	bundleBody := fmt.Sprintf(`{"items":[{"kind":"artifact","id":%q},{"kind":"artifact","id":%q}]}`, initial.Steps[0].ArtifactID, paused.Steps[0].ArtifactID)
+	bundle := request(http.MethodPost, projectsPath+"/"+project.ProjectID+bundleSuffix, bundleBody, http.StatusOK)
+	archive, err := zip.NewReader(strings.NewReader(bundle), int64(len(bundle)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readEntry := func(name string) []byte {
+		t.Helper()
+		file, err := archive.Open(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	var manifest workspaceBundleManifest
+	if err := json.Unmarshal(readEntry("manifest.json"), &manifest); err != nil || manifest.ProjectID != project.ProjectID || len(manifest.Files) != 2 {
+		t.Fatalf("incorrect workflow bundle manifest: %+v (%v)", manifest, err)
+	}
+	for i, expected := range []struct{ id, body string }{{initial.Steps[0].ArtifactID, oldScope}, {paused.Steps[0].ArtifactID, newScope}} {
+		entry := manifest.Files[i]
+		if entry.Kind != "artifact" || entry.ArtifactID != expected.id || entry.RunID != initial.RunID || entry.StepKey != "scope" ||
+			entry.Path != "experiment-scope.md" || entry.Size != int64(len(expected.body)) || entry.SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(expected.body))) || string(readEntry(entry.Name)) != expected.body {
+			t.Fatalf("bundle did not retain original artifact: %+v", entry)
+		}
+	}
+	request(http.MethodPost, projectsPath+"/other-project"+bundleSuffix, bundleBody, http.StatusNotFound)
 
 	resume := fmt.Sprintf(`{"requestId":"resume","runId":%q,"expectedRevision":%d}`, paused.RunID, paused.Revision)
 	request(http.MethodPost, base+"/continue", resume, http.StatusAccepted)
