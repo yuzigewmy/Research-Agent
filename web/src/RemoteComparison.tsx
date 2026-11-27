@@ -3,10 +3,12 @@ import { ProjectDate } from './ProjectDetails'
 import { errorMessage, ProjectApiError, request } from './projects'
 
 const statusLabels = {
-  PENDING: '待提交', RUNNING: '运行中', SUCCEEDED: '已完成', FAILED: '失败', INTERRUPTED: '已中断',
+  PENDING: '待提交', RUNNING: '运行中', CANCELLING: '正在停止', CANCELLED: '已取消',
+  SUCCEEDED: '已完成', FAILED: '失败', INTERRUPTED: '已中断',
 } as const
 const actionLabels = {
-  snapshot: '读取本机记录', submit: '提交远程复算', refresh: '刷新远程状态', result: '下载远程结果',
+  snapshot: '读取本机记录', submit: '提交远程复算', refresh: '刷新远程状态',
+  cancel: '请求停止远程复算', result: '下载远程结果',
 } as const
 const sha256Pattern = /^[a-f0-9]{64}$/i
 const resultFileName = 'paired-comparison.json'
@@ -87,6 +89,8 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
   const [error, setError] = useState<{ action: Action; message: string }>()
   const { configured, job } = snapshot ?? {}
   const canSubmit = configured === true && (!job || job.status === 'PENDING')
+  const canCancel = configured === true
+    && (job?.status === 'PENDING' || job?.status === 'RUNNING' || job?.status === 'CANCELLING')
   const canRefresh = configured === true && (!!job || error?.action === 'submit' || error?.action === 'refresh')
   const resultDigest = job?.status === 'SUCCEEDED' ? job.resultSha256 : undefined
 
@@ -96,8 +100,9 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
     if (active.current) return
     if (action === 'submit' && (!confirmed || !canSubmit)) return
     if (action === 'refresh' && !canRefresh) return
+    if (action === 'cancel' && !canCancel) return
     const controller = new AbortController()
-    const timeout = action === 'submit' || action === 'refresh' ? 30_000 : 10_000
+    const timeout = action === 'snapshot' || action === 'result' ? 10_000 : 30_000
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)])
     active.current = controller
     setBusy(action)
@@ -166,6 +171,10 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
         {canSubmit && <button className="button primary" type="button" data-remote-comparison-submit
           disabled={!!busy || !confirmed} onClick={() => void run('submit')}>
           {job ? '再次提交复算' : '提交远程复算'}
+        </button>}
+        {canCancel && <button className="button outline" type="button" data-remote-comparison-cancel
+          disabled={!!busy} onClick={() => void run('cancel')}>
+          {job?.status === 'CANCELLING' ? '重试停止' : '请求停止'}
         </button>}
         {canRefresh && <button className="button outline" type="button" data-remote-comparison-refresh
           disabled={!!busy} onClick={() => void run('refresh')}>刷新状态</button>}

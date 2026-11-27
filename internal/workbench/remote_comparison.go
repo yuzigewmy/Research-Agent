@@ -31,7 +31,32 @@ const remoteComparisonSchema = `
 	PRAGMA user_version = 61;
 `
 
+const remoteComparisonStopSchema = `
+	ALTER TABLE remote_comparisons RENAME TO previous_remote_comparisons;
+	CREATE TABLE remote_comparisons (
+		project_id TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		job_id TEXT NOT NULL UNIQUE,
+		node_digest TEXT NOT NULL,
+		input_sha256 TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RUNNING', 'CANCELLING', 'CANCELLED', 'SUCCEEDED', 'FAILED', 'INTERRUPTED')),
+		started_at TEXT NOT NULL DEFAULT '',
+		finished_at TEXT NOT NULL DEFAULT '',
+		result_sha256 TEXT NOT NULL DEFAULT '',
+		result_json TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (project_id, task_id),
+		FOREIGN KEY (project_id, task_id) REFERENCES tasks (project_id, task_id) ON DELETE CASCADE
+	);
+	INSERT INTO remote_comparisons SELECT * FROM previous_remote_comparisons;
+	DROP TABLE previous_remote_comparisons;
+	PRAGMA user_version = 62;
+`
+
 const remotePending = "PENDING"
+
+func remoteJobActive(status string) bool {
+	return status == remotePending || status == taskRunning || status == taskCancelling
+}
 
 var errRemoteResponse = errors.New("invalid remote comparison response")
 var errRemoteMissing = errors.New("remote comparison not yet recorded")
@@ -71,6 +96,8 @@ func (node *ComputeNode) jobRequest(ctx context.Context, method, id, suffix, dig
 	req.Header.Set("Accept", "application/json")
 	if input != nil {
 		req.Header.Set("Content-Type", "text/csv")
+	}
+	if method != http.MethodGet {
 		req.Header.Set("X-Input-SHA256", digest)
 	}
 	res, err := node.client.Do(req)
@@ -93,7 +120,11 @@ func (node *ComputeNode) jobRequest(ctx context.Context, method, id, suffix, dig
 }
 
 func (node *ComputeNode) reconcileJob(ctx context.Context, old remoteComparison, method, source string, expected experimentMetrics) (computeJob, string, error) {
-	body, _, err := node.jobRequest(ctx, method, old.JobID, "", old.InputSHA256, source)
+	suffix := ""
+	if method == http.MethodPost {
+		suffix = "cancel"
+	}
+	body, _, err := node.jobRequest(ctx, method, old.JobID, suffix, old.InputSHA256, source)
 	if err != nil {
 		return computeJob{}, "", err
 	}
@@ -101,17 +132,19 @@ func (node *ComputeNode) reconcileJob(ctx context.Context, old remoteComparison,
 	if json.Unmarshal(body, &job) != nil || job.JobID != old.JobID || job.InputSHA256 != old.InputSHA256 {
 		return computeJob{}, "", errRemoteResponse
 	}
-	if _, err := time.Parse(time.RFC3339Nano, job.StartedAt); err != nil {
-		return computeJob{}, "", errRemoteResponse
+	if job.Status != taskCancelled || job.StartedAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, job.StartedAt); err != nil {
+			return computeJob{}, "", errRemoteResponse
+		}
 	}
 	job.Message = ""
 	switch job.Status {
-	case taskRunning:
+	case taskRunning, taskCancelling:
 		if job.FinishedAt != "" || job.ResultSHA256 != "" {
 			return computeJob{}, "", errRemoteResponse
 		}
 		return job, "", nil
-	case taskSucceeded, taskFailed, taskInterrupted:
+	case taskSucceeded, taskFailed, taskInterrupted, taskCancelled:
 		if _, err := time.Parse(time.RFC3339Nano, job.FinishedAt); err != nil {
 			return computeJob{}, "", errRemoteResponse
 		}
@@ -146,6 +179,7 @@ func registerRemoteComparison(mux *http.ServeMux, store *Store, node *ComputeNod
 	mux.HandleFunc("GET "+path+"/result", store.remoteComparisonHandler(node, "result"))
 	mux.HandleFunc("POST "+path+"/submit", store.remoteComparisonHandler(node, "submit"))
 	mux.HandleFunc("POST "+path+"/refresh", store.remoteComparisonHandler(node, "refresh"))
+	mux.HandleFunc("POST "+path+"/cancel", store.remoteComparisonHandler(node, "cancel"))
 }
 
 func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.HandlerFunc {
@@ -185,7 +219,7 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交空 JSON 对象。")
 			return
 		}
-		if job.JobID != "" && job.Status != remotePending && job.Status != taskRunning {
+		if job.JobID != "" && !remoteJobActive(job.Status) {
 			writeRemoteComparison(w, node, job)
 			return
 		}
@@ -194,7 +228,7 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			return
 		}
 		if job.JobID == "" {
-			if action == "refresh" {
+			if action != "submit" {
 				writeRemoteComparison(w, node, job)
 				return
 			}
@@ -217,7 +251,14 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			return
 		}
 		method, source := http.MethodGet, ""
-		if action == "submit" && job.Status == remotePending {
+		if action == "cancel" {
+			if _, err := s.db.ExecContext(ctx, `UPDATE remote_comparisons SET status = 'CANCELLING'
+				WHERE project_id = ? AND task_id = ? AND status IN ('PENDING', 'RUNNING')`, projectID, taskID); err != nil {
+				writeStoreError(w, "record remote stop", err)
+				return
+			}
+			method = http.MethodPost
+		} else if action == "submit" && job.Status == remotePending {
 			method = http.MethodPut
 			source, err = s.readExperimentSource(ctx, projectID, report.Input)
 			if err != nil {
@@ -228,8 +269,13 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 		nodeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		updated, result, err := node.reconcileJob(nodeCtx, job, method, source, report.Metrics)
-		if errors.Is(err, errRemoteMissing) && job.Status == remotePending {
-			writeRemoteComparison(w, node, job)
+		if (err != nil && action == "cancel") || (errors.Is(err, errRemoteMissing) && (job.Status == remotePending || job.Status == taskCancelling)) {
+			current, err := readRemoteComparison(ctx, s.db, projectID, taskID)
+			if err != nil {
+				writeStoreError(w, "read unconfirmed remote comparison", err)
+				return
+			}
+			writeRemoteComparison(w, node, current)
 			return
 		}
 		if err != nil {
@@ -239,8 +285,9 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 		saveCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), taskDBLimit)
 		defer stop()
 		if _, err := s.db.ExecContext(saveCtx, `UPDATE remote_comparisons SET status = ?, started_at = ?, finished_at = ?, result_sha256 = ?, result_json = ?
-			WHERE project_id = ? AND task_id = ? AND job_id = ? AND status IN ('PENDING', 'RUNNING')`, updated.Status, updated.StartedAt,
-			updated.FinishedAt, updated.ResultSHA256, result, projectID, taskID, job.JobID); err != nil {
+			WHERE project_id = ? AND task_id = ? AND job_id = ? AND status IN ('PENDING', 'RUNNING', 'CANCELLING')
+			AND (status <> 'CANCELLING' OR ? <> 'RUNNING')`, updated.Status, updated.StartedAt,
+			updated.FinishedAt, updated.ResultSHA256, result, projectID, taskID, job.JobID, updated.Status); err != nil {
 			writeStoreError(w, "save remote comparison", err)
 			return
 		}

@@ -1,14 +1,48 @@
 package workbench
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestComputeWorkerUpgradesExistingReceipts(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", workspaceSQLiteURI(filepath.Join(dir, "compute.sqlite3"), ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "4123456789abcdef0123456789abcdef"
+	const started = "2025-01-01T00:00:00.000000000Z"
+	const result = `{"method":"paired-mean-v1"}`
+	digest, resultDigest := computeDigest([]byte("fixture")), computeDigest([]byte(result))
+	legacySchema := strings.Replace(computeWorkerSchema, "'CANCELLING', 'CANCELLED', ", "", 1)
+	if _, err := db.Exec(legacySchema); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO jobs VALUES (?, ?, 'SUCCEEDED', ?, ?, ?, ?, '')`, id, digest, started, started, resultDigest, result)
+	closeErr := db.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("save legacy receipt: %v, %v", err, closeErr)
+	}
+	worker, err := OpenComputeWorker(dir, "河流节点", "worker-fixture-credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	job, body, err := worker.lookupJob(t.Context(), id)
+	if err != nil || job != (computeJob{JobID: id, InputSHA256: digest, Status: taskSucceeded, StartedAt: started, FinishedAt: started, ResultSHA256: resultDigest}) || body != result {
+		t.Fatalf("upgrade changed the old result: %+v (%v)", job, err)
+	}
+}
 
 func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
 	const token = "worker-fixture-credential"
@@ -54,6 +88,10 @@ func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
 	if _, err := worker.db.Exec(`INSERT INTO jobs (job_id, input_sha256, status, started_at) VALUES (?, ?, 'RUNNING', ?)`, interruptedID, digest, startedAt); err != nil {
 		t.Fatal(err)
 	}
+	const stoppingID = "5123456789abcdef0123456789abcdef"
+	if _, err := worker.db.Exec(`INSERT INTO jobs (job_id, input_sha256, status, started_at) VALUES (?, ?, 'CANCELLING', ?)`, stoppingID, digest, startedAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := worker.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +107,25 @@ func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
 		t.Fatalf("wrong interruption receipt: %+v (%v)", interrupted, err)
 	}
 	request(http.MethodGet, statusPath+"/result", "", "", true, http.StatusNotFound)
+	var stoppedAfterRestart computeJob
+	if err := json.Unmarshal(request(http.MethodGet, computeJobsPath+stoppingID, "", "", true, http.StatusOK).Body.Bytes(), &stoppedAfterRestart); err != nil ||
+		stoppedAfterRestart.Status != taskCancelled || stoppedAfterRestart.StartedAt != startedAt || stoppedAfterRestart.FinishedAt < startedAt ||
+		stoppedAfterRestart.InputSHA256 != digest || stoppedAfterRestart.ResultSHA256 != "" {
+		t.Fatalf("wrong recovered stop receipt: %+v (%v)", stoppedAfterRestart, err)
+	}
+	var stopped computeJob
+	if err := json.Unmarshal(request(http.MethodPost, other+"/cancel", "", digest, true, http.StatusOK).Body.Bytes(), &stopped); err != nil ||
+		stopped.Status != taskCancelled || stopped.StartedAt != "" || stopped.InputSHA256 != digest {
+		t.Fatalf("stop before submission did not reserve the job ID: %+v (%v)", stopped, err)
+	}
+	var delayed computeJob
+	if err := json.Unmarshal(request(http.MethodPut, other, source, digest, true, http.StatusOK).Body.Bytes(), &delayed); err != nil || delayed != stopped {
+		t.Fatalf("late submission changed the stop receipt: %+v (%v)", delayed, err)
+	}
+	var completed computeJob
+	if err := json.Unmarshal(request(http.MethodPost, job+"/cancel", "", digest, true, http.StatusOK).Body.Bytes(), &completed); err != nil || completed != first {
+		t.Fatalf("stop changed a completed job: %+v (%v)", completed, err)
+	}
 	var replay computeJob
 	if err := json.Unmarshal(request(http.MethodPut, statusPath, source, digest, true, http.StatusOK).Body.Bytes(), &replay); err != nil || replay != interrupted {
 		t.Fatalf("interruption replay differs: %+v (%v)", replay, err)
@@ -76,6 +133,29 @@ func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
 	replay = computeJob{}
 	if err := json.Unmarshal(request(http.MethodPut, job, source, digest, true, http.StatusOK).Body.Bytes(), &replay); err != nil || replay != first {
 		t.Fatalf("replayed receipt differs: %+v (%v)", replay, err)
+	}
+	const runningID = "3123456789abcdef0123456789abcdef"
+	if _, err := worker.db.Exec(`INSERT INTO jobs (job_id, input_sha256, status, started_at) VALUES (?, ?, 'RUNNING', ?)`, runningID, digest, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	worker.activeID, worker.cancel = runningID, cancel
+	runningPath := computeJobsPath + runningID
+	var stopping computeJob
+	if err := json.Unmarshal(request(http.MethodPost, runningPath+"/cancel", "", digest, true, http.StatusOK).Body.Bytes(), &stopping); err != nil || stopping.Status != taskCancelling || runCtx.Err() == nil {
+		t.Fatalf("stop did not cancel the active calculation: %+v (%v)", stopping, err)
+	}
+	lateResult := first
+	lateResult.JobID = runningID
+	cancelled, err := worker.finishJob(t.Context(), lateResult, `{"late":true}`)
+	if err != nil || cancelled.Status != taskCancelled || cancelled.ResultSHA256 != "" {
+		t.Fatalf("late success overrode cancellation: %+v (%v)", cancelled, err)
+	}
+	request(http.MethodGet, runningPath+"/result", "", "", true, http.StatusNotFound)
+	var repeatedStop computeJob
+	if err := json.Unmarshal(request(http.MethodPost, runningPath+"/cancel", "", digest, true, http.StatusOK).Body.Bytes(), &repeatedStop); err != nil || repeatedStop != cancelled {
+		t.Fatalf("repeated stop did not return the saved receipt: %+v (%v)", repeatedStop, err)
 	}
 	changed := source + "5,8\n"
 	request(http.MethodPut, job, changed, fmt.Sprintf("%x", sha256.Sum256([]byte(changed))), true, http.StatusConflict)

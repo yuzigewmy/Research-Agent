@@ -144,13 +144,13 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 用 `go build ./cmd/research-compute` 构建节点程序，为每个实例配置独立的数据目录以及 `RESEARCH_COMPUTE_NODE_TOKEN`。节点监听回环地址，跨主机部署时通过 HTTPS 反向代理访问。每个数据目录运行一个节点进程。启动示例为 `research-compute --listen 127.0.0.1:8081 --data-dir ./compute-data --name 配对计算节点`。
 
-节点协议支持通过 `PUT /api/v1/jobs/{jobId}` 提交 `text/csv` 正文与 `X-Input-SHA256`，作业编号是 32 位小写十六进制字符。用 `GET /api/v1/jobs/{jobId}` 查询原回执，成功后用 `GET /api/v1/jobs/{jobId}/result` 取回 JSON 和 `X-Result-SHA256`。请求均使用 Bearer 凭据。相同编号和输入摘要重放时返回原回执。节点重启后，中断的作业沿用原编号，状态为 `INTERRUPTED`。节点只保存作业回执与计算结果。
+节点协议支持通过 `PUT /api/v1/jobs/{jobId}` 提交 `text/csv` 正文与 `X-Input-SHA256`，作业编号是 32 位小写十六进制字符。用 `GET /api/v1/jobs/{jobId}` 查询原回执，成功后用 `GET /api/v1/jobs/{jobId}/result` 取回 JSON 和 `X-Result-SHA256`。请求均使用 Bearer 凭据。相同编号和输入摘要重放时返回原回执。节点重启后，中断的作业沿用原编号，状态为 `INTERRUPTED`。使用 `POST /api/v1/jobs/{jobId}/cancel` 和 `X-Input-SHA256` 请求停止。该请求使用同一编号及输入摘要，可以在提交到达前登记取消。节点只保存作业回执与计算结果。
 
 在服务端设置 `RESEARCH_COMPUTE_NODE_URL` 和 `RESEARCH_COMPUTE_NODE_TOKEN`，重启工作台后，在首页展开「计算节点」并点击「检查节点」。远程地址使用 HTTPS，本机回环 IP 可以使用 HTTP。
 
 节点须支持 `GET /api/v1/capabilities`，使用 Bearer 凭据，并返回如下格式的 JSON。工作台显示节点声明的输入大小、行数和运行时限。连接检查只读取能力元数据。
 
-完成一次本机配对计算后，可在任务卡展开「远程配对复算」。确认上传后，工作台将该任务锁定的 CSV 发送给已配置的节点。提交响应丢失时，点击「刷新状态」查询原作业。再次提交会沿用同一编号。取回报告时，工作台核对输入和结果摘要，并将指标与本机报告比对。校验通过后，报告保存在工作台，可在节点离线时下载。
+完成一次本机配对计算后，可在任务卡展开「远程配对复算」。确认上传后，工作台将该任务锁定的 CSV 发送给已配置的节点。提交响应丢失时，点击「刷新状态」查询原作业。再次提交会沿用同一编号。取回报告时，工作台核对输入和结果摘要，并将指标与本机报告比对。校验通过后，报告保存在工作台，可在节点离线时下载。已有待提交或运行中回执时，可点击「请求停止」。连接中断后，可按原编号刷新状态或重试停止。节点确认已取消后，该作业无法继续提交。
 
 ```json
 {

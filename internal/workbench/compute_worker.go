@@ -14,16 +14,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
 
 const computeJobsPath = "/api/v1/jobs/"
 
-const computeWorkerSchema = `CREATE TABLE IF NOT EXISTS jobs (
+const computeWorkerSchema = `CREATE TABLE jobs (
 	job_id TEXT PRIMARY KEY NOT NULL,
 	input_sha256 TEXT NOT NULL,
-	status TEXT NOT NULL CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'INTERRUPTED')),
+	status TEXT NOT NULL CHECK (status IN ('RUNNING', 'CANCELLING', 'CANCELLED', 'SUCCEEDED', 'FAILED', 'INTERRUPTED')),
 	started_at TEXT NOT NULL,
 	finished_at TEXT NOT NULL DEFAULT '',
 	result_sha256 TEXT NOT NULL DEFAULT '',
@@ -53,6 +54,9 @@ type ComputeWorker struct {
 	name       string
 	credential [32]byte
 	slot       chan struct{}
+	mu         sync.Mutex
+	activeID   string
+	cancel     context.CancelFunc
 }
 
 // OpenComputeWorker opens the node's separate job receipt database.
@@ -85,11 +89,42 @@ func initializeComputeWorker(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(computeWorkerSchema); err != nil {
+	var version int
+	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE jobs SET status = 'INTERRUPTED', finished_at = ?, message = ? WHERE status = 'RUNNING'`,
-		time.Now().UTC().Format(createdAtLayout), "计算节点重启中断了此作业。"); err != nil {
+	switch version {
+	case 0:
+		var hasJobs bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'jobs')`).Scan(&hasJobs); err != nil {
+			return err
+		}
+		if hasJobs {
+			if _, err := tx.Exec(`ALTER TABLE jobs RENAME TO legacy_jobs`); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(computeWorkerSchema); err != nil {
+			return err
+		}
+		if hasJobs {
+			if _, err := tx.Exec(`INSERT INTO jobs (job_id, input_sha256, status, started_at, finished_at, result_sha256, result_json, message)
+				SELECT job_id, input_sha256, status, started_at, finished_at, result_sha256, result_json, message FROM legacy_jobs;
+				DROP TABLE legacy_jobs`); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`PRAGMA user_version = 1`); err != nil {
+			return err
+		}
+	case 1:
+	default:
+		return errors.New("计算节点回执库版本不受支持")
+	}
+	if _, err := tx.Exec(`UPDATE jobs SET
+		status = CASE status WHEN 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,
+		message = CASE status WHEN 'CANCELLING' THEN '' ELSE '计算节点重启中断了此作业。' END,
+		finished_at = ? WHERE status IN ('RUNNING', 'CANCELLING')`, time.Now().UTC().Format(createdAtLayout)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -102,6 +137,7 @@ func (worker *ComputeWorker) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/capabilities", worker.capabilities)
 	mux.HandleFunc("PUT "+computeJobsPath+"{jobId}", worker.submit)
 	mux.HandleFunc("GET "+computeJobsPath+"{jobId}", worker.readJob)
+	mux.HandleFunc("POST "+computeJobsPath+"{jobId}/cancel", worker.cancelJob)
 	mux.HandleFunc("GET "+computeJobsPath+"{jobId}/result", worker.readResult)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -161,32 +197,33 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "INPUT_DIGEST_MISMATCH", "CSV 输入摘要不一致。")
 		return
 	}
-	job, _, err := worker.lookupJob(r.Context(), id)
-	if err == nil {
-		if job.InputSHA256 != digest {
-			writeError(w, http.StatusConflict, "JOB_ID_CONFLICT", "该作业编号已绑定其他输入。")
-			return
+	runCtx, cancel := context.WithTimeout(context.Background(), comparisonTimeout)
+	worker.mu.Lock()
+	worker.activeID, worker.cancel = id, cancel
+	worker.mu.Unlock()
+	defer func() {
+		cancel()
+		worker.mu.Lock()
+		worker.activeID, worker.cancel = "", nil
+		worker.mu.Unlock()
+	}()
+	job := computeJob{JobID: id, InputSHA256: digest, Status: taskRunning, StartedAt: time.Now().UTC().Format(createdAtLayout)}
+	if err := worker.db.QueryRowContext(r.Context(), `INSERT INTO jobs (job_id, input_sha256, status, started_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT(job_id) DO NOTHING RETURNING job_id`,
+		job.JobID, job.InputSHA256, job.Status, job.StartedAt).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			worker.replyJob(w, r.Context(), job.JobID, digest)
+		} else {
+			writeStoreError(w, "claim compute job", err)
 		}
-		writeJSON(w, http.StatusOK, job)
-		return
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		writeStoreError(w, "read compute job", err)
-		return
-	}
-	job = computeJob{JobID: id, InputSHA256: digest, Status: taskRunning, StartedAt: time.Now().UTC().Format(createdAtLayout)}
-	if _, err := worker.db.ExecContext(r.Context(), `INSERT INTO jobs (job_id, input_sha256, status, started_at)
-		VALUES (?, ?, ?, ?)`, job.JobID, job.InputSHA256, job.Status, job.StartedAt); err != nil {
-		writeStoreError(w, "claim compute job", err)
 		return
 	}
 	// Once the receipt is saved, a lost connection leaves the calculation free to finish.
-	job, result := runComputeJob(job, string(source))
+	job, result := runComputeJob(runCtx, job, string(source))
 	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
-	if err := worker.db.QueryRowContext(saveCtx, `UPDATE jobs SET status = ?, finished_at = ?, result_sha256 = ?, result_json = ?, message = ?
-		WHERE job_id = ? AND status = 'RUNNING' RETURNING status`,
-		job.Status, job.FinishedAt, job.ResultSHA256, result, job.Message, job.JobID).Scan(&job.Status); err != nil {
+	job, err = worker.finishJob(saveCtx, job, result)
+	if err != nil {
 		writeStoreError(w, "save compute job", err)
 		return
 	}
@@ -194,14 +231,75 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, job)
 }
 
+func (worker *ComputeWorker) replyJob(w http.ResponseWriter, ctx context.Context, id, digest string) {
+	job, _, err := worker.lookupJob(ctx, id)
+	if err != nil {
+		writeStoreError(w, "read compute receipt", err)
+		return
+	}
+	if job.InputSHA256 != digest {
+		writeError(w, http.StatusConflict, "JOB_ID_CONFLICT", "该作业编号已绑定其他输入。")
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (worker *ComputeWorker) finishJob(ctx context.Context, job computeJob, result string) (computeJob, error) {
+	_, err := worker.db.ExecContext(ctx, `UPDATE jobs SET
+		status = CASE status WHEN 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
+		finished_at = ?, result_sha256 = CASE status WHEN 'RUNNING' THEN ? ELSE '' END,
+		result_json = CASE status WHEN 'RUNNING' THEN ? ELSE '' END,
+		message = CASE status WHEN 'RUNNING' THEN ? ELSE '' END
+		WHERE job_id = ? AND status IN ('RUNNING', 'CANCELLING')`,
+		job.Status, job.FinishedAt, job.ResultSHA256, result, job.Message, job.JobID)
+	if err != nil {
+		return computeJob{}, err
+	}
+	saved, _, err := worker.lookupJob(ctx, job.JobID)
+	return saved, err
+}
+
+func (worker *ComputeWorker) cancelJob(w http.ResponseWriter, r *http.Request) {
+	id, digest := r.PathValue("jobId"), r.Header.Get("X-Input-SHA256")
+	if !validComputeJobID(id) || !validObjectDigest(digest) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的作业编号和输入摘要。")
+		return
+	}
+	ctx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), taskDBLimit)
+	defer stop()
+	now := time.Now().UTC().Format(createdAtLayout)
+	_, err := worker.db.ExecContext(ctx, `INSERT INTO jobs (job_id, input_sha256, status, started_at, finished_at)
+		VALUES (?, ?, 'CANCELLED', '', ?) ON CONFLICT(job_id) DO UPDATE SET status = 'CANCELLING'
+		WHERE jobs.status = 'RUNNING' AND jobs.input_sha256 = excluded.input_sha256`, id, digest, now)
+	if err != nil {
+		writeStoreError(w, "stop compute job", err)
+		return
+	}
+	job, _, err := worker.lookupJob(ctx, id)
+	if err != nil {
+		writeStoreError(w, "read stop receipt", err)
+		return
+	}
+	if job.InputSHA256 != digest {
+		writeError(w, http.StatusConflict, "JOB_ID_CONFLICT", "该作业编号已绑定其他输入。")
+		return
+	}
+	if job.Status == taskCancelling {
+		worker.mu.Lock()
+		if worker.activeID == id {
+			worker.cancel()
+		}
+		worker.mu.Unlock()
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
 func computeDigest(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }
 
-func runComputeJob(job computeJob, source string) (computeJob, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), comparisonTimeout)
-	defer cancel()
+func runComputeJob(ctx context.Context, job computeJob, source string) (computeJob, string) {
 	metrics, err := compareExperimentMetrics(ctx, source)
 	job.FinishedAt = time.Now().UTC().Format(createdAtLayout)
 	if err != nil {

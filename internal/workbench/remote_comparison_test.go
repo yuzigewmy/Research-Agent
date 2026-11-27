@@ -17,15 +17,23 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer worker.Close()
-	var submissions, results atomic.Int32
+	var submissions, results, stops atomic.Int32
 	workerHandler := worker.Handler()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut && submissions.Add(1) == 1 {
+		if r.Method == http.MethodPut && submissions.Add(1) > 1 {
+			http.Error(w, "fixture disconnected before submission", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodPut || (strings.HasSuffix(r.URL.Path, "/cancel") && stops.Add(1) == 1) {
 			// The node commits the receipt before the connection drops.
 			saved := httptest.NewRecorder()
 			workerHandler.ServeHTTP(saved, r)
-			if saved.Code != http.StatusCreated {
-				t.Errorf("worker did not accept job: %d", saved.Code)
+			want := http.StatusCreated
+			if r.Method == http.MethodPost {
+				want = http.StatusOK
+			}
+			if saved.Code != want {
+				t.Errorf("worker response: %d, want %d", saved.Code, want)
 			}
 			connection, _, err := http.NewResponseController(w).Hijack()
 			if err != nil {
@@ -73,31 +81,36 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, _, err := store.applyTaskRequest(ctx, taskRequest{ProjectID: project, RequestID: "pair", Action: proposeTask,
-		Kind: experimentComparisonTask, Instruction: "核对观察差异", InputVersionIDs: []string{source.VersionID}}, false)
-	if err != nil {
-		t.Fatal(err)
+	completeComparison := func(requestID string) string {
+		t.Helper()
+		task, _, err := store.applyTaskRequest(ctx, taskRequest{ProjectID: project, RequestID: requestID, Action: proposeTask,
+			Kind: experimentComparisonTask, Instruction: "核对观察差异", InputVersionIDs: []string{source.VersionID}}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := store.applyTaskRequest(ctx, taskRequest{ProjectID: project, TaskID: task.TaskID,
+			RequestID: "confirm-" + requestID, Action: confirmTask, ExpectedRevision: task.Revision}, false); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := store.claimQueuedTask(ctx, project, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		calculated, err := store.runExperimentComparison(ctx, project, claim.Inputs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.finishTask(ctx, project, claim, taskSucceeded, "", calculated); err != nil {
+			t.Fatal(err)
+		}
+		return projectsPath + "/" + project + "/tasks/" + task.TaskID + "/remote-comparison"
 	}
-	if _, _, err := store.applyTaskRequest(ctx, taskRequest{ProjectID: project, TaskID: task.TaskID,
-		RequestID: "confirm", Action: confirmTask, ExpectedRevision: task.Revision}, false); err != nil {
-		t.Fatal(err)
-	}
-	claim, err := store.claimQueuedTask(ctx, project, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	calculated, err := store.runExperimentComparison(ctx, project, claim.Inputs[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.finishTask(ctx, project, claim, taskSucceeded, "", calculated); err != nil {
-		t.Fatal(err)
-	}
+	path := completeComparison("pair")
+	stopPath := completeComparison("stop-pair")
 	if _, err := store.saveWorkspaceDocument(ctx, project, source.Path, source.SHA256, "baseline,variant\n1,99\n"); err != nil {
 		t.Fatal(err)
 	}
 	handler := NewHandler(store, nil, HandlerConfig{ComputeNode: node})
-	path := projectsPath + "/" + project + "/tasks/" + task.TaskID + "/remote-comparison"
 	request := func(method, path string, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequestWithContext(ctx, method, "http://127.0.0.1"+path, strings.NewReader("{}"))
@@ -137,6 +150,20 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	if job.JobID != pending.JobID || job.Status != taskSucceeded || job.InputSHA256 != source.SHA256 || submissions.Load() != 1 {
 		t.Fatalf("wrong recovered receipt: %+v, submissions %d", job, submissions.Load())
 	}
+	request(http.MethodPost, stopPath+"/submit", http.StatusBadGateway)
+	reserved := read(http.MethodGet, stopPath)
+	stopping := read(http.MethodPost, stopPath+"/cancel")
+	if reserved.Status != remotePending || stopping.JobID != reserved.JobID || stopping.Status != taskCancelling {
+		t.Fatalf("lost stop response did not preserve intent: %+v, %+v", reserved, stopping)
+	}
+	stopped := read(http.MethodPost, stopPath+"/refresh")
+	if stopped.Status != taskCancelled || stopped.JobID != reserved.JobID || stopped.ResultSHA256 != "" {
+		t.Fatalf("wrong refreshed stop receipt: %+v", stopped)
+	}
+	if replay := read(http.MethodPost, stopPath+"/submit"); replay != stopped || submissions.Load() != 2 || stops.Load() != 1 {
+		t.Fatalf("submitting a stopped job contacted the node: %+v", replay)
+	}
+	request(http.MethodGet, stopPath+"/result", http.StatusNotFound)
 	handler = NewHandler(store, nil, HandlerConfig{})
 	result := request(http.MethodGet, path+"/result", http.StatusOK)
 	if result.Header().Get("X-Result-SHA256") != job.ResultSHA256 || computeDigest(result.Body.Bytes()) != job.ResultSHA256 {
