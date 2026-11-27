@@ -441,6 +441,11 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if queuesWork && current.modelConnection != "" && current.modelConnection != req.models.option(defaultModelID).connection {
 		return WorkflowRun{}, false, errWorkflowModelConnection
 	}
+	if queuesWork {
+		if err := checkProjectModelRunBudget(ctx, tx, projectID); err != nil {
+			return WorkflowRun{}, false, err
+		}
+	}
 
 	switch action {
 	case workflowStart:
@@ -624,6 +629,13 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 				status = taskQueued
 			}
 			step++
+		}
+	}
+	if status == taskQueued && stages[step].prompt != "" {
+		if err := checkProjectModelRunBudget(ctx, tx, projectID); errors.Is(err, errModelRunBudgetExceeded) {
+			status = workflowPaused
+		} else if err != nil {
+			return err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET

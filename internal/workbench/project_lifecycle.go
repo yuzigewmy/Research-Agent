@@ -47,7 +47,81 @@ const projectTitleSchema = `
 	PRAGMA user_version = 50;
 `
 
-var errProjectRevision = errors.New("project revision changed")
+const projectTechnicalLimitsSchema = `
+	ALTER TABLE projects ADD COLUMN max_model_runs INTEGER NOT NULL DEFAULT 0
+		CHECK (max_model_runs >= 0 AND max_model_runs <= 1000);
+	ALTER TABLE projects ADD COLUMN max_output_tokens INTEGER NOT NULL DEFAULT 0
+		CHECK (max_output_tokens = 0 OR (max_output_tokens >= 256 AND max_output_tokens <= 32768));
+	ALTER TABLE project_patch_requests ADD COLUMN max_model_runs INTEGER
+		CHECK (max_model_runs IS NULL OR (max_model_runs >= 0 AND max_model_runs <= 1000));
+	ALTER TABLE project_patch_requests ADD COLUMN max_output_tokens INTEGER
+		CHECK (max_output_tokens IS NULL OR max_output_tokens = 0 OR (max_output_tokens >= 256 AND max_output_tokens <= 32768));
+	PRAGMA user_version = 64;
+`
+
+const (
+	maxProjectModelRunsLimit    = 1000
+	minProjectOutputTokensLimit = 256
+	maxProjectOutputTokensLimit = 32768
+)
+
+var (
+	errProjectRevision        = errors.New("project revision changed")
+	errModelRunBudgetExceeded = errors.New("project model run budget exceeded")
+)
+
+type projectBudgetQuery interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func projectModelRunsUsed(ctx context.Context, db projectBudgetQuery, projectID string) (int, error) {
+	var turnsCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM turns WHERE project_id = ?`, projectID).Scan(&turnsCount); err != nil {
+		return 0, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT w.workflow_key, t.workflow_step
+		FROM tasks t JOIN workflow_runs w ON w.run_id = t.workflow_run_id
+		WHERE t.project_id = ? AND t.workflow_source_version_id IS NULL`, projectID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	workflowModelSteps := 0
+	for rows.Next() {
+		var key string
+		var step int
+		if err := rows.Scan(&key, &step); err != nil {
+			return 0, err
+		}
+		stages := workflowStages[key]
+		if step >= 0 && step < len(stages) && stages[step].prompt != "" {
+			workflowModelSteps++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return turnsCount + workflowModelSteps, nil
+}
+
+func checkProjectModelRunBudget(ctx context.Context, db projectBudgetQuery, projectID string) error {
+	var maxRuns int
+	if err := db.QueryRowContext(ctx, `SELECT max_model_runs FROM projects WHERE project_id = ?`, projectID).Scan(&maxRuns); err != nil {
+		return err
+	}
+	if maxRuns <= 0 {
+		return nil
+	}
+	used, err := projectModelRunsUsed(ctx, db, projectID)
+	if err != nil {
+		return err
+	}
+	if used >= maxRuns {
+		return errModelRunBudgetExceeded
+	}
+	return nil
+}
 
 func validProjectTitle(title string) bool {
 	return title != "" && utf8.RuneCountInString(title) <= 200 && !strings.ContainsRune(title, 0)
@@ -68,13 +142,29 @@ func (field *projectPatchField) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type projectPatchIntField struct{ sql.NullInt64 }
+
+func (field *projectPatchIntField) UnmarshalJSON(data []byte) error {
+	var value *int64
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if value == nil {
+		return errors.New("project limit fields must be integers")
+	}
+	field.NullInt64 = sql.NullInt64{Int64: *value, Valid: true}
+	return nil
+}
+
 type patchProjectInput struct {
-	RequestID        string            `json:"requestId"`
-	ExpectedRevision int               `json:"expectedRevision"`
-	Title            projectPatchField `json:"title"`
-	DisplayName      projectPatchField `json:"displayName"`
-	Status           projectPatchField `json:"status"`
-	DefaultTurnMode  projectPatchField `json:"defaultTurnMode"`
+	RequestID        string               `json:"requestId"`
+	ExpectedRevision int                  `json:"expectedRevision"`
+	Title            projectPatchField    `json:"title"`
+	DisplayName      projectPatchField    `json:"displayName"`
+	Status           projectPatchField    `json:"status"`
+	DefaultTurnMode  projectPatchField    `json:"defaultTurnMode"`
+	MaxModelRuns     projectPatchIntField `json:"maxModelRuns"`
+	MaxOutputTokens  projectPatchIntField `json:"maxOutputTokens"`
 }
 
 func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +173,8 @@ func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validRequestID(input.RequestID) || input.ExpectedRevision < 1 ||
-		(!input.Title.Valid && !input.DisplayName.Valid && !input.Status.Valid && !input.DefaultTurnMode.Valid) {
+		(!input.Title.Valid && !input.DisplayName.Valid && !input.Status.Valid && !input.DefaultTurnMode.Valid &&
+			!input.MaxModelRuns.Valid && !input.MaxOutputTokens.Valid) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交有效的请求编号、正整数修订版本和要修改的项目设置。")
 		return
 	}
@@ -104,6 +195,15 @@ func (s *Store) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 
 	if input.DefaultTurnMode.Valid && !validTurnMode(input.DefaultTurnMode.String) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的默认协作方式。")
+		return
+	}
+	if input.MaxModelRuns.Valid && (input.MaxModelRuns.Int64 < 0 || input.MaxModelRuns.Int64 > maxProjectModelRunsLimit) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "单项目最大模型调用次数须为 0（不限）或 1 至 1000 的整数。")
+		return
+	}
+	if input.MaxOutputTokens.Valid && input.MaxOutputTokens.Int64 != 0 &&
+		(input.MaxOutputTokens.Int64 < minProjectOutputTokensLimit || input.MaxOutputTokens.Int64 > maxProjectOutputTokensLimit) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "单轮最大输出 token 须为 0（默认 8192）或 256 至 32768 的整数。")
 		return
 	}
 
@@ -131,10 +231,11 @@ func (s *Store) patchProject(ctx context.Context, id string, input patchProjectI
 
 	// Reserve the receipt inside the write transaction. A failed CAS rolls it back.
 	result, err := tx.ExecContext(ctx, `INSERT INTO project_patch_requests
-		(project_id, request_id, expected_revision, title, display_name, status, default_turn_mode)
-		SELECT project_id, ?, ?, ?, ?, ?, ? FROM projects WHERE project_id = ?
+		(project_id, request_id, expected_revision, title, display_name, status, default_turn_mode, max_model_runs, max_output_tokens)
+		SELECT project_id, ?, ?, ?, ?, ?, ?, ?, ? FROM projects WHERE project_id = ?
 		ON CONFLICT (project_id, request_id) DO NOTHING`,
-		input.RequestID, input.ExpectedRevision, input.Title, input.DisplayName, input.Status, input.DefaultTurnMode, id)
+		input.RequestID, input.ExpectedRevision, input.Title, input.DisplayName, input.Status, input.DefaultTurnMode,
+		input.MaxModelRuns, input.MaxOutputTokens, id)
 	if err != nil {
 		return Project{}, err
 	}
@@ -145,23 +246,34 @@ func (s *Store) patchProject(ctx context.Context, id string, input patchProjectI
 	if inserted == 0 {
 		var revision int
 		var title, name, status, mode sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT expected_revision, title, display_name, status, default_turn_mode FROM project_patch_requests
-			WHERE project_id = ? AND request_id = ?`, id, input.RequestID).Scan(&revision, &title, &name, &status, &mode)
+		var maxRuns, maxTokens sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT expected_revision, title, display_name, status, default_turn_mode, max_model_runs, max_output_tokens FROM project_patch_requests
+			WHERE project_id = ? AND request_id = ?`, id, input.RequestID).Scan(&revision, &title, &name, &status, &mode, &maxRuns, &maxTokens)
 		if err != nil {
 			return Project{}, err
 		}
 		if revision != input.ExpectedRevision || title != input.Title.NullString || name != input.DisplayName.NullString ||
-			status != input.Status.NullString || mode != input.DefaultTurnMode.NullString {
+			status != input.Status.NullString || mode != input.DefaultTurnMode.NullString ||
+			maxRuns != input.MaxModelRuns.NullInt64 || maxTokens != input.MaxOutputTokens.NullInt64 {
 			return Project{}, errRequestConflict
 		}
-		return scanProject(tx.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE project_id = ?`, id))
+		project, err := scanProject(tx.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE project_id = ?`, id))
+		if err != nil {
+			return Project{}, err
+		}
+		project.ModelRunsUsed, err = projectModelRunsUsed(ctx, tx, id)
+		return project, err
 	}
 
 	project, err := scanProject(tx.QueryRowContext(ctx, `UPDATE projects
 		SET title = COALESCE(?, title), display_name = COALESCE(?, display_name), status = COALESCE(?, status),
-		default_turn_mode = COALESCE(?, default_turn_mode), revision = revision + 1
+		default_turn_mode = COALESCE(?, default_turn_mode),
+		max_model_runs = COALESCE(?, max_model_runs),
+		max_output_tokens = COALESCE(?, max_output_tokens),
+		revision = revision + 1
 		WHERE project_id = ? AND revision = ? RETURNING `+projectColumns,
-		input.Title, input.DisplayName, input.Status, input.DefaultTurnMode, id, input.ExpectedRevision))
+		input.Title, input.DisplayName, input.Status, input.DefaultTurnMode,
+		input.MaxModelRuns, input.MaxOutputTokens, id, input.ExpectedRevision))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, errProjectRevision
 	}
@@ -172,6 +284,10 @@ func (s *Store) patchProject(ctx context.Context, id string, input patchProjectI
 		if _, err := tx.ExecContext(ctx, `DELETE FROM engineering_previews WHERE project_id = ?`, id); err != nil {
 			return Project{}, err
 		}
+	}
+	project.ModelRunsUsed, err = projectModelRunsUsed(ctx, tx, id)
+	if err != nil {
+		return Project{}, err
 	}
 	return project, tx.Commit()
 }

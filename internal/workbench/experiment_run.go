@@ -61,6 +61,9 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 		}
 		model = model.ForModel(modelName, reasoningEffort)
 	}
+	if project.MaxOutputTokens > 0 {
+		model = model.WithMaxOutputTokens(project.MaxOutputTokens)
+	}
 	if sourceTurnID != "" {
 		source, err := s.taskTurnContext(ctx, projectID, sourceTurnID)
 		if err != nil {
