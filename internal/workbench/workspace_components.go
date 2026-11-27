@@ -1,12 +1,17 @@
 package workbench
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +20,8 @@ import (
 )
 
 const workspaceComponentCheckPath = "/api/v1/workspace-components/check"
+
+var componentVersionPattern = regexp.MustCompile(`(?i)\b(?:v)?\d+\.\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z._-]+)?\b`)
 
 type workspaceComponent struct {
 	ID      string `json:"id"`
@@ -28,7 +35,7 @@ type workspaceComponentReport struct {
 	Components []workspaceComponent `json:"components"`
 }
 
-func registerWorkspaceComponents(mux *http.ServeMux, assets fs.FS, python, font string) {
+func registerWorkspaceComponents(mux *http.ServeMux, assets fs.FS, python, font, latexBin, scriptPython string) {
 	var checks sync.Mutex
 	mux.HandleFunc("POST "+workspaceComponentCheckPath, func(w http.ResponseWriter, r *http.Request) {
 		if !checks.TryLock() {
@@ -42,12 +49,17 @@ func registerWorkspaceComponents(mux *http.ServeMux, assets fs.FS, python, font 
 		pdf := probePDFResources(ctx, assets)
 		word := probeWordExport(ctx, python)
 		softwarePDF := probeSoftwarePDF(ctx, font)
+		latex := probeLatexCompiler(ctx, latexBin)
+		script := probeScriptPython(ctx, scriptPython)
 		if r.Context().Err() != nil {
 			return
 		}
 		slog.Debug("workspace components checked", "elapsed_ms", time.Since(start).Milliseconds(),
-			"pdf_preview", pdf.Status, "word_export", word.Status, "software_pdf", softwarePDF.Status)
-		writeJSON(w, http.StatusOK, workspaceComponentReport{Components: []workspaceComponent{pdf, word, softwarePDF}})
+			"pdf_preview", pdf.Status, "word_export", word.Status, "software_pdf", softwarePDF.Status,
+			"latex_compiler", latex.Status, "script_python", script.Status)
+		writeJSON(w, http.StatusOK, workspaceComponentReport{
+			Components: []workspaceComponent{pdf, word, softwarePDF, latex, script},
+		})
 	})
 	mux.HandleFunc(workspaceComponentCheckPath, methodNotAllowed("POST"))
 }
@@ -155,5 +167,98 @@ func probeSoftwarePDF(ctx context.Context, font string) workspaceComponent {
 		result.Status, result.Message = "ready", "已用配置的字体生成一页中英文鉴别材料 PDF。"
 		result.Version = softwarePDFEngineVersion
 	}
+	return result
+}
+
+func probeExecutableVersion(ctx context.Context, bin string) (string, error) {
+	resolved, err := exec.LookPath(bin)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || info.IsDir() {
+		return "", errors.New("not an executable file")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, resolved, "--version")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return sanitizeComponentVersion(out.String(), bin), nil
+}
+
+func sanitizeComponentVersion(output, bin string) string {
+	firstLine := ""
+	for _, raw := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(raw)
+		if line != "" {
+			firstLine = line
+			break
+		}
+	}
+	if match := componentVersionPattern.FindString(firstLine); match != "" {
+		return match
+	}
+	base := filepath.Base(bin)
+	cleaned := strings.ReplaceAll(firstLine, bin, "")
+	if base != "" {
+		cleaned = strings.ReplaceAll(cleaned, base, "")
+	}
+	cleaned = strings.TrimSpace(cleaned)
+	if len(cleaned) > 48 {
+		cleaned = cleaned[:48]
+	}
+	return cleaned
+}
+
+func probeLatexCompiler(ctx context.Context, latexBin string) workspaceComponent {
+	result := workspaceComponent{
+		ID:      "latex.compiler",
+		Status:  "unconfigured",
+		Message: "请设置 RESEARCH_LATEX_BIN，指定本机 LaTeX 编译器（如 xelatex）。未配置时仍可导出 .tex 源码。",
+	}
+	if latexBin == "" {
+		return result
+	}
+	version, err := probeExecutableVersion(ctx, latexBin)
+	if err != nil {
+		result.Status = "unavailable"
+		result.Message = "无法运行配置的 LaTeX 编译器，请检查可执行文件路径与权限。"
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Message = "LaTeX 编译器版本检测超时，请检查配置。"
+		}
+		return result
+	}
+	result.Status = "ready"
+	result.Version = version
+	result.Message = "已检测到可用的 LaTeX 编译器，支持可选 PDF 编译诊断。"
+	return result
+}
+
+func probeScriptPython(ctx context.Context, scriptPython string) workspaceComponent {
+	result := workspaceComponent{
+		ID:      "script.python",
+		Status:  "unconfigured",
+		Message: "请设置 RESEARCH_SCRIPT_PYTHON，指定受限脚本运行器所用的 Python 解释器。",
+	}
+	if scriptPython == "" {
+		return result
+	}
+	version, err := probeExecutableVersion(ctx, scriptPython)
+	if err != nil {
+		result.Status = "unavailable"
+		result.Message = "无法运行配置的受限脚本 Python 解释器，请检查路径与权限。"
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Message = "受限脚本 Python 解释器检测超时，请检查配置。"
+		}
+		return result
+	}
+	result.Status = "ready"
+	result.Version = version
+	result.Message = "已检测到可用的受限脚本 Python 解释器。"
 	return result
 }

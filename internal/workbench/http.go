@@ -42,6 +42,8 @@ type HandlerConfig struct {
 	ImageModelQuality           string
 	WordPython                  string
 	SoftwarePDFFont             string
+	LatexBin                    string
+	ScriptPython                string
 	literature                  literatureSource
 }
 
@@ -88,6 +90,8 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerNotifications(mux)
 	wordPython := strings.TrimSpace(config.WordPython)
 	softwarePDFFont := strings.TrimSpace(config.SoftwarePDFFont)
+	latexBin := strings.TrimSpace(config.LatexBin)
+	scriptPython := strings.TrimSpace(config.ScriptPython)
 	workflows{store: store, model: config.Model, models: flowModels,
 		softwarePDFFont: softwarePDFFont, wordPython: wordPython}.register(mux)
 	store.registerMaterials(mux)
@@ -102,8 +106,10 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux.HandleFunc("/api/v1/workspace-storage", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("POST /api/v1/workspace-cache/clear", store.handleWorkspaceCacheClear)
 	mux.HandleFunc("/api/v1/workspace-cache/clear", methodNotAllowed("POST"))
-	registerWorkspaceComponents(mux, webFS, wordPython, softwarePDFFont)
+	registerWorkspaceComponents(mux, webFS, wordPython, softwarePDFFont, latexBin, scriptPython)
 	store.registerWord(mux, wordPython)
+	store.registerLatex(mux, latexBin)
+	store.registerPaperCheck(mux)
 	store.registerSurveys(mux)
 	store.registerQuestionnaires(mux)
 	store.registerEngineeringPreview(mux)

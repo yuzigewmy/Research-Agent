@@ -21,6 +21,8 @@ func TestWorkspaceComponentsReportConfigurationAndReadiness(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
+	expectedIDs := []string{"pdf.preview", "docx.export", "pdf.software.export", "latex.compiler", "script.python"}
+
 	check := func(assets fs.FS, config HandlerConfig) []workspaceComponent {
 		t.Helper()
 		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1"+workspaceComponentCheckPath, nil)
@@ -29,15 +31,16 @@ func TestWorkspaceComponentsReportConfigurationAndReadiness(t *testing.T) {
 		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("component check returned %d: %s", response.Code, response.Body)
 		}
-		if (config.WordPython != "" && strings.Contains(response.Body.String(), filepath.Base(config.WordPython))) ||
-			(config.SoftwarePDFFont != "" && strings.Contains(response.Body.String(), filepath.Base(config.SoftwarePDFFont))) {
-			t.Fatal("component check exposed a deployment path")
+		for _, pathValue := range []string{config.WordPython, config.SoftwarePDFFont, config.LatexBin, config.ScriptPython} {
+			if pathValue != "" && strings.Contains(response.Body.String(), filepath.Base(pathValue)) {
+				t.Fatalf("component check exposed a deployment path %q: %s", filepath.Base(pathValue), response.Body)
+			}
 		}
 		var result workspaceComponentReport
-		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Components) != 3 {
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Components) != len(expectedIDs) {
 			t.Fatalf("component response = %+v (%v)", result, err)
 		}
-		for index, id := range []string{"pdf.preview", "docx.export", "pdf.software.export"} {
+		for index, id := range expectedIDs {
 			if component := result.Components[index]; component.ID != id || component.Message == "" {
 				t.Fatalf("unexpected component record: %+v", component)
 			}
@@ -52,7 +55,7 @@ func TestWorkspaceComponentsReportConfigurationAndReadiness(t *testing.T) {
 		}
 		return values
 	}
-	if got := statuses(check(nil, HandlerConfig{})); !slices.Equal(got, []string{"unavailable", "unconfigured", "unconfigured"}) {
+	if got := statuses(check(nil, HandlerConfig{})); !slices.Equal(got, []string{"unavailable", "unconfigured", "unconfigured", "unconfigured", "unconfigured"}) {
 		t.Fatalf("unconfigured component states: %v", got)
 	}
 
@@ -69,8 +72,10 @@ func TestWorkspaceComponentsReportConfigurationAndReadiness(t *testing.T) {
 	missing := check(assets, HandlerConfig{
 		WordPython:      filepath.Join(missingDirectory, "missing-interpreter.exe"),
 		SoftwarePDFFont: filepath.Join(missingDirectory, "missing-font.ttf"),
+		LatexBin:        filepath.Join(missingDirectory, "missing-xelatex.exe"),
+		ScriptPython:    filepath.Join(missingDirectory, "missing-script-python.exe"),
 	})
-	if got := statuses(missing); !slices.Equal(got, []string{"ready", "unavailable", "unavailable"}) {
+	if got := statuses(missing); !slices.Equal(got, []string{"ready", "unavailable", "unavailable", "unavailable", "unavailable"}) {
 		t.Fatalf("missing component states: %v", got)
 	}
 	var pdfBytes int64
@@ -82,6 +87,25 @@ func TestWorkspaceComponentsReportConfigurationAndReadiness(t *testing.T) {
 	if missing[0].Version != "6.0.0" || missing[0].Bytes != pdfBytes {
 		t.Fatalf("PDF resource report did not match the files: %+v", missing[0])
 	}
+
+	t.Run("available latex and script python stubs", func(t *testing.T) {
+		latexStub := createLatexStubScript(t, "secret-tex-engine",
+			"echo XeTeX 3.141592653-2.6",
+			"echo 'XeTeX 3.141592653-2.6'",
+		)
+		pythonStub := createLatexStubScript(t, "secret-script-py",
+			"echo Python 3.12.4",
+			"echo 'Python 3.12.4'",
+		)
+		got := check(assets, HandlerConfig{LatexBin: latexStub, ScriptPython: pythonStub})
+		if got[3].Status != "ready" || got[3].Version != "3.141592653-2.6" {
+			t.Fatalf("unexpected latex compiler component: %+v", got[3])
+		}
+		if got[4].Status != "ready" || got[4].Version != "3.12.4" {
+			t.Fatalf("unexpected script python component: %+v", got[4])
+		}
+	})
+
 	t.Run("missing PDF resource", func(t *testing.T) {
 		const requiredFile = "pdf-resources/wasm/openjpeg.wasm"
 		file := assets[requiredFile]
@@ -98,7 +122,7 @@ func TestWorkspaceComponentsReportConfigurationAndReadiness(t *testing.T) {
 			t.Skip("configure the installed Word and PDF test components")
 		}
 		ready := check(assets, HandlerConfig{WordPython: python, SoftwarePDFFont: font})
-		if got := statuses(ready); !slices.Equal(got, []string{"ready", "ready", "ready"}) {
+		if got := statuses(ready[:3]); !slices.Equal(got, []string{"ready", "ready", "ready"}) {
 			t.Fatalf("installed components were not usable: %+v", ready)
 		}
 		if ready[1].Version == "" || ready[2].Bytes <= 0 {
