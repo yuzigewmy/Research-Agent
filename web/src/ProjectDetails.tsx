@@ -10,6 +10,7 @@ import { ProjectAdministration } from './ProjectAdministration'
 import { ProjectArtifacts } from './ProjectArtifacts'
 import { ProjectTaskQueue } from './ProjectTaskQueue'
 import { QuestionnairePanel } from './QuestionnairePanel'
+import { RestrictedScriptPanel } from './RestrictedScriptPanel'
 import { ReviewNoticeDetail } from './ReviewNoticeDetail'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
@@ -247,6 +248,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
             current?.openId === openId ? undefined : current)}
           onManuscriptSaved={addWorkspacePath} bundleSelection={bundleSelection} />}
       <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} onReportSaved={addWorkspacePath} />
+      <RestrictedScriptPanel projectId={project.projectId} onArtifactPublished={addWorkspacePath} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
         onManuscriptSelection={addManuscriptSelection} pdfReferences={references.filter(isPDFEvidenceReference)}
