@@ -455,3 +455,156 @@ func TestTemplatesExpansionProjectBudgetAndMigrationV66(t *testing.T) {
 		t.Fatalf("restored v66 project lost technical limits or usage: %+v (%v)", got, err)
 	}
 }
+
+func TestTemplatesExpansionRemainingFiveTemplates(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	model, _ := startFixtureModelServer(t, func(call int, body []byte) (int, string) {
+		return http.StatusOK, "# 专项模板稿件\n\n## 摘要\n\n固定测试摘要内容。\n\n## 引言\n\n研究背景与问题界定。\n\n## 方法或证据\n\n研究方法、数据与实验验证。\n\n## 结论\n\n主要发现与结论。\n\n## 局限\n\n适用边界与改进方向。\n\n## AI 使用披露\n\n仅用于辅助润色与结构核对。\n"
+	})
+	handler := NewHandler(store, nil, HandlerConfig{Model: model})
+
+	reqJSON := func(method, path, body string, wantStatus int, out any) {
+		t.Helper()
+		req := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != wantStatus {
+			t.Fatalf("%s %s: got %d want %d: %s", method, path, res.Code, wantStatus, res.Body)
+		}
+		if out != nil {
+			if err := json.Unmarshal(res.Body.Bytes(), out); err != nil {
+				t.Fatalf("%s %s: decode JSON: %v", method, path, err)
+			}
+		}
+	}
+
+	waitStatus := func(projectID, want string) WorkflowRun {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			var snap struct {
+				Run *WorkflowRun `json:"run"`
+			}
+			reqJSON(http.MethodGet, projectsPath+"/"+projectID+"/workflow", "", http.StatusOK, &snap)
+			if snap.Run != nil && snap.Run.Status == want {
+				return *snap.Run
+			}
+			if snap.Run != nil && (snap.Run.Status == taskFailed || snap.Run.Status == taskCancelled) && want != snap.Run.Status {
+				t.Fatalf("workflow %s entered unexpected status %s: %+v", projectID, snap.Run.Status, snap.Run)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for workflow %s status %s", projectID, want)
+		return WorkflowRun{}
+	}
+
+	cases := []struct {
+		templateID    string
+		title         string
+		steps         []string
+		checkpointKey string
+		checkHeading  string
+	}{
+		{
+			templateID:    "chinese_paper",
+			title:         "中文期刊论文实证研究",
+			steps:         []string{"scope", "outline", "manuscript", "check"},
+			checkpointKey: "outline",
+			checkHeading:  "中文论文结构要点",
+		},
+		{
+			templateID:    "humanities_paper",
+			title:         "明清江南市镇治理文献考辨",
+			steps:         []string{"context", "outline", "manuscript", "check"},
+			checkpointKey: "outline",
+			checkHeading:  "人文社科论文核对要点",
+		},
+		{
+			templateID:    "thesis",
+			title:         "分布式时序预测模型硕士学位论文",
+			steps:         []string{"spec", "outline", "manuscript", "check"},
+			checkpointKey: "outline",
+			checkHeading:  "学位论文交付要点",
+		},
+		{
+			templateID:    "existing_materials",
+			title:         "已有实验记录整合成稿",
+			steps:         []string{"inventory", "plan", "manuscript", "check"},
+			checkpointKey: "plan",
+			checkHeading:  "已有材料成稿核对要点",
+		},
+		{
+			templateID:    "big_data_contest",
+			title:         "用户复购预测大数据竞赛",
+			steps:         []string{"eda", "baseline", "iteration", "manuscript"},
+			checkpointKey: "baseline",
+			checkHeading:  "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.templateID, func(t *testing.T) {
+			var project Project
+			reqJSON(http.MethodPost, projectsPath,
+				fmt.Sprintf(`{"requestId":"create-%s","title":%q,"templateId":%q}`, tc.templateID, tc.title, tc.templateID),
+				http.StatusCreated, &project)
+
+			var started WorkflowRun
+			reqJSON(http.MethodPost, projectsPath+"/"+project.ProjectID+"/workflow",
+				fmt.Sprintf(`{"requestId":"start-%s","checkpoints":true}`, tc.templateID),
+				http.StatusCreated, &started)
+
+			waiting := waitStatus(project.ProjectID, workflowWaiting)
+			if len(waiting.Steps) != len(tc.steps) {
+				t.Fatalf("%s: expected %d steps, got %d", tc.templateID, len(tc.steps), len(waiting.Steps))
+			}
+			var gotKeys []string
+			for _, step := range waiting.Steps {
+				gotKeys = append(gotKeys, step.Key)
+			}
+			if !slices.Equal(gotKeys, tc.steps) {
+				t.Fatalf("%s: step keys got %v, want %v", tc.templateID, gotKeys, tc.steps)
+			}
+			if waiting.Steps[1].Key != tc.checkpointKey || waiting.Steps[1].Status != taskSucceeded {
+				t.Fatalf("%s: expected checkpoint step %q succeeded before pause, got %+v", tc.templateID, tc.checkpointKey, waiting.Steps[1])
+			}
+
+			reqJSON(http.MethodPost, projectsPath+"/"+project.ProjectID+"/workflow/continue",
+				fmt.Sprintf(`{"requestId":"cont-%s","runId":%q,"expectedRevision":%d}`, tc.templateID, waiting.RunID, waiting.Revision),
+				http.StatusAccepted, &started)
+
+			done := waitStatus(project.ProjectID, workflowDone)
+			for _, step := range done.Steps {
+				if step.Status != taskSucceeded {
+					t.Fatalf("%s: step %s status got %s, want SUCCEEDED", tc.templateID, step.Key, step.Status)
+				}
+			}
+
+			if tc.checkHeading != "" {
+				_, checkReport, err := store.workflowArtifact(t.Context(), project.ProjectID, done.RunID, "check")
+				if err != nil {
+					t.Fatalf("%s: read check artifact: %v", tc.templateID, err)
+				}
+				if !strings.Contains(checkReport, tc.checkHeading) || !strings.Contains(checkReport, "稿件 SHA-256") {
+					t.Fatalf("%s: unexpected check report: %s", tc.templateID, checkReport)
+				}
+			}
+
+			var savedFile WorkspaceFile
+			reqJSON(http.MethodPost, projectsPath+"/"+project.ProjectID+"/workflow/"+done.RunID+"/manuscript",
+				"", http.StatusOK, &savedFile)
+			doc, err := store.readWorkspaceDocument(savedFile)
+			if err != nil || !strings.Contains(doc.Content, "# 专项模板稿件") || !strings.Contains(doc.Content, "## 结论") {
+				t.Fatalf("%s: saved manuscript mismatch: err=%v content=%q", tc.templateID, err, doc.Content)
+			}
+		})
+	}
+}

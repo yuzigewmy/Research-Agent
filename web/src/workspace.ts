@@ -17,9 +17,14 @@ export interface FilePage {
   nextCursor?: string
 }
 
+export interface EngineeringPreviewAsset extends FileRecord {
+  relativePath: string
+}
+
 export interface EngineeringPreviewRecord {
   previewId: string
   file: FileRecord
+  assets?: EngineeringPreviewAsset[]
 }
 
 interface EngineeringPreviewSnapshot {
@@ -83,10 +88,17 @@ function engineeringPreviewInstancePath(projectId: string, previewId: string) {
   return `${engineeringPreviewPath(projectId)}/${encodeURIComponent(previewId)}`
 }
 
+function isEngineeringPreviewAsset(value: unknown): value is EngineeringPreviewAsset {
+  if (!isFileRecord(value)) return false
+  const asset = value as Partial<EngineeringPreviewAsset>
+  return typeof asset.relativePath === 'string' && asset.relativePath.length > 0
+}
+
 function isEngineeringPreviewSnapshot(value: unknown): value is EngineeringPreviewSnapshot {
   const preview = (value as Partial<EngineeringPreviewSnapshot> | null)?.preview
   return preview === null || (!!preview && isPathId(preview.previewId)
-    && isFileRecord(preview.file) && /\.html?$/i.test(preview.file.path))
+    && isFileRecord(preview.file) && /\.html?$/i.test(preview.file.path)
+    && (preview.assets === undefined || (Array.isArray(preview.assets) && preview.assets.every(isEngineeringPreviewAsset))))
 }
 
 export async function getEngineeringPreview(projectId: string, signal: AbortSignal) {

@@ -141,3 +141,149 @@ func TestEngineeringPreviewPinsVersionAndInvalidatesOldDocuments(t *testing.T) {
 	request(http.MethodGet, currentPath+"/document", nil, http.StatusNotFound, nil)
 	assertInactive(http.MethodGet, base)
 }
+
+func TestEngineeringPreviewMultiFileAssetsIsolationAndInvalidation(t *testing.T) {
+	dataDir := t.TempDir()
+	openStore := func() (*Store, http.Handler) {
+		store, err := Open(dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store, NewHandler(store, nil, HandlerConfig{})
+	}
+	store, handler := openStore()
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
+
+	req := func(h http.Handler, method, path string, input any, status int, output any) *httptest.ResponseRecorder {
+		t.Helper()
+		var body bytes.Buffer
+		if input != nil {
+			if err := json.NewEncoder(&body).Encode(input); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := httptest.NewRequestWithContext(t.Context(), method, "http://127.0.0.1:8080"+path, &body)
+		if input != nil {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, r)
+		if res.Code != status {
+			t.Fatalf("%s %s: got HTTP %d, want %d: %s", method, path, res.Code, status, res.Body)
+		}
+		if output != nil {
+			if err := json.Unmarshal(res.Body.Bytes(), output); err != nil {
+				t.Fatalf("decode %s: %v", res.Body, err)
+			}
+		}
+		return res
+	}
+
+	var project Project
+	req(handler, http.MethodPost, projectsPath, createProjectInput{
+		RequestID:  "multifile-eng",
+		Title:      "多文件静态工程",
+		TemplateID: "engineering_project",
+	}, http.StatusCreated, &project)
+	projectBase := projectsPath + "/" + project.ProjectID
+	previewBase := projectBase + "/preview"
+
+	save := func(filePath, baseHash, content string) WorkspaceDocument {
+		t.Helper()
+		var doc WorkspaceDocument
+		req(handler, http.MethodPut, projectBase+"/files/text", map[string]string{
+			"path": filePath, "baseSha256": baseHash, "content": content,
+		}, http.StatusOK, &doc)
+		return doc
+	}
+
+	entryHTML := save("app/index.html", "", `<!doctype html><html><head><link rel="stylesheet" href="./style.css"></head><body><h1 id="title">初版</h1><script src="./app.js"></script></body></html>`)
+	styleV1 := save("app/style.css", "", `body { color: rgb(220, 38, 38); }`)
+	scriptV1 := save("app/app.js", "", `document.getElementById('title').textContent = '脚本已执行-V1';`)
+	iconV1 := save("app/assets/logo.svg", "", `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>`)
+	dataV1 := save("app/config.json", "", `{"version":"v1"}`)
+	noteV1 := save("app/readme.txt", "", `hello v1`)
+	// Files that must NOT be exposed by app/index.html preview:
+	save("other/secret.txt", "", `sibling directory secret`)
+	save("app/notes.md", "", `# unsupported markdown`)
+
+	var started engineeringPreviewSnapshot
+	req(handler, http.MethodPost, previewBase, map[string]string{"versionId": entryHTML.VersionID}, http.StatusCreated, &started)
+	if started.Preview == nil || len(started.Preview.Assets) != 5 {
+		t.Fatalf("expected 5 frozen assets, got %+v", started.Preview)
+	}
+	previewPath := previewBase + "/" + started.Preview.PreviewID
+
+	// Verify document headers include nosniff and scoped CSP allowing this preview prefix
+	docRes := req(handler, http.MethodGet, previewPath+"/document", nil, http.StatusOK, nil)
+	if docRes.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("missing nosniff on preview document: %v", docRes.Header())
+	}
+	wantPrefix := "http://127.0.0.1:8080" + previewPath + "/"
+	if !strings.Contains(docRes.Header().Get("Content-Security-Policy"), wantPrefix) {
+		t.Fatalf("expected CSP to allow scoped preview prefix %q, got %q", wantPrefix, docRes.Header().Get("Content-Security-Policy"))
+	}
+
+	assertAsset := func(h http.Handler, rel, wantCT, wantBody, wantSHA string) {
+		t.Helper()
+		res := req(h, http.MethodGet, previewPath+"/"+rel, nil, http.StatusOK, nil)
+		if res.Header().Get("Content-Type") != wantCT ||
+			res.Header().Get("X-Content-Type-Options") != "nosniff" ||
+			res.Header().Get("X-Source-SHA256") != wantSHA ||
+			res.Body.String() != wantBody {
+			t.Fatalf("unexpected asset %s: ct=%q nosniff=%q sha=%q body=%q",
+				rel, res.Header().Get("Content-Type"), res.Header().Get("X-Content-Type-Options"), res.Header().Get("X-Source-SHA256"), res.Body.String())
+		}
+	}
+
+	assertAsset(handler, "style.css", "text/css; charset=utf-8", styleV1.Content, styleV1.SHA256)
+	assertAsset(handler, "app.js", "application/javascript; charset=utf-8", scriptV1.Content, scriptV1.SHA256)
+	assertAsset(handler, "assets/logo.svg", "image/svg+xml", iconV1.Content, iconV1.SHA256)
+	assertAsset(handler, "config.json", "application/json; charset=utf-8", dataV1.Content, dataV1.SHA256)
+	assertAsset(handler, "readme.txt", "text/plain; charset=utf-8", noteV1.Content, noteV1.SHA256)
+
+	// Unsupported extension and path traversal must be blocked
+	req(handler, http.MethodGet, previewPath+"/notes.md", nil, http.StatusNotFound, nil)
+	req(handler, http.MethodGet, previewPath+"/%2e%2e/other/secret.txt", nil, http.StatusBadRequest, nil)
+
+	// Editing CSS/JS and adding a new file after starting preview must NOT mutate the frozen snapshot
+	save("app/style.css", styleV1.SHA256, `body { color: rgb(0, 128, 0); }`)
+	save("app/app.js", scriptV1.SHA256, `document.getElementById('title').textContent = '脚本已执行-V2';`)
+	save("app/later.js", "", `console.log('after freeze')`)
+	assertAsset(handler, "style.css", "text/css; charset=utf-8", styleV1.Content, styleV1.SHA256)
+	assertAsset(handler, "app.js", "application/javascript; charset=utf-8", scriptV1.Content, scriptV1.SHA256)
+	req(handler, http.MethodGet, previewPath+"/later.js", nil, http.StatusNotFound, nil)
+
+	// Reopening the database preserves the frozen multi-file snapshot
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, handler = openStore()
+	assertAsset(handler, "style.css", "text/css; charset=utf-8", styleV1.Content, styleV1.SHA256)
+	assertAsset(handler, "app.js", "application/javascript; charset=utf-8", scriptV1.Content, scriptV1.SHA256)
+	req(handler, http.MethodGet, previewPath+"/later.js", nil, http.StatusNotFound, nil)
+
+	// Stopping preview immediately invalidates document and all assets
+	req(handler, http.MethodDelete, previewPath, nil, http.StatusOK, nil)
+	req(handler, http.MethodGet, previewPath+"/document", nil, http.StatusNotFound, nil)
+	req(handler, http.MethodGet, previewPath+"/style.css", nil, http.StatusNotFound, nil)
+	req(handler, http.MethodGet, previewPath+"/app.js", nil, http.StatusNotFound, nil)
+
+	// Starting a new preview freezes the updated assets, and archiving the project invalidates them immediately
+	entryV2 := save("app/index.html", entryHTML.SHA256, `<!doctype html><html><head><link rel="stylesheet" href="./style.css"></head><body><h1 id="title">新版</h1><script src="./app.js"></script></body></html>`)
+	var restarted engineeringPreviewSnapshot
+	req(handler, http.MethodPost, previewBase, map[string]string{"versionId": entryV2.VersionID}, http.StatusCreated, &restarted)
+	newPath := previewBase + "/" + restarted.Preview.PreviewID
+	req(handler, http.MethodGet, newPath+"/later.js", nil, http.StatusOK, nil)
+
+	req(handler, http.MethodPatch, projectBase, map[string]any{
+		"requestId": "archive-eng", "expectedRevision": project.Revision, "status": "ARCHIVED",
+	}, http.StatusOK, nil)
+	req(handler, http.MethodGet, newPath+"/document", nil, http.StatusNotFound, nil)
+	req(handler, http.MethodGet, newPath+"/style.css", nil, http.StatusNotFound, nil)
+	req(handler, http.MethodGet, newPath+"/app.js", nil, http.StatusNotFound, nil)
+}

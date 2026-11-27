@@ -16,24 +16,42 @@ type ReliabilityOptions struct {
 	Columns []string `json:"columns"`
 }
 
+// WeightedReliability reports weighted Cronbach alpha over complete numeric
+// responses with valid positive weights.
+type WeightedReliability struct {
+	Included      int      `json:"included"`
+	WeightSum     float64  `json:"weightSum"`
+	MissingWeight int      `json:"missingWeight"`
+	InvalidWeight int      `json:"invalidWeight"`
+	Alpha         *float64 `json:"alpha,omitempty"`
+}
+
 // Reliability reports raw Cronbach alpha from complete numeric responses among
 // valid rows. Missing takes precedence over NonNumeric. Alpha is omitted if
 // fewer than two responses are included or the coefficient cannot be computed.
 type Reliability struct {
-	Columns    []string `json:"columns"`
-	Included   int      `json:"included"`
-	Missing    int      `json:"missing"`
-	NonNumeric int      `json:"nonNumeric"`
-	Alpha      *float64 `json:"alpha,omitempty"`
+	Columns    []string             `json:"columns"`
+	Included   int                  `json:"included"`
+	Missing    int                  `json:"missing"`
+	NonNumeric int                  `json:"nonNumeric"`
+	Alpha      *float64             `json:"alpha,omitempty"`
+	Weighted   *WeightedReliability `json:"weighted,omitempty"`
 }
 
 type reliabilityAccumulator struct {
 	Reliability
-	indices []int
-	scores  []float64
+	indices          []int
+	scores           []float64
+	weightedEnabled  bool
+	weightedScores   []float64
+	weightedWeights  []float64
+	weightedUnits    uint64
+	weightedIncluded int
+	missingWeight    int
+	invalidWeight    int
 }
 
-func newReliability(options ReliabilityOptions, header []string, byName map[string]int) (*reliabilityAccumulator, error) {
+func newReliability(options ReliabilityOptions, header []string, byName map[string]int, weighted bool) (*reliabilityAccumulator, error) {
 	if len(options.Columns) < 2 || len(options.Columns) > maxReliabilityColumns {
 		return nil, errReliabilityColumns
 	}
@@ -48,10 +66,14 @@ func newReliability(options ReliabilityOptions, header []string, byName map[stri
 			return nil, errReliabilityColumns
 		}
 	}
-	return &reliabilityAccumulator{Reliability: Reliability{Columns: columns}, indices: indices}, nil
+	return &reliabilityAccumulator{
+		Reliability:     Reliability{Columns: columns},
+		indices:         indices,
+		weightedEnabled: weighted,
+	}, nil
 }
 
-func (a *reliabilityAccumulator) add(record []string) {
+func (a *reliabilityAccumulator) add(record []string, weight uint64, wStatus weightStatus) {
 	for _, index := range a.indices {
 		if fieldAt(record, index) == "" {
 			a.Missing++
@@ -67,11 +89,28 @@ func (a *reliabilityAccumulator) add(record []string) {
 		}
 		scores[i] = value
 	}
-	a.scores = append(a.scores, scores[:len(a.indices)]...)
+	itemSlice := scores[:len(a.indices)]
+	a.scores = append(a.scores, itemSlice...)
 	a.Included++
+	if a.weightedEnabled {
+		switch wStatus {
+		case weightValid:
+			a.weightedScores = append(a.weightedScores, itemSlice...)
+			a.weightedWeights = append(a.weightedWeights, weightUnitsToFloat(weight))
+			a.weightedUnits += weight
+			a.weightedIncluded++
+		case weightMissing:
+			a.missingWeight++
+		case weightInvalid:
+			a.invalidWeight++
+		}
+	}
 }
 
 func (a *reliabilityAccumulator) finish() *Reliability {
+	if a.weightedEnabled && a.weightedIncluded >= 2 {
+		a.Weighted = a.finishWeighted()
+	}
 	if a.Included < 2 {
 		return &a.Reliability
 	}
@@ -123,6 +162,85 @@ func (a *reliabilityAccumulator) finish() *Reliability {
 		a.Alpha = &alpha
 	}
 	return &a.Reliability
+}
+
+func (a *reliabilityAccumulator) finishWeighted() *WeightedReliability {
+	res := &WeightedReliability{
+		Included:      a.weightedIncluded,
+		WeightSum:     weightUnitsToFloat(a.weightedUnits),
+		MissingWeight: a.missingWeight,
+		InvalidWeight: a.invalidWeight,
+	}
+	if a.weightedIncluded < 2 || res.WeightSum <= 0 {
+		return res
+	}
+	itemCount := len(a.indices)
+	baseline := a.weightedScores[:itemCount]
+	var largestDifference float64
+	for i, value := range a.weightedScores[itemCount:] {
+		largestDifference = max(largestDifference, math.Abs(value-baseline[i%itemCount]))
+	}
+	if largestDifference == 0 {
+		return res
+	}
+	_, exponent := math.Frexp(largestDifference)
+	if math.IsInf(largestDifference, 1) {
+		exponent = 1024
+	}
+	n := a.weightedIncluded
+	scaledVals := make([]float64, n*itemCount)
+	rowTotals := make([]float64, n)
+	meanItems := make([]float64, itemCount)
+	var meanTotal, wSum float64
+	for row := range n {
+		w := a.weightedWeights[row]
+		wSum += w
+		offset := row * itemCount
+		var rowTotal, correction float64
+		for j := range itemCount {
+			value := a.weightedScores[offset+j]
+			var scaled float64
+			if value != baseline[j] {
+				var subErr, addErr float64
+				scaled, subErr = sumAndRoundoff(math.Ldexp(value, -exponent), -math.Ldexp(baseline[j], -exponent))
+				rowTotal, addErr = sumAndRoundoff(rowTotal, scaled)
+				correction += subErr + addErr
+			}
+			scaledVals[offset+j] = scaled
+			meanItems[j] += w * scaled
+		}
+		rt := rowTotal + correction
+		rowTotals[row] = rt
+		meanTotal += w * rt
+	}
+	if wSum <= 0 {
+		return res
+	}
+	for j := range itemCount {
+		meanItems[j] /= wSum
+	}
+	meanTotal /= wSum
+
+	var itemWeightedSS, totalWeightedSS float64
+	for row := range n {
+		w := a.weightedWeights[row]
+		offset := row * itemCount
+		for j := range itemCount {
+			d := scaledVals[offset+j] - meanItems[j]
+			itemWeightedSS += w * d * d
+		}
+		dt := rowTotals[row] - meanTotal
+		totalWeightedSS += w * dt * dt
+	}
+	if totalWeightedSS <= 0 {
+		return res
+	}
+	k := float64(itemCount)
+	alpha := k / (k - 1) * (1 - itemWeightedSS/totalWeightedSS)
+	if !math.IsNaN(alpha) && !math.IsInf(alpha, 0) {
+		res.Alpha = &alpha
+	}
+	return res
 }
 
 // sumAndRoundoff returns a rounded sum and its lost low bits (TwoSum).

@@ -37,6 +37,9 @@ function fieldsUsedBy({ options, report }: SurveyRun) {
   if (options.cfa) {
     for (const construct of options.cfa.constructs) add(`CFA（${construct.name}）`, construct.columns)
   }
+  if (options.sem) {
+    for (const construct of options.sem.constructs) add(`SEM（${construct.name}）`, construct.columns)
+  }
   add('分类编码', options.categoryMappings?.map(({ column }) => column))
   return [...fields]
 }

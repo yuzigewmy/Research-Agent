@@ -38,6 +38,7 @@ export const factorAnalysisColumnLimit = 20
 export const conjointAttributeLimit = 6
 export const cfaConstructLimit = 6
 export const cfaItemLimit = 10
+export const semPathLimit = 10
 
 export interface SurveyMultipleRegressionOptions {
   outcomeColumn: string
@@ -61,12 +62,22 @@ export interface SurveyMultipleRegressionFit {
   dfResidual: number
 }
 
+export interface SurveyWeightedMultipleRegression {
+  included: number
+  weightSum: number
+  missingWeight: number
+  invalidWeight: number
+  fit?: SurveyMultipleRegressionFit
+  unavailableReason?: string
+}
+
 export interface SurveyMultipleRegression extends SurveyMultipleRegressionOptions {
   included: number
   missing: number
   nonNumeric: number
   fit?: SurveyMultipleRegressionFit
   unavailableReason?: string
+  weighted?: SurveyWeightedMultipleRegression
 }
 
 export interface SurveyFactorAnalysisOptions {
@@ -245,8 +256,58 @@ export interface SurveyCFA extends SurveyCFAOptions {
   unavailableReason?: string
 }
 
+export interface SurveySEMPathOptions {
+  from: string
+  to: string
+}
+
+export interface SurveySEMOptions {
+  constructs: SurveyCFAConstructOptions[]
+  paths: SurveySEMPathOptions[]
+}
+
+export interface SurveySEMPathResult {
+  from: string
+  to: string
+  beta: number
+  stdError: number
+  tStat?: number
+}
+
+export interface SurveySEMEndogenousResult {
+  construct: string
+  predictors: string[]
+  included: number
+  rSquared?: number
+  adjustedRSquared?: number
+}
+
+export interface SurveySEMResult {
+  constructs: SurveyCFAConstructResult[]
+  paths: SurveySEMPathResult[]
+  endogenous: SurveySEMEndogenousResult[]
+  correlationMatrix: number[][]
+  discriminantValid: boolean
+}
+
+export interface SurveySEM extends SurveySEMOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  result?: SurveySEMResult
+  unavailableReason?: string
+}
+
 export interface SurveyReliabilityOptions {
   columns: string[]
+}
+
+export interface SurveyWeightedReliability {
+  included: number
+  weightSum: number
+  missingWeight: number
+  invalidWeight: number
+  alpha?: number
 }
 
 export interface SurveyReliability extends SurveyReliabilityOptions {
@@ -254,6 +315,7 @@ export interface SurveyReliability extends SurveyReliabilityOptions {
   missing: number
   nonNumeric: number
   alpha?: number
+  weighted?: SurveyWeightedReliability
 }
 
 export interface SurveyRegressionOptions {
@@ -263,10 +325,21 @@ export interface SurveyRegressionOptions {
 
 export type SurveyRegressionUnavailableReason = 'INSUFFICIENT_ROWS' | 'CONSTANT_PREDICTOR' | 'OUT_OF_RANGE'
 
+export type SurveyWeightedRegression = {
+  included: number
+  weightSum: number
+  missingWeight: number
+  invalidWeight: number
+} & (
+  | { fit: { intercept: number; slope: number; rSquared?: number }; unavailableReason?: never }
+  | { fit?: never; unavailableReason: SurveyRegressionUnavailableReason }
+)
+
 export type SurveyRegression = SurveyRegressionOptions & {
   included: number
   missing: number
   nonNumeric: number
+  weighted?: SurveyWeightedRegression
 } & (
   | { fit: { intercept: number; slope: number; rSquared?: number }; unavailableReason?: never }
   | { fit?: never; unavailableReason: SurveyRegressionUnavailableReason }
@@ -394,6 +467,7 @@ export interface SurveyOptions {
   psm?: SurveyPSMOptions
   conjoint?: SurveyConjointOptions
   cfa?: SurveyCFAOptions
+  sem?: SurveySEMOptions
   weightColumn?: string
   planId?: string
 }
@@ -468,6 +542,7 @@ export interface SurveyReport extends SurveyCounts {
   psm?: SurveyPSM
   conjoint?: SurveyConjoint
   cfa?: SurveyCFA
+  sem?: SurveySEM
   weighting?: SurveyWeighting
   planSource?: SurveyAnalysisPlanSource
 }
@@ -598,6 +673,14 @@ function isCFAOptions(value: unknown): value is SurveyCFAOptions {
       && isStringList(c.columns) && c.columns.length >= 2 && c.columns.length <= cfaItemLimit)
 }
 
+function isSEMOptions(value: unknown): value is SurveySEMOptions {
+  if (!isCFAOptions(value)) return false
+  const opts = value as Partial<SurveySEMOptions>
+  return Array.isArray(opts.paths) && opts.paths.length >= 1 && opts.paths.length <= semPathLimit
+    && opts.paths.every((p) => !!p && typeof p.from === 'string' && p.from.trim().length > 0
+      && typeof p.to === 'string' && p.to.trim().length > 0)
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
@@ -616,6 +699,7 @@ function isOptions(value: unknown): value is SurveyOptions {
     && (options.psm === undefined || isPSMOptions(options.psm))
     && (options.conjoint === undefined || isConjointOptions(options.conjoint))
     && (options.cfa === undefined || isCFAOptions(options.cfa))
+    && (options.sem === undefined || isSEMOptions(options.sem))
     && (options.weightColumn === undefined || (typeof options.weightColumn === 'string' && options.weightColumn.trim().length > 0))
     && (options.planId === undefined || isId(options.planId))
 }
@@ -677,17 +761,22 @@ function isWeightedCrossTab(value: SurveyWeightedCrossTab, included: number, row
     && value.weights.every((row) => isWeightList(row, columns))
 }
 
-function isReliability(value: unknown, valid: number): value is SurveyReliability {
-  if (!isReliabilityOptions(value)) return false
-  const { included, missing, nonNumeric, alpha } = value as Partial<SurveyReliability>
-  return isCount(included) && isCount(missing) && isCount(nonNumeric) && included + missing + nonNumeric === valid
-    && (alpha === undefined || (included >= 2 && Number.isFinite(alpha)))
+function isWeightedReliability(value: unknown, included: number): value is SurveyWeightedReliability {
+  const w = value as Partial<SurveyWeightedReliability> | null
+  return !!w && isCount(w.included) && w.included <= included && isFiniteNumber(w.weightSum) && w.weightSum >= 0
+    && isCount(w.missingWeight) && isCount(w.invalidWeight)
+    && (w.alpha === undefined || (w.included >= 2 && Number.isFinite(w.alpha)))
 }
 
-function isRegression(value: unknown, valid: number): value is SurveyRegression {
-  if (!isRegressionOptions(value)) return false
-  const { included, missing, nonNumeric, fit, unavailableReason } = value as Partial<SurveyRegression>
-  if (!isCount(included) || !isCount(missing) || !isCount(nonNumeric) || included + missing + nonNumeric !== valid) return false
+function isReliability(value: unknown, valid: number): value is SurveyReliability {
+  if (!isReliabilityOptions(value)) return false
+  const { included, missing, nonNumeric, alpha, weighted } = value as Partial<SurveyReliability>
+  return isCount(included) && isCount(missing) && isCount(nonNumeric) && included + missing + nonNumeric === valid
+    && (alpha === undefined || (included >= 2 && Number.isFinite(alpha)))
+    && (weighted === undefined || isWeightedReliability(weighted, included))
+}
+
+function isRegressionFitOrReason(fit: { intercept: number; slope: number; rSquared?: number } | undefined, unavailableReason: unknown, included: number) {
   if (fit === undefined) {
     return unavailableReason === 'INSUFFICIENT_ROWS' || unavailableReason === 'CONSTANT_PREDICTOR'
       || unavailableReason === 'OUT_OF_RANGE'
@@ -695,6 +784,21 @@ function isRegression(value: unknown, valid: number): value is SurveyRegression 
   return !!fit && unavailableReason === undefined && included >= 2
     && Number.isFinite(fit.intercept) && Number.isFinite(fit.slope)
     && (fit.rSquared === undefined || (Number.isFinite(fit.rSquared) && fit.rSquared >= 0 && fit.rSquared <= 1))
+}
+
+function isWeightedRegression(value: unknown, included: number): value is SurveyWeightedRegression {
+  const w = value as Partial<SurveyWeightedRegression> | null
+  return !!w && isCount(w.included) && w.included <= included && isFiniteNumber(w.weightSum) && w.weightSum >= 0
+    && isCount(w.missingWeight) && isCount(w.invalidWeight)
+    && isRegressionFitOrReason(w.fit, w.unavailableReason, w.included)
+}
+
+function isRegression(value: unknown, valid: number): value is SurveyRegression {
+  if (!isRegressionOptions(value)) return false
+  const { included, missing, nonNumeric, fit, unavailableReason, weighted } = value as Partial<SurveyRegression>
+  if (!isCount(included) || !isCount(missing) || !isCount(nonNumeric) || included + missing + nonNumeric !== valid) return false
+  return isRegressionFitOrReason(fit, unavailableReason, included)
+    && (weighted === undefined || isWeightedRegression(weighted, included))
 }
 
 function isWeighting(value: unknown, valid: number, columns: string[]): value is SurveyWeighting {
@@ -706,19 +810,32 @@ function isWeighting(value: unknown, valid: number, columns: string[]): value is
     && typeof totalWeight === 'string' && /^[0-9]+(?:\.[0-9]+)?$/.test(totalWeight)
 }
 
-function isMultipleRegression(value: unknown, valid: number): value is SurveyMultipleRegression {
-  if (!isMultipleRegressionOptions(value)) return false
-  const r = value as Partial<SurveyMultipleRegression>
-  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
-  if (r.fit === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
-  const { fit } = r
+function isMultipleRegressionFit(fit: unknown): fit is SurveyMultipleRegressionFit {
+  const f = fit as Partial<SurveyMultipleRegressionFit> | null
   const validCoef = (c: unknown): c is SurveyMultipleRegressionCoefficient => {
     const entry = c as Partial<SurveyMultipleRegressionCoefficient> | null
     return !!entry && typeof entry.name === 'string' && isFiniteNumber(entry.coefficient) && isFiniteNumber(entry.stdError)
       && (entry.tStat === undefined || isFiniteNumber(entry.tStat))
   }
-  return !!fit && validCoef(fit.intercept) && Array.isArray(fit.predictors) && fit.predictors.every(validCoef)
-    && isCount(fit.dfModel) && isCount(fit.dfResidual)
+  return !!f && validCoef(f.intercept) && Array.isArray(f.predictors) && f.predictors.every(validCoef)
+    && isCount(f.dfModel) && isCount(f.dfResidual)
+}
+
+function isWeightedMultipleRegression(value: unknown, included: number): value is SurveyWeightedMultipleRegression {
+  const w = value as Partial<SurveyWeightedMultipleRegression> | null
+  if (!w || !isCount(w.included) || w.included > included || !isFiniteNumber(w.weightSum) || w.weightSum < 0
+    || !isCount(w.missingWeight) || !isCount(w.invalidWeight)) return false
+  if (w.fit === undefined) return typeof w.unavailableReason === 'string' && w.unavailableReason.length > 0
+  return isMultipleRegressionFit(w.fit)
+}
+
+function isMultipleRegression(value: unknown, valid: number): value is SurveyMultipleRegression {
+  if (!isMultipleRegressionOptions(value)) return false
+  const r = value as Partial<SurveyMultipleRegression>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
+  if (r.weighted !== undefined && !isWeightedMultipleRegression(r.weighted, r.included)) return false
+  if (r.fit === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  return isMultipleRegressionFit(r.fit)
 }
 
 function isFactorAnalysis(value: unknown, valid: number): value is SurveyFactorAnalysis {
@@ -768,6 +885,16 @@ function isCFA(value: unknown, valid: number): value is SurveyCFA {
   if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
   const res = r.result
   return !!res && Array.isArray(res.constructs) && Array.isArray(res.correlationMatrix) && typeof res.discriminantValid === 'boolean'
+}
+
+function isSEM(value: unknown, valid: number): value is SurveySEM {
+  if (!isSEMOptions(value)) return false
+  const r = value as Partial<SurveySEM>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
+  if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const res = r.result
+  return !!res && Array.isArray(res.constructs) && Array.isArray(res.paths) && Array.isArray(res.endogenous)
+    && Array.isArray(res.correlationMatrix) && typeof res.discriminantValid === 'boolean'
 }
 
 function isConfidenceLevel(value: unknown): value is SampleSizeConfidenceLevel {
@@ -849,6 +976,7 @@ function isReport(value: unknown): value is SurveyReport {
     && (report.psm === undefined || isPSM(report.psm, value.valid))
     && (report.conjoint === undefined || isConjoint(report.conjoint, value.valid))
     && (report.cfa === undefined || isCFA(report.cfa, value.valid))
+    && (report.sem === undefined || isSEM(report.sem, value.valid))
     && (report.weighting === undefined || isWeighting(report.weighting, value.valid, report.columns))
     && (report.planSource === undefined || isAnalysisPlanSource(report.planSource))
 }

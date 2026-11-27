@@ -15,7 +15,7 @@ function formatCoefficient(value: number) {
 }
 
 function RegressionResult({ result }: { result: SurveyRegression }) {
-  const { fit, included, missing, nonNumeric, predictorColumn, outcomeColumn } = result
+  const { fit, included, missing, nonNumeric, predictorColumn, outcomeColumn, weighted } = result
 
   return <div className="survey-section" role="status">
     <p className="survey-note">报告所用字段 <bdi>{predictorColumn}</bdi>（自变量）、<bdi>{outcomeColumn}</bdi>（因变量）</p>
@@ -28,6 +28,16 @@ function RegressionResult({ result }: { result: SurveyRegression }) {
       {fit.rSquared === undefined && <p className="survey-note">因变量为常量，R² 未定义。</p>}
     </> : <p>{unavailableMessages[result.unavailableReason]}</p>}
     <p className="survey-note">纳入 {included} 份，排除缺失 {missing} 份、非数值 {nonNumeric} 份。</p>
+    {weighted && <div className="survey-section" data-survey-regression-weighted>
+      <p className="survey-note">
+        <strong>加权最小二乘回归（WLS）</strong>：纳入 {weighted.included} 份，权重合计 {formatCoefficient(weighted.weightSum)}，缺失权重 {weighted.missingWeight} 份，无效权重 {weighted.invalidWeight} 份。
+      </p>
+      {weighted.fit ? <dl className="survey-counts" aria-label="加权回归拟合结果">
+        <div><dt>加权截距</dt><dd>{formatCoefficient(weighted.fit.intercept)}</dd></div>
+        <div><dt>加权斜率</dt><dd>{formatCoefficient(weighted.fit.slope)}</dd></div>
+        {weighted.fit.rSquared !== undefined && <div><dt>加权 R²</dt><dd>{formatCoefficient(weighted.fit.rSquared)}</dd></div>}
+      </dl> : <p className="survey-note">{unavailableMessages[weighted.unavailableReason]}</p>}
+    </div>}
   </div>
 }
 
