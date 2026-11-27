@@ -1,7 +1,10 @@
 package workbench
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,6 +189,7 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	}
 	request(http.MethodPost, path+"/retrieve-scatter", http.StatusBadGateway)
 	request(http.MethodGet, path+"/scatter", http.StatusNotFound)
+	request(http.MethodPost, path+"/scatter/material", http.StatusNotFound)
 	if err := json.Unmarshal(request(http.MethodPost, path+"/retrieve-scatter", http.StatusOK).Body.Bytes(), &snapshot); err != nil ||
 		snapshot.Scatter == nil || !snapshot.Scatter.Retrieved || snapshot.ReportRetrieved || results.Load() != 0 || scatterRequests.Load() != 2 {
 		t.Fatalf("unexpected scatter retrieval snapshot: %+v (%v)", snapshot, err)
@@ -226,6 +230,51 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	if plot.Body.Len() != snapshot.Scatter.Size || computeDigest(plot.Body.Bytes()) != snapshot.Scatter.SHA256 ||
 		plot.Header().Get("X-Result-SHA256") != snapshot.Scatter.SHA256 || !strings.HasPrefix(plot.Header().Get("Content-Disposition"), "attachment;") {
 		t.Fatal("offline scatter download differs from the manifest")
+	}
+	savePlot := path + "/scatter/material"
+	request(http.MethodPost, strings.Replace(savePlot, project, other, 1), http.StatusNotFound)
+	var savedPlot Material
+	if err := json.Unmarshal(request(http.MethodPost, savePlot, http.StatusOK).Body.Bytes(), &savedPlot); err != nil ||
+		savedPlot.Name != "远程散点图-"+strings.ToLower(taskID)+".svg" || savedPlot.SHA256 != snapshot.Scatter.SHA256 ||
+		savedPlot.Size != int64(snapshot.Scatter.Size) {
+		t.Fatalf("unexpected saved scatter: %+v (%v)", savedPlot, err)
+	}
+	var replayPlot Material
+	if err := json.Unmarshal(request(http.MethodPost, savePlot, http.StatusOK).Body.Bytes(), &replayPlot); err != nil || replayPlot.MaterialID != savedPlot.MaterialID {
+		t.Fatalf("scatter save did not replay the original material: %+v (%v)", replayPlot, err)
+	}
+	artifactPath := projectsPath + "/" + project + "/artifacts?kind=material&format=image"
+	var catalog struct{ Items []projectArtifact }
+	if err := json.Unmarshal(request(http.MethodGet, artifactPath, http.StatusOK).Body.Bytes(), &catalog); err != nil ||
+		len(catalog.Items) != 1 || catalog.Items[0].ID != savedPlot.MaterialID {
+		t.Fatalf("saved scatter missing from the image catalog: %+v (%v)", catalog, err)
+	}
+	if downloaded := request(http.MethodGet, catalog.Items[0].DownloadURL, http.StatusOK); downloaded.Body.String() != plot.Body.String() {
+		t.Fatal("catalog download changed the scatter bytes")
+	}
+	bundlePath := projectsPath + "/" + project + "/files/bundle"
+	bundleInput, err := json.Marshal(map[string][]workspaceBundleItem{"items": {{Kind: "material", ID: savedPlot.MaterialID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundleRequest := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1"+bundlePath, bytes.NewReader(bundleInput))
+	bundleRequest.Header.Set("Content-Type", "application/json")
+	bundle := httptest.NewRecorder()
+	handler.ServeHTTP(bundle, bundleRequest)
+	if bundle.Code != http.StatusOK {
+		t.Fatalf("bundle returned %d: %s", bundle.Code, bundle.Body)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(bundle.Body.Bytes()), int64(bundle.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := archive.Open("files/01.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer member.Close()
+	if exported, err := io.ReadAll(member); err != nil || !bytes.Equal(exported, plot.Body.Bytes()) {
+		t.Fatalf("ZIP did not retain the original scatter bytes: %v", err)
 	}
 	result := request(http.MethodGet, path+"/result", http.StatusOK)
 	if result.Header().Get("X-Result-SHA256") != job.ResultSHA256 || computeDigest(result.Body.Bytes()) != job.ResultSHA256 {

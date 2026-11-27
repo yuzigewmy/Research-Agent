@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExperimentReportHandoff } from './ExperimentReportHandoff'
+import { isMaterial, materialDownloadPath } from './materials'
+import type { Material } from './materials'
 import { ProjectDate } from './ProjectDetails'
 import { errorMessage, ProjectApiError, request } from './projects'
 
@@ -11,6 +13,7 @@ const actionLabels = {
   snapshot: '读取本机记录', submit: '提交远程复算', refresh: '刷新远程状态',
   cancel: '请求停止远程复算', retrieve: '取回报告', result: '下载远程结果',
   artifacts: '查看远程成果', 'retrieve-scatter': '取回远程散点图', 'download-scatter': '下载远程散点图',
+  'save-scatter': '保存散点图到项目资料',
 } as const
 const sha256Pattern = /^[a-f0-9]{64}$/i
 const resultFileName = 'paired-comparison.json'
@@ -54,7 +57,7 @@ function isSnapshot(value: unknown): value is Snapshot {
     && (job.resultSha256 === undefined || isDigest(job.resultSha256)))
 }
 
-function readSnapshot(path: string, action: Exclude<Action, 'result' | 'download-scatter'>, signal: AbortSignal) {
+function readSnapshot(path: string, action: Exclude<Action, 'result' | 'download-scatter' | 'save-scatter'>, signal: AbortSignal) {
   const init = action === 'snapshot' ? { method: 'GET' } : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   }
@@ -132,6 +135,7 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
   const [refreshDelayed, setRefreshDelayed] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [listedJobId, setListedJobId] = useState<string>()
+  const [savedScatter, setSavedScatter] = useState<Material>()
   const [busy, setBusy] = useState<Action>()
   const [error, setError] = useState<{ action: Action; message: string }>()
   const { configured, job, reportRetrieved } = snapshot ?? {}
@@ -224,6 +228,12 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
         if (resultDigest) await downloadResult(resultPath, resultDigest, signal)
       } else if (action === 'download-scatter') {
         if (scatter?.retrieved) await downloadScatter(`${path}/scatter`, scatter, signal)
+      } else if (action === 'save-scatter') {
+        if (!scatter?.retrieved) return
+        const material = await request(`${path}/scatter/material`, (value): value is Material =>
+          isMaterial(value) && value.sha256 === scatter.sha256 && value.size === scatter.size, { method: 'POST', signal })
+        signal.throwIfAborted()
+        setSavedScatter(material)
       } else {
         const next = await readSnapshot(path, action, signal)
         signal.throwIfAborted()
@@ -311,6 +321,10 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
           disabled={!!busy} onClick={() => void run('retrieve-scatter')}>取回远程散点图</button>}
         {scatter?.retrieved && <button className="button outline" type="button" data-remote-comparison-download-scatter
           disabled={!!busy} onClick={() => void run('download-scatter')}>下载远程散点图 SVG</button>}
+        {scatter?.retrieved && !savedScatter && <button className="button outline" type="button" data-remote-comparison-save-scatter
+          disabled={!!busy} onClick={() => void run('save-scatter')}>保存散点图到项目资料</button>}
+        {savedScatter && <a className="button outline" href={materialDownloadPath(projectId, savedScatter.materialId)} download>
+          下载已保存的散点图</a>}
       </div>
     </div>
   </details>

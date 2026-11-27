@@ -193,6 +193,7 @@ func registerRemoteComparison(mux *http.ServeMux, store *Store, node *ComputeNod
 	mux.HandleFunc("POST "+path+"/artifacts", store.remoteComparisonHandler(node, "artifacts"))
 	mux.HandleFunc("POST "+path+"/retrieve-scatter", store.remoteComparisonHandler(node, "retrieve-scatter"))
 	mux.HandleFunc("GET "+path+"/scatter", store.remoteComparisonHandler(node, "scatter"))
+	mux.HandleFunc("POST "+path+"/scatter/material", store.remoteComparisonHandler(node, "scatter-material"))
 }
 
 func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.HandlerFunc {
@@ -212,12 +213,12 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			writeRemoteComparison(w, node, job)
 			return
 		}
-		if action == "scatter" {
+		if action == "scatter" || action == "scatter-material" {
 			if job.Status != taskSucceeded || !job.scatter.Retrieved || job.InputSHA256 != report.Input.SHA256 {
 				writeError(w, http.StatusNotFound, "RESULT_NOT_FOUND", "没有通过校验的远程散点图。")
 				return
 			}
-			s.downloadRemoteScatter(w, r, job)
+			s.serveRemoteScatter(w, r, job, action == "scatter-material")
 			return
 		}
 		if action == "result" || action == "workspace" {

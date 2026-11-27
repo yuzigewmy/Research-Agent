@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -98,7 +99,7 @@ func (s *Store) updateRemoteScatter(w http.ResponseWriter, r *http.Request, node
 	writeRemoteComparison(w, node, job)
 }
 
-func (s *Store) downloadRemoteScatter(w http.ResponseWriter, r *http.Request, job remoteComparison) {
+func (s *Store) serveRemoteScatter(w http.ResponseWriter, r *http.Request, job remoteComparison, saveMaterial bool) {
 	var plot string
 	if err := s.db.QueryRowContext(r.Context(), `SELECT scatter_svg FROM remote_comparisons WHERE project_id = ? AND task_id = ?`,
 		r.PathValue("id"), r.PathValue("taskId")).Scan(&plot); err != nil {
@@ -107,6 +108,16 @@ func (s *Store) downloadRemoteScatter(w http.ResponseWriter, r *http.Request, jo
 	}
 	if len(plot) != job.scatter.Size || computeDigest([]byte(plot)) != job.scatter.SHA256 {
 		writeError(w, http.StatusNotFound, "RESULT_NOT_FOUND", "没有通过校验的远程散点图。")
+		return
+	}
+	if saveMaterial {
+		name := "远程散点图-" + strings.ToLower(r.PathValue("taskId")) + ".svg"
+		material, _, err := s.saveMaterial(r.Context(), r.PathValue("id"), name, strings.NewReader(plot))
+		if err != nil {
+			writeMaterialError(w, "save remote scatter material", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, material)
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
