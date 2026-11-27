@@ -63,7 +63,9 @@ function versionPath(projectId: string, versionId: string) {
   return `${filesPath(projectId)}/versions/${encodeURIComponent(versionId)}`
 }
 
-export async function listFiles(projectId: string, signal: AbortSignal, cursor?: string, kind?: 'diagram' | 'markdown' | 'html' | 'csv', search?: string) {
+export type WorkspaceFileKind = 'diagram' | 'markdown' | 'html' | 'csv'
+
+export async function listFiles(projectId: string, signal: AbortSignal, cursor?: string, kind?: WorkspaceFileKind, search?: string) {
   const params = new URLSearchParams()
   if (kind) params.set('kind', kind)
   if (cursor) params.set('cursor', cursor)

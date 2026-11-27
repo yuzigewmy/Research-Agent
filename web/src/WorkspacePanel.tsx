@@ -18,13 +18,22 @@ import type { ResearchDocumentTemplate } from './researchDocuments'
 import { isManuscriptSelection, manuscriptSelectionByteLimit, manuscriptSelectionLimit, sameManuscriptSelection } from './turns'
 import type { ManuscriptSelection } from './turns'
 import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText, workspaceBundleLimit } from './workspace'
-import type { Document, FilePage } from './workspace'
+import type { Document, FilePage, WorkspaceFileKind } from './workspace'
 import './workspace.css'
 
 const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
 const encoder = new TextEncoder()
 const markdownExtension = /\.(md|markdown)$/i
 const htmlExtension = /\.html?$/i
+const fileKindLabels = { markdown: 'Markdown', csv: 'CSV', html: 'HTML', diagram: '流程图' } satisfies Record<WorkspaceFileKind, string>
+
+const fileKindPatterns: Record<WorkspaceFileKind, RegExp> = {
+  markdown: markdownExtension,
+  csv: /\.csv$/i,
+  html: htmlExtension,
+  diagram: /^diagrams\/[^/]+\.flow\.json$/,
+}
+
 const manuscriptSizeLimit = 64 * 1024
 
 async function readManuscript(file: File) {
@@ -53,10 +62,13 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
 }
 
-function useFilePage(load: (signal: AbortSignal, cursor?: string, search?: string) => Promise<FilePage>, key: 'path' | 'versionId') {
+type FileFilters = { search: string; kind?: WorkspaceFileKind }
+type FileQuery = FileFilters & { cursor?: string }
+
+function useFilePage(load: (signal: AbortSignal, query: FileQuery) => Promise<FilePage>, key: 'path' | 'versionId') {
   const [state, setState] = useState<{
     page: FilePage
-    query: { cursor?: string; search: string }
+    query: FileQuery
     loading: boolean
     error: string
   }>({ page: { items: [] }, query: { search: '' }, loading: true, error: '' })
@@ -64,7 +76,7 @@ function useFilePage(load: (signal: AbortSignal, cursor?: string, search?: strin
 
   useEffect(() => {
     const controller = new AbortController()
-    void load(requestSignal(controller), query.cursor, query.search).then((next) => {
+    void load(requestSignal(controller), query).then((next) => {
       if (controller.signal.aborted) return
       setState((current) => {
         if (current.query !== query) return current
@@ -80,17 +92,17 @@ function useFilePage(load: (signal: AbortSignal, cursor?: string, search?: strin
     return () => controller.abort()
   }, [key, load, query])
 
-  function loadPage(cursor?: string, search = query.search) {
+  function loadPage(next: FileQuery) {
     setState(current => ({
-      page: search === current.query.search ? current.page : { items: [] },
-      query: { cursor, search }, loading: true, error: '',
+      page: next.search === current.query.search && next.kind === current.query.kind ? current.page : { items: [] },
+      query: next, loading: true, error: '',
     }))
   }
 
   return {
-    ...page, loading, error, search: query.search,
-    retry: () => loadPage(query.cursor), more: () => loadPage(page.nextCursor),
-    filter: (search: string) => loadPage(undefined, search),
+    ...page, loading, error, search: query.search, kind: query.kind,
+    retry: () => loadPage({ ...query }), more: () => loadPage({ ...query, cursor: page.nextCursor }),
+    filter: (filters: FileFilters) => loadPage(filters),
   }
 }
 
@@ -184,7 +196,7 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore, select
   bundleSelection: BundleSelection
 }) {
   const { path, versionId: currentId } = document
-  const load = useCallback((signal: AbortSignal, cursor?: string) => listVersions(projectId, path, signal, cursor), [projectId, path])
+  const load = useCallback((signal: AbortSignal, { cursor }: FileQuery) => listVersions(projectId, path, signal, cursor), [projectId, path])
   const page = useFilePage(load, 'versionId')
 
   return <div className="workspace-history">
@@ -234,7 +246,7 @@ export function WorkspacePanel(props: WorkspaceProps) {
 
 function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscriptSelections, onManuscriptSelection, pdfReferences }: WorkspaceProps) {
   const id = useId()
-  const load = useCallback((signal: AbortSignal, cursor?: string, search?: string) => listFiles(projectId, signal, cursor, undefined, search), [projectId])
+  const load = useCallback((signal: AbortSignal, { cursor, kind, search }: FileQuery) => listFiles(projectId, signal, cursor, kind, search), [projectId])
   const page = useFilePage(load, 'path')
   const [searchInput, setSearchInput] = useState('')
   const [createdPaths, setCreatedPaths] = useState<string[]>([])
@@ -289,7 +301,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const asciiLower = (text: string) => text.replace(/[A-Z]/g, letter => letter.toLowerCase())
   const needle = asciiLower(page.search)
   const paths = [...new Set([
-    ...recentPaths.filter(path => asciiLower(path).includes(needle)),
+    ...recentPaths.filter(path => asciiLower(path).includes(needle) && (!page.kind || fileKindPatterns[page.kind].test(path))),
     ...page.items.map(({ path }) => path),
   ])]
   const restoreBlocked = conflict ? '请先重新加载当前文件。'
@@ -496,8 +508,16 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     </div>
     <form className="field" onSubmit={(event) => {
       event.preventDefault()
-      page.filter(searchInput.trim())
+      page.filter({ search: searchInput.trim(), kind: page.kind })
     }}>
+      <label htmlFor={`${id}-file-kind`}>文件类型</label>
+      <select id={`${id}-file-kind`} value={page.kind ?? ''} onChange={event => {
+        const kind = event.currentTarget.value as WorkspaceFileKind | ''
+        page.filter({ search: page.search, kind: kind || undefined })
+      }}>
+        <option value="">全部类型</option>
+        {Object.entries(fileKindLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
+      </select>
       <label htmlFor={`${id}-search`}>搜索文件路径</label>
       <div className="workspace-create-row">
         <input id={`${id}-search`} ref={searchField} type="search" value={searchInput} maxLength={512}
@@ -505,7 +525,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
         <button className="button outline" type="submit">搜索文件</button>
         {page.search && <button className="button outline" type="button" onClick={() => {
           setSearchInput('')
-          page.filter('')
+          page.filter({ search: '', kind: page.kind })
           searchField.current?.focus()
         }}>清除文件搜索</button>}
       </div>
@@ -522,7 +542,9 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     </ul>}
     <PageControls page={page} label="文件" />
     {!page.loading && !page.error && !paths.length && <p className="workspace-note" role="status">
-      {page.search ? '没有匹配的文件路径。' : manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
+      {page.kind ? '当前筛选条件下没有文件。'
+        : page.search ? '没有匹配的文件路径。'
+          : manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
     </p>}
     <WorkspaceBundle projectId={projectId} versions={bundleVersions}
       onRemove={(versionId) => setBundleVersions((versions) => versions.filter((version) => version.versionId !== versionId))} />
