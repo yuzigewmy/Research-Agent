@@ -45,6 +45,7 @@ const (
 	// Keeps the exported answers and CSV metadata within the analysis file limit.
 	questionnaireAnswerBytes = 7 << 10
 	questionnaireCSVName     = "questionnaire-responses.csv"
+	questionnaireBranchEnd   = "__END__"
 )
 
 var (
@@ -57,12 +58,18 @@ var (
 	questionnaireNumber      = regexp.MustCompile(`^[+-]?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 )
 
+type questionnaireBranch struct {
+	Option string `json:"option"`
+	Target string `json:"target"`
+}
+
 type questionnaireQuestion struct {
-	ID       string   `json:"id"`
-	Label    string   `json:"label"`
-	Type     string   `json:"type"`
-	Required bool     `json:"required"`
-	Options  []string `json:"options,omitempty"`
+	ID       string                `json:"id"`
+	Label    string                `json:"label"`
+	Type     string                `json:"type"`
+	Required bool                  `json:"required"`
+	Options  []string              `json:"options,omitempty"`
+	Branches []questionnaireBranch `json:"branches,omitempty"`
 }
 
 type questionnaireDefinition struct {
@@ -124,15 +131,19 @@ func normalizeQuestionnaire(definition *questionnaireDefinition) error {
 	if len(definition.Questions) < 1 || len(definition.Questions) > 20 {
 		return errors.New("请添加 1 至 20 道题。")
 	}
-	ids := make(map[string]bool, len(definition.Questions))
+	idIndex := make(map[string]int, len(definition.Questions))
+	optionSets := make([]map[string]bool, len(definition.Questions))
 	for index := range definition.Questions {
 		question := &definition.Questions[index]
 		question.Label = strings.TrimSpace(question.Label)
-		if !questionnaireQuestionID.MatchString(question.ID) || ids[question.ID] || question.Label == "" ||
+		if !questionnaireQuestionID.MatchString(question.ID) || question.Label == "" ||
 			len(question.Label) > 220 || strings.ContainsFunc(question.Label, unicode.IsControl) {
 			return errors.New("请核对题号和题干，题号应唯一，题干最多 220 个 UTF-8 字节。")
 		}
-		ids[question.ID] = true
+		if _, exists := idIndex[question.ID]; exists {
+			return errors.New("请核对题号和题干，题号应唯一，题干最多 220 个 UTF-8 字节。")
+		}
+		idIndex[question.ID] = index
 		switch question.Type {
 		case "single":
 			if len(question.Options) < 2 || len(question.Options) > 12 {
@@ -146,12 +157,45 @@ func normalizeQuestionnaire(definition *questionnaireDefinition) error {
 				}
 				options[option], question.Options[n] = true, option
 			}
+			optionSets[index] = options
 		case "text":
 			if len(question.Options) != 0 {
 				return errors.New("文本题无需填写选项。")
 			}
 		default:
 			return errors.New("请选择单选题或文本题。")
+		}
+	}
+	for index := range definition.Questions {
+		question := &definition.Questions[index]
+		if len(question.Branches) == 0 {
+			question.Branches = nil
+			continue
+		}
+		if question.Type != "single" {
+			return errors.New("文本题不支持配置跳转条件。")
+		}
+		seen := make(map[string]bool, len(question.Branches))
+		for n, branch := range question.Branches {
+			option := strings.TrimSpace(branch.Option)
+			target := strings.TrimSpace(branch.Target)
+			if !optionSets[index][option] {
+				return errors.New("跳转条件必须选择本题已有选项。")
+			}
+			if seen[option] {
+				return errors.New("同一选项只能配置一条跳转条件。")
+			}
+			seen[option] = true
+			if target != questionnaireBranchEnd {
+				targetIndex, exists := idIndex[target]
+				if !exists {
+					return errors.New("跳转目标题目不存在。")
+				}
+				if targetIndex <= index {
+					return errors.New("跳转目标必须是排在本题之后的题目或结束问卷。")
+				}
+			}
+			question.Branches[n] = questionnaireBranch{Option: option, Target: target}
 		}
 	}
 	return nil
@@ -205,22 +249,51 @@ func (s *Store) changeQuestionnaire(ctx context.Context, projectID string, revis
 	return q, tx.Commit()
 }
 
-func questionnaireAnswers(q questionnaireSnapshot, answers map[string]string) (string, error) {
-	matched := 0
-	for _, question := range q.Questions {
-		answer, supplied := answers[question.ID]
-		if supplied {
-			matched++
-			answer = strings.TrimSpace(answer)
-			answers[question.ID] = answer
+func questionnaireVisibleQuestions(questions []questionnaireQuestion, answers map[string]string) []questionnaireQuestion {
+	idIndex := make(map[string]int, len(questions))
+	for index, question := range questions {
+		idIndex[question.ID] = index
+	}
+	visible := make([]questionnaireQuestion, 0, len(questions))
+	for index := 0; index < len(questions); {
+		question := questions[index]
+		visible = append(visible, question)
+		next := index + 1
+		if question.Type == "single" && len(question.Branches) > 0 {
+			if answer := strings.TrimSpace(answers[question.ID]); answer != "" {
+				for _, branch := range question.Branches {
+					if branch.Option != answer {
+						continue
+					}
+					if branch.Target == questionnaireBranchEnd {
+						return visible
+					}
+					if targetIndex, ok := idIndex[branch.Target]; ok && targetIndex > index {
+						next = targetIndex
+					}
+					break
+				}
+			}
 		}
+		index = next
+	}
+	return visible
+}
+
+func questionnaireAnswers(q questionnaireSnapshot, answers map[string]string) (string, error) {
+	knownIDs := make(map[string]bool, len(q.Questions))
+	for _, question := range q.Questions {
+		knownIDs[question.ID] = true
+	}
+	visible := questionnaireVisibleQuestions(q.Questions, answers)
+	visibleIDs := make(map[string]bool, len(visible))
+	cleaned := make(map[string]string, len(visible))
+	for _, question := range visible {
+		visibleIDs[question.ID] = true
+		answer := strings.TrimSpace(answers[question.ID])
 		if answer == "" {
 			if question.Required {
 				return "", errQuestionnaireAnswers
-			}
-			delete(answers, question.ID)
-			if supplied {
-				matched--
 			}
 			continue
 		}
@@ -228,14 +301,20 @@ func questionnaireAnswers(q questionnaireSnapshot, answers map[string]string) (s
 			(question.Type == "single" && !slices.Contains(question.Options, answer)) {
 			return "", errQuestionnaireAnswers
 		}
+		cleaned[question.ID] = answer
 	}
-	if matched != len(answers) {
-		return "", errQuestionnaireAnswers
+	for id, raw := range answers {
+		if !knownIDs[id] {
+			return "", errQuestionnaireAnswers
+		}
+		if !visibleIDs[id] && strings.TrimSpace(raw) != "" {
+			return "", errQuestionnaireAnswers
+		}
 	}
-	if len(answers) == 0 {
+	if len(cleaned) == 0 {
 		return "{}", nil
 	}
-	body, err := json.Marshal(answers)
+	body, err := json.Marshal(cleaned)
 	if len(body) > questionnaireAnswerBytes {
 		return "", errQuestionnaireAnswers
 	}
