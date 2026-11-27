@@ -6,7 +6,8 @@ import { initialCourseDraft, prepareCourse, WorkflowCourseOptions, WorkflowCours
 import { WorkflowPatentFigureLinks } from './WorkflowPatentFigureLinks'
 import { initialPatentDraft, preparePatent, WorkflowPatentOptions, WorkflowPatentSummary } from './WorkflowPatentOptions'
 import { initialProposalDraft, prepareProposal, WorkflowProposalOptions, WorkflowProposalSummary } from './WorkflowProposalOptions'
-import { WorkflowRunHistory } from './WorkflowRunHistory'
+import { RunDetail, WorkflowRunHistory } from './WorkflowRunHistory'
+import type { WorkflowRunLink } from './WorkflowRunHistory'
 import { WorkflowSkipStep } from './WorkflowSkipStep'
 import { WorkflowSoftwareBundleDownload } from './WorkflowSoftwareBundleDownload'
 import { initialSoftwareDraft, prepareSoftware, WorkflowSoftwareOptions, WorkflowSoftwareSummary } from './WorkflowSoftwareOptions'
@@ -202,11 +203,13 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
   </div>
 }
 
-export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, acceptanceDraft, onClearAcceptanceDraft }: {
+export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, workflowRunLink,
+  acceptanceDraft, onClearAcceptanceDraft }: {
   projectId: string
   templateId: Exclude<TemplateId, 'freeform' | 'automatic_review' | 'interactive_survey' | 'engineering_project'>
   onManuscriptSaved: (path: string) => void
   refreshVersion?: number
+  workflowRunLink?: WorkflowRunLink
   acceptanceDraft?: { file: FileRecord; openId: number }
   onClearAcceptanceDraft: (openId: number) => void
 }) {
@@ -569,6 +572,18 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     }
   }
 
+  const renderRunSteps = (historicalRun: WorkflowRun) => <>
+    <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
+    <WorkflowRunContext run={historicalRun} />
+    <WorkflowProposalSummary run={historicalRun} />
+    <WorkflowCourseSummary run={historicalRun} />
+    <WorkflowSoftwareSummary run={historicalRun} />
+    <WorkflowPatentSummary run={historicalRun} />
+    <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured}
+      patentWordConfigured={snapshot?.patentWordConfigured} />
+    <WorkflowSoftwareBundleDownload projectId={projectId} run={historicalRun} />
+  </>
+
   return (
     <section className="workflow-panel" id="project-workflow" aria-labelledby={headingId}>
       <div className="workflow-heading">
@@ -577,6 +592,10 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           {completedWithSkip ? '本轮已完成' : run ? runStatusLabels[run.status] : snapshot && '尚未启动'}
         </p>
       </div>
+      {workflowRunLink && <div className="workflow-run-detail" data-workflow-run-id={workflowRunLink.workflowRunId}>
+        <RunDetail key={workflowRunLink.workflowRunId} projectId={projectId} runId={workflowRunLink.workflowRunId}
+          workflowRunLink={workflowRunLink} renderSteps={renderRunSteps} />
+      </div>}
       {refreshing && !snapshot && (
         <div className="loading-state" role="status">
           <p>正在读取工作流…</p>
@@ -808,18 +827,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
           )}
         </div>
       )}
-      <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId}
-        renderSteps={(historicalRun) => <>
-          <WorkflowSelectedTopic choice={historicalRun.topicChoice} />
-          <WorkflowRunContext run={historicalRun} />
-          <WorkflowProposalSummary run={historicalRun} />
-          <WorkflowCourseSummary run={historicalRun} />
-          <WorkflowSoftwareSummary run={historicalRun} />
-          <WorkflowPatentSummary run={historicalRun} />
-          <WorkflowSteps projectId={projectId} run={historicalRun} softwarePdfConfigured={snapshot?.softwarePdfConfigured}
-            patentWordConfigured={snapshot?.patentWordConfigured} />
-          <WorkflowSoftwareBundleDownload projectId={projectId} run={historicalRun} />
-        </>} />
+      <WorkflowRunHistory projectId={projectId} currentRunId={run?.runId} renderSteps={renderRunSteps} />
     </section>
   )
 }

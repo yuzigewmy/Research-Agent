@@ -1,10 +1,12 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { errorMessage } from './projects'
 import { getWorkflowRun, listWorkflowRuns, runStatusLabels } from './workflow'
 import type { WorkflowRun, WorkflowRunPage } from './workflow'
 
 const runDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
+
+export type WorkflowRunLink = { workflowRunId: string }
 
 type HistoryProps = {
   projectId: string
@@ -78,36 +80,49 @@ function RunList({ projectId, renderSteps }: Pick<HistoryProps, 'projectId' | 'r
   </div>
 }
 
-function RunDetail({ projectId, runId, renderSteps }: Pick<HistoryProps, 'projectId' | 'renderSteps'> & { runId: string }) {
+type RunDetailResult = { link?: WorkflowRunLink } &
+  ({ kind: 'ready'; run: WorkflowRun } | { kind: 'error'; message: string })
+
+export function RunDetail({ projectId, runId, renderSteps, workflowRunLink }: Pick<HistoryProps, 'projectId' | 'renderSteps'> & {
+  runId: string
+  workflowRunLink?: WorkflowRunLink
+}) {
   const id = useId()
-  const [run, setRun] = useState<WorkflowRun>()
-  const [error, setError] = useState('')
+  const focusTarget = useRef<HTMLElement>(null)
+  const [result, setResult] = useState<RunDetailResult>()
   const [attempt, setAttempt] = useState(0)
+  const detail = result?.link === workflowRunLink ? result : undefined
 
   useEffect(() => {
     const controller = new AbortController()
-    void getWorkflowRun(projectId, runId, requestSignal(controller)).then((next) => {
-      if (!controller.signal.aborted) setRun(next)
+    void getWorkflowRun(projectId, runId, requestSignal(controller)).then((run) => {
+      if (!controller.signal.aborted) setResult({ link: workflowRunLink, kind: 'ready', run })
     }).catch((cause: unknown) => {
-      if (!controller.signal.aborted) setError(errorMessage(cause))
+      if (!controller.signal.aborted) setResult({ link: workflowRunLink, kind: 'error', message: errorMessage(cause) })
     })
     return () => controller.abort()
-  }, [projectId, runId, attempt])
+  }, [projectId, runId, attempt, workflowRunLink])
 
-  if (error) return <div className="workflow-run-history-content">
-    <p className="form-error" role="alert">{error}</p>
+  useEffect(() => {
+    if (workflowRunLink && detail) focusTarget.current?.focus()
+  }, [workflowRunLink, detail])
+
+  if (!detail) return <p className="workflow-note" role="status">正在读取运行详情…</p>
+  const tabIndex = workflowRunLink ? -1 : undefined
+  if (detail.kind === 'error') return <section className="workflow-run-history-content" ref={focusTarget} tabIndex={tabIndex}>
+    <p className="form-error" role="alert">{detail.message}</p>
     <div className="workflow-actions">
       <button className="button outline" type="button" onClick={() => {
-        setError('')
+        setResult(undefined)
         setAttempt((value) => value + 1)
       }}>重试读取运行详情</button>
     </div>
-  </div>
-  if (!run) return <p className="workflow-note" role="status">正在读取运行详情…</p>
+  </section>
 
-  return <section className="workflow-run-history-content" aria-labelledby={id}>
+  const { run } = detail
+  return <section className="workflow-run-history-content" aria-labelledby={id} ref={focusTarget} tabIndex={tabIndex}>
     <div className="workflow-heading">
-      <strong id={id}>历史运行详情</strong>
+      <strong id={id}>{workflowRunLink ? '工作流运行详情' : '历史运行详情'}</strong>
       <span className="workflow-run-status" data-status={run.status}>{runStatusLabels[run.status]}</span>
     </div>
     <time className="workflow-note" dateTime={run.createdAt}>{runDate.format(new Date(run.createdAt))}</time>

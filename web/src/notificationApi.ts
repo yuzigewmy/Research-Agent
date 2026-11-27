@@ -5,6 +5,7 @@ export interface TaskNotification {
   projectId: string
   projectName: string
   taskId: string
+  workflowRunId?: string
   instruction: string
   status: 'PROPOSED' | 'FAILED' | 'INTERRUPTED' | 'SUCCEEDED'
   createdAt: string
@@ -25,7 +26,8 @@ function isId(value: unknown): value is string {
 
 function isNotification(value: unknown): value is TaskNotification {
   const item = value as Partial<TaskNotification> | null
-  return !!item && isId(item.notificationId) && isId(item.projectId) && isId(item.taskId)
+  return !!item && isId(item.notificationId) && isId(item.projectId)
+    && (item.workflowRunId === undefined ? isId(item.taskId) : isId(item.workflowRunId) && typeof item.taskId === 'string')
     && typeof item.projectName === 'string' && typeof item.instruction === 'string'
     && (item.status === 'PROPOSED' || item.status === 'FAILED' || item.status === 'INTERRUPTED' || item.status === 'SUCCEEDED')
     && typeof item.createdAt === 'string' && Number.isFinite(Date.parse(item.createdAt)) && typeof item.read === 'boolean'

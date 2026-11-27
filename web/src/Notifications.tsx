@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Dispatch, MouseEvent, SetStateAction } from 'react'
+import type { ProjectTarget } from './App'
 import { listNotifications, markNotificationRead } from './notificationApi'
 import type { NotificationPage } from './notificationApi'
 import { ProjectDate } from './ProjectDetails'
@@ -10,8 +11,8 @@ const pollInterval = 5_000
 const requestTimeout = 10_000
 
 type NotificationLinks = {
-  hrefFor: (projectId: string, taskId: string) => string
-  onOpen: (event: MouseEvent<HTMLAnchorElement>, projectId: string, taskId: string) => void
+  hrefFor: (projectId: string, target: ProjectTarget) => string
+  onOpen: (event: MouseEvent<HTMLAnchorElement>, projectId: string, target: ProjectTarget) => void
 }
 
 type History = Pick<NotificationPage, 'items' | 'nextCursor'>
@@ -118,9 +119,9 @@ export function Notifications({ hrefFor, onOpen }: NotificationLinks) {
     <summary className="button outline" ref={trigger}>
       通知 <span aria-live="polite">{unreadCount > 0 ? `${unreadCount} 条未读` : ''}</span>
     </summary>
-    {open && <NotificationHistory hrefFor={hrefFor} onOpen={(event, projectId, taskId) => {
+    {open && <NotificationHistory hrefFor={hrefFor} onOpen={(event, projectId, target) => {
       if (event.defaultPrevented) return
-      onOpen(event, projectId, taskId)
+      onOpen(event, projectId, target)
       if (event.defaultPrevented) close()
     }} history={history} setHistory={setHistory} headFailed={headFailed} refreshHead={refreshHead} />}
   </details>
@@ -203,25 +204,30 @@ function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed,
   }
 
   return <div className="notification-history">
-    {!!history?.items.length && <ol className="notification-list" aria-label="任务通知" role="list">
-      {history.items.map((item) => <li key={item.notificationId}>
-        <p className="notification-meta">
-          <bdi>{item.projectName}</bdi> · {taskStatusLabels[item.status]} · <ProjectDate value={item.createdAt} withTime />
-          {' · '}<span className="notification-read-state" aria-live="polite">{item.read ? '已读' : '未读'}</span>
-        </p>
-        <p className="notification-instruction" dir="auto">{item.instruction}</p>
-        <div className="notification-actions">
-          <a className="button outline" id={`${listId}-${item.notificationId}`} href={hrefFor(item.projectId, item.taskId)}
-            onClick={(event) => onOpen(event, item.projectId, item.taskId)}>打开任务</a>
-          {!item.read && <button className="button outline" type="button" aria-disabled={pendingRead !== undefined}
-            onClick={(event) => void markRead(item.notificationId, event.currentTarget)}>
-            {pendingRead === item.notificationId ? '正在标记…' : '标为已读'}
-          </button>}
-        </div>
-        {failedRead === item.notificationId && <p className="form-error" role="alert">标记失败，请重试。</p>}
-      </li>)}
+    {!!history?.items.length && <ol className="notification-list" aria-label="站内通知" role="list">
+      {history.items.map((item) => {
+        const target = item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
+        return <li key={item.notificationId}>
+          <p className="notification-meta">
+            <bdi>{item.projectName}</bdi> · {taskStatusLabels[item.status]} · <ProjectDate value={item.createdAt} withTime />
+            {' · '}<span className="notification-read-state" aria-live="polite">{item.read ? '已读' : '未读'}</span>
+          </p>
+          <p className="notification-instruction" dir="auto">{item.instruction}</p>
+          <div className="notification-actions">
+            <a className="button outline" id={`${listId}-${item.notificationId}`} href={hrefFor(item.projectId, target)}
+              onClick={(event) => onOpen(event, item.projectId, target)}>
+              {item.workflowRunId ? '打开工作流' : '打开任务'}
+            </a>
+            {!item.read && <button className="button outline" type="button" aria-disabled={pendingRead !== undefined}
+              onClick={(event) => void markRead(item.notificationId, event.currentTarget)}>
+              {pendingRead === item.notificationId ? '正在标记…' : '标为已读'}
+            </button>}
+          </div>
+          {failedRead === item.notificationId && <p className="form-error" role="alert">标记失败，请重试。</p>}
+        </li>
+      })}
     </ol>}
-    {history && history.items.length === 0 && <p className="notification-meta" role="status">暂无任务通知。</p>}
+    {history && history.items.length === 0 && <p className="notification-meta" role="status">暂无通知。</p>}
     {!history && !headFailed && <p className="notification-meta" role="status">正在读取通知…</p>}
     {headFailed && <div className="notification-actions">
       <p className="form-error" role="alert">读取通知失败，请重试。</p>

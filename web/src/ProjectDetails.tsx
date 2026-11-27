@@ -11,6 +11,7 @@ import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
 import type { Task, TaskLink } from './tasks'
 import { WorkflowPanel } from './WorkflowPanel'
+import type { WorkflowRunLink } from './WorkflowRunHistory'
 import { WorkspacePanel } from './WorkspacePanel'
 import type { Material } from './materials'
 import { errorMessage, getProject, ProjectApiError, templates } from './projects'
@@ -67,9 +68,10 @@ function readManuscriptSelections(key: string): ManuscriptSelection[] {
   }
 }
 
-export function ProjectDetails({ projectId, taskLink, onUpdated }: {
+export function ProjectDetails({ projectId, taskLink, workflowRunLink, onUpdated }: {
   projectId: string
   taskLink?: TaskLink
+  workflowRunLink?: WorkflowRunLink
   onUpdated: (project: Project) => void
 }) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
@@ -213,7 +215,7 @@ export function ProjectDetails({ projectId, taskLink, onUpdated }: {
         || project.templateId === 'course_paper' || project.templateId === 'course_report') && <LiteraturePanel projectId={project.projectId} />}
       {hasWorkflow &&
         <WorkflowPanel projectId={project.projectId} templateId={templateId} refreshVersion={workflowRefresh}
-          acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
+          workflowRunLink={workflowRunLink} acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
             current?.openId === openId ? undefined : current)}
           onManuscriptSaved={addWorkspacePath} />}
       <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} onReportSaved={addWorkspacePath} />

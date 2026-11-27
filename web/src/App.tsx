@@ -11,26 +11,39 @@ import type { ProjectTemplate } from './projectTemplates'
 import { errorMessage } from './projects'
 import type { Project } from './projects'
 import type { TaskLink } from './tasks'
+import type { WorkflowRunLink } from './WorkflowRunHistory'
 import { WorkspaceBackup } from './WorkspaceBackup'
 import { WorkspaceComponents } from './WorkspaceComponents'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
-type Selection = { projectId: string | null; taskLink?: TaskLink }
+export type ProjectTarget = (TaskLink & { workflowRunId?: never }) | (WorkflowRunLink & { taskId?: never })
+
+type Selection = { projectId: string | null; target?: ProjectTarget }
 
 function selectedFromUrl(): Selection {
   const params = new URLSearchParams(window.location.search)
   const projectId = params.get('project')
+  const workflowRunId = params.get('workflowRun')
   const taskId = params.get('task')
-  return { projectId, taskLink: projectId && taskId ? { taskId } : undefined }
+  if (projectId && workflowRunId) return { projectId, target: { workflowRunId } }
+  if (projectId && taskId) return { projectId, target: { taskId } }
+  return { projectId }
 }
 
-function projectUrl(projectId: string | null, taskId?: string) {
+function sameSelection(a: Selection, b: Selection) {
+  return a.projectId === b.projectId && a.target?.taskId === b.target?.taskId
+    && a.target?.workflowRunId === b.target?.workflowRunId
+}
+
+function projectUrl(projectId: string | null, target?: ProjectTarget) {
   const url = new URL(window.location.href)
   if (projectId === null) url.searchParams.delete('project')
   else url.searchParams.set('project', projectId)
-  if (projectId !== null && taskId) url.searchParams.set('task', taskId)
+  if (projectId !== null && target?.taskId) url.searchParams.set('task', target.taskId)
   else url.searchParams.delete('task')
+  if (projectId !== null && target?.workflowRunId) url.searchParams.set('workflowRun', target.workflowRunId)
+  else url.searchParams.delete('workflowRun')
   url.hash = ''
   return url.href
 }
@@ -48,7 +61,7 @@ export function App() {
 
 function Workbench() {
   const [selection, setSelection] = useState(selectedFromUrl)
-  const { projectId: selectedId, taskLink } = selection
+  const { projectId: selectedId, target } = selection
   const [catalog, setCatalog] = useState<Catalog>({ kind: 'loading' })
   const list = useProjectList()
   const heading = useRef<HTMLHeadingElement>(null)
@@ -71,7 +84,7 @@ function Workbench() {
 
   const syncSelection = useEffectEvent(() => {
     const next = selectedFromUrl()
-    if (next.projectId === selectedId && next.taskLink?.taskId === taskLink?.taskId) return
+    if (sameSelection(next, selection)) return
     focusOnNavigate.current = true
     setSelection(next)
   })
@@ -89,22 +102,21 @@ function Workbench() {
     }
   }, [selection])
 
-  function navigate(projectId: string | null, taskId?: string) {
-    const current = selectedFromUrl()
-    const sameSelection = projectId === current.projectId && taskId === current.taskLink?.taskId
-    if (sameSelection && taskId === undefined) {
+  function navigate(projectId: string | null, target?: ProjectTarget) {
+    const next = { projectId, target }
+    if (!sameSelection(next, selectedFromUrl())) window.history.pushState(null, '', projectUrl(projectId, target))
+    else if (!target) {
       heading.current?.focus()
       return
     }
-    if (!sameSelection) window.history.pushState(null, '', projectUrl(projectId, taskId))
     focusOnNavigate.current = true
-    setSelection({ projectId, taskLink: taskId === undefined ? undefined : { taskId } })
+    setSelection(next)
   }
 
-  function followProjectLink(event: MouseEvent<HTMLAnchorElement>, projectId: string | null, taskId?: string) {
+  function followProjectLink(event: MouseEvent<HTMLAnchorElement>, projectId: string | null, target?: ProjectTarget) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
-    navigate(projectId, taskId)
+    navigate(projectId, target)
   }
 
   function handleCreated(project: Project) {
@@ -142,7 +154,9 @@ function Workbench() {
             <CreateProjectForm templateItems={templateItems} onCreated={handleCreated} />
             <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
           </div>
-          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId} taskLink={taskLink} onUpdated={list.refresh} />}
+          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId}
+            taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
+            onUpdated={list.refresh} />}
         </section>
         <ProjectList list={list} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>
