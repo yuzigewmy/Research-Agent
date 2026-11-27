@@ -35,7 +35,7 @@ type computeJob struct {
 	JobID        string `json:"jobId"`
 	InputSHA256  string `json:"inputSha256"`
 	Status       string `json:"status"`
-	StartedAt    string `json:"startedAt"`
+	StartedAt    string `json:"startedAt,omitempty"`
 	FinishedAt   string `json:"finishedAt,omitempty"`
 	ResultSHA256 string `json:"resultSha256,omitempty"`
 	Message      string `json:"message,omitempty"`

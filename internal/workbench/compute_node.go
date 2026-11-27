@@ -18,9 +18,9 @@ const computeProbeTimeout = 5 * time.Second
 
 // ComputeNode checks the capabilities of a deployment-configured compute service.
 type ComputeNode struct {
-	capabilitiesURL string
-	token           string
-	client          *http.Client
+	base   *url.URL
+	token  string
+	client *http.Client
 }
 
 func NewComputeNode(address, token string) (*ComputeNode, error) {
@@ -35,8 +35,8 @@ func NewComputeNode(address, token string) (*ComputeNode, error) {
 		return nil, errors.New("请为计算节点设置有效的访问凭据")
 	}
 	return &ComputeNode{
-		capabilitiesURL: base.JoinPath("api", "v1", "capabilities").String(),
-		token:           token,
+		base:  base,
+		token: token,
 		client: &http.Client{
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -58,7 +58,7 @@ type computeNodeInfo struct {
 var errComputeCapabilities = errors.New("invalid compute node capabilities")
 
 func (node *ComputeNode) probe(ctx context.Context) (computeNodeInfo, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, node.capabilitiesURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, node.base.JoinPath("api", "v1", "capabilities").String(), nil)
 	if err != nil {
 		return computeNodeInfo{}, err
 	}

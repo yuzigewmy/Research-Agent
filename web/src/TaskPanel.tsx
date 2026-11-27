@@ -4,6 +4,7 @@ import { ExperimentAttempts } from './ExperimentAttempts'
 import { ExperimentEvidence } from './ExperimentEvidence'
 import { ExperimentReportHandoff } from './ExperimentReportHandoff'
 import { errorMessage, ProjectApiError } from './projects'
+import { RemoteComparison } from './RemoteComparison'
 import { selectionEditInstructionLimit } from './SelectionEdit'
 import { TaskInputSummary, TaskInputVersions } from './TaskInputVersions'
 import { TaskSelectionEdit } from './TaskSelectionEdit'
@@ -296,8 +297,10 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
         {isExperimentComparison && onReportSaved &&
           <ExperimentReportHandoff projectId={projectId} taskId={task.taskId} onSaved={onReportSaved} />}
       </div>}
-      {isExperimentComparison && task.status === 'SUCCEEDED' && currentInputs[0] &&
-        <ExperimentEvidence projectId={projectId} taskId={task.taskId} input={currentInputs[0]} />}
+      {isExperimentComparison && task.status === 'SUCCEEDED' && <>
+        {currentInputs[0] && <ExperimentEvidence projectId={projectId} taskId={task.taskId} input={currentInputs[0]} />}
+        <RemoteComparison key={JSON.stringify([projectId, task.taskId])} projectId={projectId} taskId={task.taskId} />
+      </>}
       {isExperimentComparison &&
         <ExperimentAttempts projectId={projectId} taskId={task.taskId} revision={task.revision} />}
     </li>

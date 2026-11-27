@@ -192,6 +192,7 @@ func TestWorkflowModelRequestMigrationPreservesLegacyReplay(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER notify_review_status; DROP TRIGGER notify_workflow_status; DROP TRIGGER notify_task_status; DROP TABLE task_notifications;
 		DROP TRIGGER cancel_experiment_attempt;
 		DROP TABLE experiment_attempts;
+		DROP TABLE remote_comparisons;
 		DROP TABLE manuscript_pdf_citations;
 		DROP TABLE manuscript_pdf_links;
 		DROP TABLE manuscript_comparison_links;

@@ -80,6 +80,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	}
 	registerModelConnection(mux, config, connectionOptions, flowModels)
 	registerComputeNode(mux, config.ComputeNode)
+	registerRemoteComparison(mux, store, config.ComputeNode)
 	conversation{store: store, model: config.Model, editModel: editModel, workflowModels: flowModels, modelOptions: conversationOptions}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model, editModel: editModel}.register(mux)
