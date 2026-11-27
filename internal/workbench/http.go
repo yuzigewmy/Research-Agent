@@ -41,6 +41,7 @@ type HandlerConfig struct {
 	ImageModelName              string
 	ImageModelQuality           string
 	WordPython                  string
+	ScriptPython                string
 	SoftwarePDFFont             string
 	literature                  literatureSource
 }
@@ -87,7 +88,9 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	store.registerTaskQueue(mux)
 	store.registerNotifications(mux)
 	wordPython := strings.TrimSpace(config.WordPython)
+	scriptPython := strings.TrimSpace(config.ScriptPython)
 	softwarePDFFont := strings.TrimSpace(config.SoftwarePDFFont)
+	scriptRuns{store: store, python: scriptPython}.register(mux)
 	workflows{store: store, model: config.Model, models: flowModels,
 		softwarePDFFont: softwarePDFFont, wordPython: wordPython}.register(mux)
 	store.registerMaterials(mux)

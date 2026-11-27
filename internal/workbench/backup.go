@@ -188,12 +188,17 @@ func backupInventory(ctx context.Context, databasePath string) (int, []backupFil
 	}
 	// Bound values before they cross into Go. UNION ALL avoids sorting or
 	// deduplicating unvalidated values in SQLite.
+	objectSources := `SELECT sha256, size FROM materials
+			UNION ALL SELECT sha256, size FROM workspace_versions
+			UNION ALL SELECT sha256, size FROM project_draft_materials`
+	if version >= 64 {
+		objectSources += `
+			UNION ALL SELECT sha256, size FROM script_run_artifacts`
+	}
 	rows, err := db.QueryContext(ctx, `SELECT
 		CASE WHEN typeof(sha256) = 'text' AND octet_length(sha256) IN (64, 128) THEN sha256 ELSE '' END,
 		CASE WHEN typeof(size) = 'integer' THEN size ELSE -1 END
-		FROM (SELECT sha256, size FROM materials
-			UNION ALL SELECT sha256, size FROM workspace_versions
-			UNION ALL SELECT sha256, size FROM project_draft_materials)`)
+		FROM (`+objectSources+`)`)
 	if err != nil {
 		return 0, nil, err
 	}
