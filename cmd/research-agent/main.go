@@ -73,8 +73,12 @@ func run(address, dataDir, webDir string) error {
 			return err
 		}
 	}
-	if err := store.ResumeQueuedTasks(context.Background(), model); err != nil {
-		return err
+	var computeNode *workbench.ComputeNode
+	if nodeURL, nodeToken := os.Getenv("RESEARCH_COMPUTE_NODE_URL"), os.Getenv("RESEARCH_COMPUTE_NODE_TOKEN"); nodeURL != "" || nodeToken != "" {
+		computeNode, err = workbench.NewComputeNode(nodeURL, nodeToken)
+		if err != nil {
+			return err
+		}
 	}
 
 	webFS, err := webassets.Files(webDir)
@@ -82,6 +86,7 @@ func run(address, dataDir, webDir string) error {
 		return fmt.Errorf("open Web assets: %w", err)
 	}
 	handler := workbench.NewHandler(store, webFS, workbench.HandlerConfig{
+		ComputeNode:                 computeNode,
 		Model:                       model,
 		ConversationModelName:       os.Getenv("RESEARCH_CONVERSATION_MODEL_NAME"),
 		ConversationReasoningEffort: os.Getenv("RESEARCH_CONVERSATION_MODEL_REASONING_EFFORT"),
@@ -99,6 +104,9 @@ func run(address, dataDir, webDir string) error {
 		WordPython:                  os.Getenv("RESEARCH_WORD_PYTHON"),
 		SoftwarePDFFont:             os.Getenv("RESEARCH_PDF_FONT"),
 	})
+	if err := store.ResumeQueuedTasks(context.Background(), model); err != nil {
+		return err
+	}
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,

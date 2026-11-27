@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
+import { ComputeNode } from './ComputeNode'
 import { CreateProjectForm } from './CreateProjectForm'
 import { ModelConnection } from './ModelConnection'
 import { readReviewLink } from './notificationApi'
@@ -154,6 +155,7 @@ function Workbench() {
       </header>
       <WorkbenchPreferences {...preferences} />
       <ModelConnection />
+      <ComputeNode />
       <WorkspaceBackup />
       <WorkspaceComponents />
       <div className="workbench-grid" data-sidebar-hidden={preferences.sidebarHidden}>

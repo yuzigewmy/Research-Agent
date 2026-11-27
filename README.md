@@ -139,3 +139,19 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 在「项目资料」展开「生成科研图片」，填写图形说明并选定尺寸。任务会保存说明、模型、质量档和尺寸，通过校验的 PNG 自动进入项目资料，可直接下载或复查。每个项目同时处理一笔生图请求。重新打开面板可查回最新记录，重放已接受的请求仍取得原回执。
 
 生成任务结束后，可选择「按原规格重绘」。确认页列出原任务的说明、尺寸和当前接入的模型及质量。确认后创建新任务，回执显示原生成记录编号。提交响应丢失时可重试同一重绘请求，取回已接受的回执。
+
+## 检查计算节点
+
+在服务端设置 `RESEARCH_COMPUTE_NODE_URL` 和 `RESEARCH_COMPUTE_NODE_TOKEN`，重启工作台后，在首页展开「计算节点」并点击「检查节点」。远程地址使用 HTTPS，本机回环 IP 可以使用 HTTP。
+
+节点须支持 `GET /api/v1/capabilities`，使用 Bearer 凭据，并返回如下格式的 JSON。工作台显示节点声明的输入大小、行数和运行时限。当前连接检查只读取能力元数据。
+
+```json
+{
+  "protocol": "research-compute-v1",
+  "name": "配对计算节点",
+  "capabilities": [
+    { "id": "paired-mean-v1", "maxInputBytes": 524288, "maxRows": 10000, "timeoutSeconds": 5 }
+  ]
+}
+```
