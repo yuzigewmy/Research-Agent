@@ -15,6 +15,17 @@ type LocalFileHandle = FileSystemFileHandle & {
   remove?: () => Promise<void>
 }
 type FilePreview = { handle: LocalFileHandle; file: File; text?: string }
+type MoveTarget = { source: FilePreview; target: FileSystemFileHandle; digest: string }
+
+async function fileDigest(file: File, signal: AbortSignal): Promise<string> {
+  if (file.size > materialSizeLimit) return ''
+  signal.throwIfAborted()
+  const bytes = await file.arrayBuffer()
+  signal.throwIfAborted()
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  signal.throwIfAborted()
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 const entryLimit = 500
 const previewLimit = 64 * 1024
@@ -53,9 +64,10 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
   const [folder, setFolder] = useState<Folder>()
   const [preview, setPreview] = useState<FilePreview>()
   const [deleteTarget, setDeleteTarget] = useState<FilePreview>()
+  const [moveTarget, setMoveTarget] = useState<MoveTarget>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [receipt, setReceipt] = useState<{ action: '已导入' | '已复制' | '已删除'; name: string }>()
+  const [receipt, setReceipt] = useState<{ action: '已导入' | '已复制' | '已删除' | '已移动至'; name: string }>()
   const active = useRef<AbortController | null>(null)
   useEffect(() => () => active.current?.abort(), [])
 
@@ -84,6 +96,7 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
     setFolder(next)
     setPreview(undefined)
     setDeleteTarget(undefined)
+    setMoveTarget(undefined)
   }
 
   function selectDirectory() {
@@ -98,6 +111,7 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
   function openEntry(entry: Entry) {
     if (!folder) return
     setDeleteTarget(undefined)
+    setMoveTarget(undefined)
     if (entry.kind === 'directory') {
       void run(signal => openFolder([...folder.chain, entry], signal))
     } else {
@@ -119,10 +133,14 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
     })
   }
 
-  function copyFile({ handle, file }: FilePreview) {
+  function copyFile(source: FilePreview, forMove = false) {
     if (!savePicker || !folder) return
+    const { handle, file } = source
+    if (forMove && file.size > materialSizeLimit) return
     void run(async signal => {
-      const target = await savePicker.call(window, { suggestedName: `副本-${file.name}`, startIn: folder.chain.at(-1)! })
+      setDeleteTarget(undefined)
+      setMoveTarget(undefined)
+      const target = await savePicker.call(window, { suggestedName: forMove ? file.name : `副本-${file.name}`, startIn: folder.chain[folder.chain.length - 1] })
       signal.throwIfAborted()
       const sameFile = await target.isSameEntry(handle)
       signal.throwIfAborted()
@@ -130,16 +148,28 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
         setError('请选择另一个文件保存副本。')
         return
       }
+      const digest = forMove ? await fileDigest(file, signal) : undefined
+      if (forMove && !digest) {
+        setError('单个文件移动上限为 64 MiB。')
+        return
+      }
       const writable = await target.createWritable()
       await file.stream().pipeTo(writable, { signal })
       signal.throwIfAborted()
+      if (digest) {
+        if (await fileDigest(await target.getFile(), signal) !== digest) {
+          setError('保存目标未通过内容校验，源文件仍保留。')
+          return
+        }
+        setMoveTarget({ source, target, digest })
+      }
       setReceipt({ action: '已复制', name: target.name })
     }, '无法访问源文件或保存目标，请重新选择文件后重试。')
   }
 
-  function deleteFile() {
-    if (!folder || !deleteTarget) return
-    const { handle, file } = deleteTarget
+  function removeSource(source: FilePreview, move?: MoveTarget) {
+    if (!folder || source !== preview) return
+    const { handle, file } = source
     const { requestPermission, remove } = handle
     if (!requestPermission || !remove) return
     void run(async signal => {
@@ -148,13 +178,22 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
       signal.throwIfAborted()
       setDeleteTarget(undefined)
       if (permission !== 'granted') {
-        setError('浏览器未授权删除此文件。')
+        setError(move ? '浏览器未授权移除源文件，副本已保存。' : '浏览器未授权删除此文件。')
         return
       }
+      if (move) {
+        setMoveTarget(undefined)
+        if (await fileDigest(await move.target.getFile(), signal) !== move.digest) {
+          setError('目标副本已变化。请重新选择目标，源文件仍保留。')
+          return
+        }
+      }
       const current = await handle.getFile()
+      const changed = current.size !== file.size || current.lastModified !== file.lastModified
+        || (move && await fileDigest(current, signal) !== move.digest)
       signal.throwIfAborted()
-      if (current.size !== file.size || current.lastModified !== file.lastModified) {
-        setError('本机文件已变化，请重新预览后再删除。')
+      if (changed) {
+        setError(move ? '源文件已变化，请重新预览后再移动。' : '本机文件已变化，请重新预览后再删除。')
         setPreview(undefined)
         return
       }
@@ -162,8 +201,8 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
       signal.throwIfAborted()
       setFolder({ ...folder, entries: folder.entries.filter(entry => entry !== handle) })
       setPreview(undefined)
-      setReceipt({ action: '已删除', name: file.name })
-    }, '无法删除此文件，请检查目录访问权限并重新预览。')
+      setReceipt(move ? { action: '已移动至', name: move.target.name } : { action: '已删除', name: file.name })
+    }, move ? '移动未完成，请检查源文件和目标副本。' : '无法删除此文件，请检查目录访问权限并重新预览。')
   }
 
   return <details className="material-local-directory" aria-labelledby={titleId}>
@@ -176,6 +215,7 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
           setFolder(undefined)
           setPreview(undefined)
           setDeleteTarget(undefined)
+          setMoveTarget(undefined)
           setError('')
           setReceipt(undefined)
         }}>卸载目录</button>}
@@ -204,15 +244,26 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
             onClick={() => importFile(preview.file)}>导入选中文件</button>
           {savePicker && <button className="button outline" type="button" disabled={busy}
             onClick={() => copyFile(preview)}>保存本机副本</button>}
+          {savePicker && preview.handle.requestPermission && preview.handle.remove && <button className="button outline" type="button"
+            disabled={busy || preview.file.size > materialSizeLimit || !!moveTarget}
+            onClick={() => copyFile(preview, true)}>选择移动目标</button>}
           {preview.handle.requestPermission && preview.handle.remove && <button className="button outline" type="button"
-            disabled={busy} aria-expanded={deleteTarget === preview} aria-controls={`${titleId}-delete`}
+            disabled={busy || !!moveTarget} aria-expanded={deleteTarget === preview}
+            aria-controls={deleteTarget === preview ? `${titleId}-delete` : undefined}
             onClick={() => setDeleteTarget(deleteTarget === preview ? undefined : preview)}>删除本机文件</button>}
         </div>
         {deleteTarget === preview && folder && <div id={`${titleId}-delete`} className="workspace-discard" role="group" aria-label="确认删除本机文件">
           <p>将从本机删除 <bdi>{[...folder.chain.map(entry => entry.name), preview.file.name].join('/')}</bdi>。此操作无法在工作台撤销。</p>
           <div className="material-actions">
             <button className="button outline" type="button" disabled={busy} onClick={() => setDeleteTarget(undefined)}>取消删除</button>
-            <button className="button outline" type="button" disabled={busy} onClick={deleteFile}>确认删除</button>
+            <button className="button outline" type="button" disabled={busy} onClick={() => removeSource(deleteTarget)}>确认删除</button>
+          </div>
+        </div>}
+        {moveTarget?.source === preview && folder && <div className="workspace-discard" role="group" aria-label="确认移除移动源文件">
+          <p>已保存并校验 <bdi>{moveTarget.target.name}</bdi>。确认后将移除源文件 <bdi>{[...folder.chain.map(entry => entry.name), preview.file.name].join('/')}</bdi>。</p>
+          <div className="material-actions">
+            <button className="button outline" type="button" disabled={busy} onClick={() => setMoveTarget(undefined)}>保留两份文件</button>
+            <button className="button outline" type="button" disabled={busy} onClick={() => removeSource(preview, moveTarget)}>确认移除源文件</button>
           </div>
         </div>}
         {preview.file.size > materialSizeLimit && <p className="material-note">单个文件导入上限为 64 MiB。</p>}
