@@ -55,8 +55,8 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请发送有效的请求编号和 16 KiB 以内的消息。")
 		return
 	}
-	if !validTurnReferences(input.ReferenceIDs, input.PDFQuotes) {
-		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。PDF 选区需带页码和文件摘要，每段最多 8 KiB。")
+	if !validTurnReferences(input.ReferenceIDs, input.PDFQuotes) || !validWordQuotes(input.ReferenceIDs, input.PDFQuotes, input.WordQuotes) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "每条消息可引用最多四份不同的资料。PDF 和 Word 选区需带原件摘要，每段最多 8 KiB。PDF 选区还需页码。")
 		return
 	}
 	if input.Mode != "" && !validTurnMode(input.Mode) {

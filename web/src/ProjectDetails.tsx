@@ -160,22 +160,32 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
     setReferences((current) => current.filter((reference) => !matches(reference)))
   }, [])
 
-  function addPdfQuote({ materialId, name, sha256 }: Material, page: number, quote: string) {
-    const selection = { materialId, name, sha256, page, quote }
+  function addReferenceQuote(selection: TurnReference) {
     setReferences((current) => {
-      if (current.some((reference) => reference.materialId === materialId)) {
-        return current.map((reference) => reference.materialId === materialId ? selection : reference)
+      if (current.some((reference) => reference.materialId === selection.materialId)) {
+        return current.map((reference) => reference.materialId === selection.materialId ? selection : reference)
       }
       return current.length < turnReferenceLimit ? [...current, selection] : current
     })
   }
 
+  function addPdfQuote({ materialId, name, sha256 }: Material, page: number, quote: string) {
+    addReferenceQuote({ materialId, name, sha256, page, quote })
+  }
+
+  function addWordQuote({ materialId, name, sha256 }: Material, wordQuote: string) {
+    addReferenceQuote({ materialId, name, sha256, wordQuote })
+  }
+
   function toggleReference({ materialId, name, sha256 }: Material) {
+    const fullReference = { materialId, name, sha256 }
     setReferences((current) => {
-      if (current.some((reference) => reference.materialId === materialId)) {
-        return current.filter((reference) => reference.materialId !== materialId)
+      const existing = current.find((reference) => reference.materialId === materialId)
+      if (existing?.wordQuote !== undefined) {
+        return current.map((reference) => reference === existing ? fullReference : reference)
       }
-      return current.length < turnReferenceLimit ? [...current, { materialId, name, sha256 }] : current
+      if (existing) return current.filter((reference) => reference !== existing)
+      return current.length < turnReferenceLimit ? [...current, fullReference] : current
     })
   }
 
@@ -222,7 +232,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
       }} />
       <ProjectTaskQueue projectId={project.projectId} onStopped={refreshWorkflow} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
-        onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)}
+        onPdfQuote={addPdfQuote} onWordQuote={addWordQuote} references={references}
         allowSoftwareFolder={project.templateId === 'software_registration'} bundleSelection={bundleSelection} />
       {project.templateId === 'interactive_survey' && (
         <QuestionnairePanel projectId={project.projectId} archived={project.status === 'ARCHIVED'} />

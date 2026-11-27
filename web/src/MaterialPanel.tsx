@@ -6,10 +6,12 @@ import { MaterialImageReview } from './MaterialImageReview'
 import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
 import { PdfPreview } from './PdfPreview'
+import { WordPreview } from './WordPreviewQuote'
 import { WorkspaceBundleAdd } from './WorkspaceBundle'
 import type { BundleSelection } from './WorkspaceBundle'
 import { errorMessage } from './projects'
 import { turnReferenceLimit } from './turns'
+import type { TurnReference } from './turns'
 import './materials.css'
 
 const materialDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
@@ -33,22 +35,12 @@ function mergeMaterials(current: Material[], incoming: Material[]) {
   return [...byId.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 }
 
-function WordPreviewSections({ sections, name }: { sections: string[]; name: string }) {
-  const [index, setIndex] = useState(0)
-  return <div className="material-word-sections">
-    <p className="material-note">按显式分页标记分段。实际页码由排版引擎决定。</p>
-    <div className="material-actions">
-      <button className="button outline" type="button" disabled={index === 0}
-        onClick={() => setIndex(index - 1)}>上一段</button>
-      <span className="material-note" role="status">第 {index + 1} 段，共 {sections.length} 段</span>
-      <button className="button outline" type="button" disabled={index === sections.length - 1}
-        onClick={() => setIndex(index + 1)}>下一段</button>
-    </div>
-    <pre className="material-text" tabIndex={0} aria-label={`文本预览：${name}`} dir="auto">{sections[index]}</pre>
-  </div>
-}
-
-function MaterialPreviewContent({ projectId, material }: { projectId: string; material: Material }) {
+function MaterialPreviewContent({ projectId, material, onWordQuote, quoteBlocked }: {
+  projectId: string
+  material: Material
+  onWordQuote?: (text: string) => void
+  quoteBlocked: boolean
+}) {
   const [status, setStatus] = useState<PreviewStatus>({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
 
@@ -77,7 +69,8 @@ function MaterialPreviewContent({ projectId, material }: { projectId: string; ma
   const isWord = material.format === 'word'
   return (
     <>
-      {isWord && sections ? <WordPreviewSections sections={sections} name={material.name} />
+      {isWord && (sections || text) ? <WordPreview text={text} sections={sections} name={material.name}
+        onQuote={onWordQuote} quoteBlocked={quoteBlocked} />
         : text ? <pre className="material-text" tabIndex={0} aria-label={`文本预览：${material.name}`} dir="auto">{text}</pre>
           : <p className="material-note" role="status">{isWord ? '未读取到正文或表格文字。' : '文件无文本内容'}</p>}
       {truncated && <p className="material-note" role="status">
@@ -91,7 +84,8 @@ interface MaterialPanelProps {
   projectId: string
   onReference?: (material: Material) => void
   onPdfQuote?: (material: Material, page: number, text: string) => void
-  referenceIds?: string[]
+  onWordQuote?: (material: Material, text: string) => void
+  references?: readonly TurnReference[]
   allowSoftwareFolder?: boolean
   bundleSelection: BundleSelection
 }
@@ -100,7 +94,8 @@ function matchesMaterialQuery(name: string, q: string) {
   return q === '' || name.includes(q)
 }
 
-export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [], allowSoftwareFolder, bundleSelection }: MaterialPanelProps) {
+export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote, references = [],
+  allowSoftwareFolder, bundleSelection }: MaterialPanelProps) {
   const headingId = useId()
   const queryId = useId()
   const [items, setItems] = useState<Material[]>([])
@@ -120,7 +115,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
   const uploadRequest = useRef<AbortController | null>(null)
   const appliedQuery = useRef(pageRequest.q)
   appliedQuery.current = pageRequest.q
-  const referenceLimitReached = referenceIds.length >= turnReferenceLimit
+  const referenceLimitReached = references.length >= turnReferenceLimit
   const referenceLimitHint = `${headingId}-reference-limit`
 
   useEffect(() => {
@@ -278,8 +273,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           const previewLabel = isOpen ? '收起预览' : isPdf ? '预览 PDF' : canViewImage ? '预览图片' : '预览'
           const downloadPath = materialDownloadPath(projectId, material.materialId)
           const wordScopeId = isWord ? `${previewRegion}-scope` : undefined
-          const referenced = referenceIds.includes(material.materialId)
-          const atLimit = referenceLimitReached && !referenced
+          const reference = references.find(({ materialId }) => materialId === material.materialId)
+          const fullReference = !!reference && reference.wordQuote === undefined
+          const atLimit = referenceLimitReached && !reference
           return (
             <li className="material-row" key={material.materialId} data-material-id={material.materialId}>
               <div className="material-info">
@@ -307,7 +303,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                   {reviewOpen ? '收起图片复查' : '图片复查'}
                 </button>}
                 {hasText && onReference && <button className="button outline" type="button"
-                  aria-label={`引用资料：${material.name}`} aria-pressed={referenced} aria-disabled={atLimit}
+                  aria-label={`引用资料：${material.name}`} aria-pressed={fullReference} aria-disabled={atLimit}
                   aria-describedby={atLimit ? referenceLimitHint : undefined}
                   onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
               </div>
@@ -320,7 +316,8 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                     onQuote={onPdfQuote && ((page, text) => onPdfQuote(material, page, text))} />
                 ) : canViewImage ? <MaterialImagePreview key={material.materialId} name={material.name}
                   url={materialImagePreviewPath(projectId, material.materialId)} />
-                  : <MaterialPreviewContent material={material} projectId={projectId} />)}
+                  : <MaterialPreviewContent material={material} projectId={projectId} quoteBlocked={atLimit}
+                    onWordQuote={onWordQuote && ((text) => onWordQuote(material, text))} />)}
               </div>}
             </li>
           )

@@ -164,7 +164,10 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 			if quote, selected := input.PDFQuotes[id]; selected {
 				return quote == (pdfQuote{SHA256: ref.SHA256, Page: ref.Page, Text: ref.Quote})
 			}
-			return ref.Page == 0
+			if quote, selected := input.WordQuotes[id]; selected {
+				return ref.Page == 0 && quote == (wordQuote{SHA256: ref.SHA256, Text: ref.WordQuote})
+			}
+			return ref.Page == 0 && ref.WordQuote == ""
 		}) {
 			return Turn{}, Project{}, false, errRequestConflict
 		}
@@ -192,6 +195,9 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 	}
 	references, err := resolveTurnReferences(ctx, tx, projectID, input.ReferenceIDs, input.PDFQuotes)
 	if err != nil {
+		return Turn{}, Project{}, false, err
+	}
+	if err := s.applyWordQuotes(ctx, references, input.WordQuotes); err != nil {
 		return Turn{}, Project{}, false, err
 	}
 	referenceJSON, err := json.Marshal(references)

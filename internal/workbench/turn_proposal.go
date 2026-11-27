@@ -25,6 +25,7 @@ type sendTurnInput struct {
 	Text                 string                     `json:"text"`
 	ReferenceIDs         []string                   `json:"referenceIds"`
 	PDFQuotes            map[string]pdfQuote        `json:"pdfQuotes"`
+	WordQuotes           map[string]wordQuote       `json:"wordQuotes"`
 	Mode                 string                     `json:"mode"`
 	ModelID              string                     `json:"modelId"`
 	ManuscriptSelection  *manuscriptSelectionInput  `json:"manuscriptSelection"`

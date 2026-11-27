@@ -9,6 +9,7 @@ export type { TurnMode } from './projects'
 const statuses = ['RUNNING', 'COMPLETED', 'FAILED', 'INTERRUPTED', 'STOPPED'] as const
 export const turnReferenceLimit = 4
 export const pdfQuoteByteLimit = 8 * 1024
+export const wordQuoteByteLimit = 8 * 1024
 export const manuscriptSelectionByteLimit = 8 * 1024
 export const manuscriptSelectionLimit = 4
 const turnTaskResultLimit = 4
@@ -22,8 +23,9 @@ export interface ConversationModelOption {
   reasoningEffort?: string
 }
 
-export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'> & { page?: number; quote?: string }
+export type TurnReference = Pick<Material, 'materialId' | 'name' | 'sha256'> & { page?: number; quote?: string; wordQuote?: string }
 export type PdfQuote = { sha256: string; page: number; text: string }
+export type WordQuote = { sha256: string; text: string }
 export type ManuscriptSelectionInput = Pick<FileRecord, 'versionId'> & Pick<SelectionEditRange, 'startByte' | 'endByte'>
 export type ManuscriptSelection = ManuscriptSelectionInput & Pick<FileRecord, 'path' | 'sha256'> & Pick<SelectionEditRange, 'text'>
 
@@ -38,6 +40,7 @@ export interface TurnInput {
   text: string
   referenceIds?: string[]
   pdfQuotes?: Record<string, PdfQuote>
+  wordQuotes?: Record<string, WordQuote>
   manuscriptSelection?: ManuscriptSelectionInput
   manuscriptSelections?: ManuscriptSelectionInput[]
   mode?: TurnMode
@@ -185,11 +188,28 @@ export function isPdfQuotes(value: unknown, ids: string[] = []): value is Record
     && isPdfExcerpt(quote.page, quote.text))
 }
 
+export function isWordQuoteText(value: unknown): value is string {
+  return typeof value === 'string' && /[^\p{White_Space}]/u.test(value)
+    && !/[\0\uD800-\uDFFF]/u.test(value) && utf8.encode(value).length <= wordQuoteByteLimit
+}
+
+function isWordQuote(sha256: unknown, text: unknown) {
+  return typeof sha256 === 'string' && /^[0-9a-f]{64}$/.test(sha256) && isWordQuoteText(text)
+}
+
+export function isWordQuotes(value: unknown, ids: string[] = [], pdfQuotes?: Record<string, PdfQuote>): value is Record<string, WordQuote> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.entries(value).every(([id, quote]: [string, Partial<WordQuote> | null]) =>
+    ids.includes(id) && !Object.hasOwn(pdfQuotes ?? {}, id) && !!quote && isWordQuote(quote.sha256, quote.text))
+}
+
 function isTurnReference(value: unknown): value is TurnReference {
   const reference = value as Partial<TurnReference> | null
-  return !!reference && isProposedTaskId(reference.materialId)
-    && typeof reference.name === 'string' && typeof reference.sha256 === 'string'
-    && ((reference.page === undefined && reference.quote === undefined) || isPdfExcerpt(reference.page, reference.quote))
+  if (!reference || !isProposedTaskId(reference.materialId)
+    || typeof reference.name !== 'string' || typeof reference.sha256 !== 'string') return false
+  const { page, quote, wordQuote, sha256 } = reference
+  if (page !== undefined || quote !== undefined) return wordQuote === undefined && isPdfExcerpt(page, quote)
+  return wordQuote === undefined || isWordQuote(sha256, wordQuote)
 }
 
 export function isTurnReferences(value: unknown): value is TurnReference[] {
@@ -243,6 +263,13 @@ export function matchesTurnModel(turn: Turn, input: TurnInput) {
   return turn.modelId === undefined || turn.modelId === (input.modelId ?? 'default')
 }
 
+export function matchesTurnWordQuotes(turn: Turn, input: TurnInput) {
+  const expected = Object.entries(input.wordQuotes ?? {})
+  return expected.length === (turn.references?.filter((ref) => ref.wordQuote !== undefined).length ?? 0)
+    && expected.every(([id, { sha256, text }]) => turn.references?.some((ref) =>
+      ref.materialId === id && ref.sha256 === sha256 && ref.wordQuote === text))
+}
+
 export function turnsPath(projectId: string) {
   return `/api/v1/projects/${encodeURIComponent(projectId)}/turns`
 }
@@ -254,7 +281,7 @@ export function listTurns(projectId: string, signal: AbortSignal, before?: strin
 
 export function sendTurn(projectId: string, input: TurnInput, signal: AbortSignal) {
   return request(turnsPath(projectId), (value): value is Turn => isTurn(value)
-    && value.requestId === input.requestId && matchesTurnModel(value, input)
+    && value.requestId === input.requestId && matchesTurnModel(value, input) && matchesTurnWordQuotes(value, input)
     && sameManuscriptSelections(manuscriptSelectionsOf(value), manuscriptSelectionsOf(input)), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

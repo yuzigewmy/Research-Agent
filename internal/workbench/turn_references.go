@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 )
 
@@ -26,12 +27,31 @@ type TurnReference struct {
 	Format     string `json:"format,omitempty"`
 	Page       int    `json:"page,omitempty"`
 	Quote      string `json:"quote,omitempty"`
+	WordQuote  string `json:"wordQuote,omitempty"`
 }
 
 type pdfQuote struct {
 	SHA256 string `json:"sha256"`
 	Page   int    `json:"page"`
 	Text   string `json:"text"`
+}
+
+type wordQuote struct {
+	SHA256 string `json:"sha256"`
+	Text   string `json:"text"`
+}
+
+func validWordQuotes(ids []string, pdfQuotes map[string]pdfQuote, quotes map[string]wordQuote) bool {
+	if len(quotes) > len(ids) {
+		return false
+	}
+	for id, quote := range quotes {
+		if _, isPDF := pdfQuotes[id]; isPDF || !slices.Contains(ids, id) || !validObjectDigest(quote.SHA256) ||
+			len(quote.Text) > referenceExcerptBytes || strings.TrimSpace(quote.Text) == "" || strings.ContainsRune(quote.Text, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 func validTurnReferences(ids []string, quotes map[string]pdfQuote) bool {
@@ -84,6 +104,31 @@ func resolveTurnReferences(ctx context.Context, tx *sql.Tx, projectID string, id
 	return references, nil
 }
 
+func (s *Store) applyWordQuotes(ctx context.Context, references []TurnReference, quotes map[string]wordQuote) error {
+	for i := range references {
+		ref := &references[i]
+		quote, selected := quotes[ref.MaterialID]
+		if !selected {
+			continue
+		}
+		if ref.Format != "word" || ref.SHA256 != quote.SHA256 {
+			return errInvalidTurnReference
+		}
+		excerpt, err := s.materialExcerpt(ctx, ref.SHA256, ref.Format, materialPreviewBytes)
+		if errors.Is(err, errMaterialNotText) {
+			return errInvalidTurnReference
+		}
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(excerpt.Text, quote.Text) {
+			return errInvalidTurnReference
+		}
+		ref.WordQuote = quote.Text
+	}
+	return nil
+}
+
 type turnMaterialExcerpt struct {
 	TurnReference
 	MaterialPreview
@@ -93,7 +138,10 @@ func (s *Store) turnMaterialExcerpts(ctx context.Context, references []TurnRefer
 	materials := make([]turnMaterialExcerpt, 0, len(references))
 	for _, ref := range references {
 		excerpt := MaterialPreview{Text: ref.Quote}
-		if ref.Page != 0 {
+		if ref.WordQuote != "" {
+			excerpt.Text = ref.WordQuote
+			ref.WordQuote = ""
+		} else if ref.Page != 0 {
 			ref.Quote = ""
 		} else {
 			var err error

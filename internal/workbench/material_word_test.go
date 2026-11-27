@@ -33,8 +33,22 @@ func TestWordMaterialPreviewAndConversationKeepSource(t *testing.T) {
 			return
 		}
 		last := request.Messages[len(request.Messages)-1].Content
-		if !strings.Contains(last, oldText) || !strings.Contains(last, cell) || !strings.Contains(last, digest) || strings.Contains(last, newText) || strings.Contains(last, `"sections":`) {
-			t.Error("model input did not use the selected original and its table text")
+		_, payload, _ := strings.Cut(last, "\n")
+		var input struct {
+			Request   string                `json:"request"`
+			Materials []turnMaterialExcerpt `json:"materials"`
+		}
+		if err := json.Unmarshal([]byte(payload), &input); err != nil || len(input.Materials) != 1 {
+			t.Errorf("invalid source excerpt in model input: %v", err)
+		} else {
+			want := oldText + "\n\n" + cell
+			if input.Request == "仅核对表格选区" {
+				want = "\n" + cell
+			}
+			got := input.Materials[0]
+			if got.Text != want || got.SHA256 != digest || got.WordQuote != "" || len(got.Sections) != 0 {
+				t.Errorf("model input did not retain the expected original excerpt: %+v", got)
+			}
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"已读取观测\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
@@ -112,6 +126,25 @@ func TestWordMaterialPreviewAndConversationKeepSource(t *testing.T) {
 	if stream := send(http.MethodGet, base+"/turns/"+turn.TurnID+"/stream", "", nil, http.StatusOK).Body.String(); !strings.Contains(stream, `"status":"COMPLETED"`) {
 		t.Fatalf("Word reference did not complete: %s", stream)
 	}
+	selectedBody := func(sha, text string) string {
+		return fmt.Sprintf(`{"requestId":"word-selection","text":"仅核对表格选区","referenceIds":[%q],"wordQuotes":{%q:{"sha256":%q,"text":%q}}}`,
+			selectedID, selectedID, sha, text)
+	}
+	selected := selectedBody(digest, "\n"+cell)
+	send(http.MethodPost, foreign+"/turns", "application/json", strings.NewReader(selected), http.StatusUnprocessableEntity)
+	send(http.MethodPost, base+"/turns", "application/json", strings.NewReader(selectedBody(receipt.SHA256, "\n"+cell)), http.StatusUnprocessableEntity)
+	send(http.MethodPost, base+"/turns", "application/json", strings.NewReader(selectedBody(digest, newText)), http.StatusUnprocessableEntity)
+	var quoted Turn
+	decode(send(http.MethodPost, base+"/turns", "application/json", strings.NewReader(selected), http.StatusAccepted), &quoted)
+	if len(quoted.References) != 1 || quoted.References[0].WordQuote != "\n"+cell || quoted.References[0].SHA256 != digest {
+		t.Fatalf("wrong saved Word quote: %+v", quoted.References)
+	}
+	if stream := send(http.MethodGet, base+"/turns/"+quoted.TurnID+"/stream", "", nil, http.StatusOK).Body.String(); !strings.Contains(stream, `"status":"COMPLETED"`) {
+		t.Fatalf("Word quote did not complete: %s", stream)
+	}
+	send(http.MethodPost, base+"/turns", "application/json", strings.NewReader(selected), http.StatusOK)
+	send(http.MethodPost, base+"/turns", "application/json", strings.NewReader(selectedBody(digest, cell)), http.StatusConflict)
+
 	upload("损坏.docx", []byte{0, 1, 2})
 	send(http.MethodGet, base+"/materials/"+receipt.MaterialID+"/preview", "", nil, http.StatusUnprocessableEntity)
 }

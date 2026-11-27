@@ -9,12 +9,12 @@ import type { TaskPanelSync } from './TaskPanel'
 import { conversationTurnAnchor, taskArtifactPath } from './tasks'
 import {
   isConversationModelId, isManuscriptSelectionInput, isManuscriptSelectionInputs, isPdfQuotes, isProposedTaskId,
-  isWorkflowProposal, listTurns, manuscriptSelectionInput, manuscriptSelectionsOf, matchesTurnModel,
-  sameManuscriptSelections, sendTurn, stopTurn, turnsPath,
+  isWordQuotes, isWorkflowProposal, listTurns, manuscriptSelectionInput, manuscriptSelectionsOf, matchesTurnModel,
+  matchesTurnWordQuotes, sameManuscriptSelections, sendTurn, stopTurn, turnReferenceLimit, turnsPath,
 } from './turns'
 import type {
   ConversationModelId, ConversationModelOption, ManuscriptSelection, ManuscriptSelectionInput, PdfQuote, Turn, TurnEvent,
-  TurnInput, TurnReference, WorkflowProposal,
+  TurnInput, TurnReference, WordQuote, WorkflowProposal,
 } from './turns'
 
 type StopState = { turnId: string; kind: 'pending' } | { turnId: string; kind: 'error'; message: string }
@@ -43,14 +43,16 @@ function readAttempt(key: string): TurnInput | null {
       || (input.mode !== undefined && !isTurnMode(input.mode))
       || (input.modelId !== undefined && !isConversationModelId(input.modelId))
       || (input.referenceIds !== undefined && (!Array.isArray(input.referenceIds)
-        || !input.referenceIds.every((id) => typeof id === 'string')))
+        || input.referenceIds.length > turnReferenceLimit || new Set(input.referenceIds).size !== input.referenceIds.length
+        || !input.referenceIds.every(isProposedTaskId)))
       || (input.pdfQuotes !== undefined && !isPdfQuotes(input.pdfQuotes, input.referenceIds))
+      || (input.wordQuotes !== undefined && !isWordQuotes(input.wordQuotes, input.referenceIds, input.pdfQuotes))
       || (input.manuscriptSelection !== undefined && !isManuscriptSelectionInput(input.manuscriptSelection))
       || (input.manuscriptSelections !== undefined && (input.manuscriptSelection !== undefined
         || !isManuscriptSelectionInputs(input.manuscriptSelections)))) return null
     return {
       requestId: input.requestId, text: input.text, referenceIds: input.referenceIds,
-      pdfQuotes: input.pdfQuotes, mode: input.mode ?? 'CHAT', modelId: input.modelId,
+      pdfQuotes: input.pdfQuotes, wordQuotes: input.wordQuotes, mode: input.mode ?? 'CHAT', modelId: input.modelId,
       manuscriptSelection: input.manuscriptSelection ? manuscriptSelectionInput(input.manuscriptSelection) : undefined,
       manuscriptSelections: input.manuscriptSelections?.map(manuscriptSelectionInput),
     }
@@ -70,9 +72,11 @@ function readModelPreference(key: string): ConversationModelId | undefined {
 
 function matchesSentReference(input: TurnInput, reference: TurnReference) {
   if (!input.referenceIds?.includes(reference.materialId)) return false
-  const selected = input.pdfQuotes?.[reference.materialId]
-  if (!selected) return reference.page === undefined
-  return selected.page === reference.page && selected.sha256 === reference.sha256 && selected.text === reference.quote
+  const pdf = input.pdfQuotes?.[reference.materialId]
+  if (pdf) return pdf.page === reference.page && pdf.sha256 === reference.sha256 && pdf.text === reference.quote
+  const word = input.wordQuotes?.[reference.materialId]
+  if (word) return word.sha256 === reference.sha256 && word.text === reference.wordQuote
+  return reference.page === undefined && reference.wordQuote === undefined
 }
 
 function PdfReferenceDetails({ page, quote }: { page?: number; quote?: string }) {
@@ -84,6 +88,14 @@ function PdfReferenceDetails({ page, quote }: { page?: number; quote?: string })
       <blockquote className="turn-content" dir="auto">{quote}</blockquote>
     </details>
   </>
+}
+
+function WordReferenceDetails({ quote }: { quote?: string }) {
+  if (quote === undefined) return null
+  return <details className="turn-quote" data-word-quote>
+    <summary>查看 Word 选区</summary>
+    <blockquote className="turn-content" dir="auto">{quote}</blockquote>
+  </details>
 }
 
 function ManuscriptQuotes({ selections, onRemove }: {
@@ -201,7 +213,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
     if (!attempt) return
     const sent = manuscriptSelectionsOf(attempt)
     if (items.some((turn) => turn.requestId === attempt.requestId && matchesTurnModel(turn, attempt)
-      && sameManuscriptSelections(manuscriptSelectionsOf(turn), sent))) finishAttempt(attempt)
+      && matchesTurnWordQuotes(turn, attempt) && sameManuscriptSelections(manuscriptSelectionsOf(turn), sent))) finishAttempt(attempt)
   })
 
   useEffect(() => {
@@ -281,15 +293,18 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       setError('这条消息超过 16 KiB，请拆成几条发送。')
       return
     }
-    const pdfQuotes: Record<string, PdfQuote> = {}
-    for (const { materialId, page, quote, sha256 } of references) {
+    const pdfQuotes: Record<string, PdfQuote> = Object.create(null)
+    const wordQuotes: Record<string, WordQuote> = Object.create(null)
+    for (const { materialId, page, quote, sha256, wordQuote } of references) {
       if (page !== undefined && quote !== undefined) pdfQuotes[materialId] = { page, text: quote, sha256 }
+      if (wordQuote !== undefined) wordQuotes[materialId] = { text: wordQuote, sha256 }
     }
     const selections = manuscriptSelections.map(manuscriptSelectionInput)
     const input: TurnInput = retry ?? {
       requestId: crypto.randomUUID(), text: draft, mode, modelId: preferredModel?.id,
       referenceIds: references.length ? references.map(({ materialId }) => materialId) : undefined,
       pdfQuotes: Object.keys(pdfQuotes).length ? pdfQuotes : undefined,
+      wordQuotes: Object.keys(wordQuotes).length ? wordQuotes : undefined,
       manuscriptSelection: selections.length === 1 ? selections[0] : undefined,
       manuscriptSelections: selections.length > 1 ? selections : undefined,
     }
@@ -393,11 +408,12 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
             {!!turn.references?.length && <div className="turn-references">
               <p className="turn-status">随消息发送的资料</p>
               <ul aria-label="随消息发送的资料">
-                {turn.references.map(({ materialId, name, sha256, page, quote }) => <li key={materialId}>
+                {turn.references.map(({ materialId, name, sha256, page, quote, wordQuote }) => <li key={materialId}>
                   <a href={materialDownloadPath(projectId, materialId)} download
                     aria-label={`下载原件：${name}`}><bdi>{name}</bdi></a>
                   <code className="turn-status" title={sha256}>{sha256.slice(0, 8)}</code>
                   <PdfReferenceDetails page={page} quote={quote} />
+                  <WordReferenceDetails quote={wordQuote} />
                 </li>)}
               </ul>
             </div>}
@@ -450,14 +466,17 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
       {!loading && !configured && !error && <p className="turn-status">配置对话模型后即可提问。</p>}
       {references.length > 0 && <div className="turn-references draft-references" aria-labelledby="draft-references-title">
         <p id="draft-references-title">已选资料</p>
-        <p className="turn-status">发送消息时，模型会收到已选资料的文字节选。PDF 只发送所选文字和页码。</p>
+        <p className="turn-status">发送消息时，模型会收到已选资料的文字节选。PDF 只发送所选文字和页码，Word 选区只发送所选文字。</p>
         <ul aria-labelledby="draft-references-title">
-          {references.map(({ materialId, name, sha256, page, quote }) => <li key={materialId}>
+          {references.map(({ materialId, name, sha256, page, quote, wordQuote }) => <li key={materialId}>
             <bdi>{name}</bdi>
             <span className="turn-status">原文件 SHA-256 <code title={sha256}>{sha256.slice(0, 8)}</code></span>
+            {wordQuote !== undefined && <a href={materialDownloadPath(projectId, materialId)} download
+              aria-label={`下载原件：${name}`}>下载原件</a>}
             <button className="button outline" type="button" aria-label={`移除资料：${name}`}
               onClick={() => onClearReferences((reference) => reference.materialId === materialId)}>移除</button>
             <PdfReferenceDetails page={page} quote={quote} />
+            <WordReferenceDetails quote={wordQuote} />
           </li>)}
         </ul>
       </div>}
