@@ -1,7 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { errorMessage, ProjectApiError } from './projects'
-import { getPublicQuestionnaire, isQuestionnaireReceipt, questionnaireAnswerLimit, questionnaireTextFits, sendQuestionnaireResponse } from './questionnaires'
+import {
+  evaluateQuestionnairePath, getPublicQuestionnaire, isQuestionnaireReceipt, questionnaireAnswerLimit,
+  questionnaireTextFits, sendQuestionnaireResponse,
+} from './questionnaires'
 import type { QuestionnaireDefinition, QuestionnaireReceipt } from './questionnaires'
 import './questionnaire.css'
 
@@ -38,6 +41,8 @@ export default function QuestionnaireRespond({ publicId }: { publicId: string })
   const attempt = useRef<{ requestId: string; payload: string } | undefined>(undefined)
   const submission = useRef<AbortController | null>(null)
   const complete = receipt !== undefined
+  const path = definition ? evaluateQuestionnairePath(definition.questions, answers) : undefined
+  const hasBranches = definition?.questions.some((question) => (question.branches?.length ?? 0) > 0) ?? false
 
   useEffect(() => {
     if (complete) return
@@ -55,16 +60,18 @@ export default function QuestionnaireRespond({ publicId }: { publicId: string })
   useEffect(() => () => submission.current?.abort(), [])
 
   function updateAnswer(question: string, answer: string) {
-    setAnswers((current) => new Map(current).set(question, answer))
-    setAnswerError((current) => current?.id === question ? undefined : current)
+    const nextAnswers = new Map(answers).set(question, answer)
+    setAnswers(nextAnswers)
+    const nextVisible = definition ? evaluateQuestionnairePath(definition.questions, nextAnswers).visibleIds : undefined
+    setAnswerError((current) => current && (current.id === question || (nextVisible && !nextVisible.has(current.id))) ? undefined : current)
     setSendError('')
   }
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!definition || receiptRef.current || closed || submission.current) return
+    if (!definition || !path || receiptRef.current || closed || submission.current) return
     const responses: [string, string][] = []
-    for (const question of definition.questions) {
+    for (const { question } of path.visibleQuestions) {
       const answer = (answers.get(question.id) ?? '').trim()
       const message = question.required && !answer ? '请回答此题。'
         : !questionnaireTextFits(answer, questionnaireAnswerLimit) ? '回答最多 320 个 UTF-8 字节，且不能含空字符。'
@@ -121,10 +128,14 @@ export default function QuestionnaireRespond({ publicId }: { publicId: string })
             setReadError('')
             setReload((value) => value + 1)
           }}>重试读取问卷</button>
-        </div> : definition ? <>
+        </div> : definition && path ? <>
           {definition.intro && <p className="questionnaire-intro" dir="auto">{definition.intro}</p>}
+          {hasBranches && <p className="questionnaire-note" role="status">
+            当前显示 {path.visibleQuestions.length} / {definition.questions.length} 题
+            {path.skippedQuestions.length > 0 && `（已按选项跳过第 ${path.skippedQuestions.map(({ index }) => index + 1).join('、')} 题）`}
+          </p>}
           <form className="create-form" noValidate aria-busy={sending} onSubmit={(event) => void send(event)}>
-            {definition.questions.map((question, index) => {
+            {path.visibleQuestions.map(({ question, index }) => {
               const field = `${id}-${question.id}`
               const problem = answerError?.id === question.id ? answerError.message : undefined
               const value = answers.get(question.id) ?? ''
@@ -156,6 +167,9 @@ export default function QuestionnaireRespond({ publicId }: { publicId: string })
                 </div>
               )
             })}
+            {path.endedEarly && <p className="questionnaire-note questionnaire-branch-notice" role="status">
+              当前选项已触发结束问卷，已跳过后续题目，可直接提交答卷。
+            </p>}
             {sendError && <p className="form-error" role="alert">{sendError}</p>}
             <div className="form-actions">
               <button className="button primary" type="submit" aria-disabled={sending}>
