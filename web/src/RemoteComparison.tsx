@@ -48,6 +48,15 @@ function isSnapshot(value: unknown): value is Snapshot {
     && (job.resultSha256 === undefined || isDigest(job.resultSha256)))
 }
 
+function readSnapshot(path: string, action: Exclude<Action, 'result'>, signal: AbortSignal) {
+  const init = action === 'snapshot' ? { method: 'GET' } : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  }
+  return request(action === 'snapshot' ? path : `${path}/${action}`, isSnapshot, {
+    ...init, cache: 'no-store', redirect: 'error', signal,
+  })
+}
+
 async function downloadResult(path: string, expectedDigest: string, signal: AbortSignal) {
   if (!globalThis.crypto?.subtle) throw new ProjectApiError('当前浏览器无法校验远程结果的 SHA-256。', 0)
   const response = await fetch(path, {
@@ -88,7 +97,10 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
   const path = `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/remote-comparison`
   const resultPath = `${path}/result`
   const active = useRef<AbortController | null>(null)
+  const automaticRefresh = useRef<AbortController | null>(null)
   const [snapshot, setSnapshot] = useState<Snapshot>()
+  const [open, setOpen] = useState(false)
+  const [refreshDelayed, setRefreshDelayed] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState<Action>()
   const [error, setError] = useState<{ action: Action; message: string }>()
@@ -99,8 +111,63 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
   const canRefresh = configured === true && (!!job || error?.action === 'submit' || error?.action === 'refresh')
   const canRetrieve = configured === true && job?.status === 'SUCCEEDED' && !reportRetrieved
   const resultDigest = job?.status === 'SUCCEEDED' && reportRetrieved ? job.resultSha256 : undefined
+  const watchStatus = configured && (job?.status === 'RUNNING' || job?.status === 'CANCELLING')
 
   useEffect(() => () => active.current?.abort(), [])
+
+  useEffect(() => {
+    if (!open || !watchStatus) return
+    const interval = 2_000
+    let delay = interval
+    let timer: number | undefined
+    function schedule() {
+      if (!document.hidden) timer = window.setTimeout(refresh, delay)
+    }
+    async function refresh() {
+      timer = undefined
+      if (document.hidden) return
+      if (active.current) {
+        schedule()
+        return
+      }
+      const controller = new AbortController()
+      automaticRefresh.current = controller
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+      try {
+        const next = await readSnapshot(path, 'refresh', signal)
+        signal.throwIfAborted()
+        delay = interval
+        setRefreshDelayed(false)
+        setSnapshot(next)
+      } catch {
+        if (!controller.signal.aborted) {
+          delay = Math.min(delay * 2, 16_000)
+          setRefreshDelayed(true)
+        }
+      } finally {
+        if (automaticRefresh.current === controller) {
+          automaticRefresh.current = null
+          schedule()
+        }
+      }
+    }
+    function reset() {
+      window.clearTimeout(timer)
+      automaticRefresh.current?.abort()
+      automaticRefresh.current = null
+    }
+    function changeVisibility() {
+      reset()
+      delay = interval
+      schedule()
+    }
+    schedule()
+    document.addEventListener('visibilitychange', changeVisibility)
+    return () => {
+      reset()
+      document.removeEventListener('visibilitychange', changeVisibility)
+    }
+  }, [open, path, watchStatus])
 
   async function run(action: Action) {
     if (active.current) return
@@ -108,6 +175,7 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
     if (action === 'refresh' && !canRefresh) return
     if (action === 'cancel' && !canCancel) return
     if (action === 'retrieve' && !canRetrieve) return
+    automaticRefresh.current?.abort()
     const controller = new AbortController()
     const timeout = action === 'snapshot' || action === 'result' ? 10_000 : 30_000
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)])
@@ -119,14 +187,9 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
       if (action === 'result') {
         if (resultDigest) await downloadResult(resultPath, resultDigest, signal)
       } else {
-        // Opening the disclosure reads only the workbench's local snapshot.
-        const init = action === 'snapshot' ? { method: 'GET' } : {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-        }
-        const next = await request(action === 'snapshot' ? path : `${path}/${action}`, isSnapshot, {
-          ...init, cache: 'no-store', redirect: 'error', signal,
-        })
+        const next = await readSnapshot(path, action, signal)
         signal.throwIfAborted()
+        setRefreshDelayed(false)
         setSnapshot(next)
       }
     } catch (cause) {
@@ -143,13 +206,18 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
 
   return <details className="task-input-disclosure" data-remote-comparison={taskId} onToggle={(event) => {
     if (event.currentTarget !== event.target) return
-    if (event.currentTarget.open) void run('snapshot')
+    const expanded = event.currentTarget.open
+    setOpen(expanded)
+    if (expanded) void run('snapshot')
     else setConfirmed(false)
   }}>
     <summary>远程配对复算</summary>
     <div className="task-input-body" aria-busy={!!busy}>
       {busy && <p className="task-note" role="status">正在{actionLabels[busy]}…</p>}
       {error && <p className="form-error" role="alert" data-remote-comparison-error>{error.message}</p>}
+      {watchStatus && refreshDelayed && <p className="task-note" role="status" data-remote-comparison-delayed>
+        暂时无法查询节点，正在重试原作业。
+      </p>}
       {configured === false && <p className="task-note">计算节点未配置。请在首页的「计算节点」中查看配置说明。</p>}
       {configured && !job && <p className="task-note">本机尚无远程作业回执。</p>}
       {job && <div className="task-input-body" data-remote-comparison-job={job.jobId} data-status={job.status}>
