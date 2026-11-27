@@ -128,7 +128,7 @@ function Workbench() {
     <main className="workbench">
       <header className="masthead workbench-masthead">
         <h1>研究工作台</h1>
-        <Notifications hrefFor={projectUrl} onOpen={followProjectLink} />
+        <Notifications hrefFor={projectUrl} onOpen={followProjectLink} onNavigate={navigate} />
       </header>
       <ModelConnection />
       <WorkspaceBackup />

@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import type { Dispatch, MouseEvent, SetStateAction } from 'react'
+import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
+import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from 'react'
 import type { ProjectTarget } from './App'
 import { listNotifications, markNotificationRead } from './notificationApi'
 import type { NotificationPage } from './notificationApi'
@@ -36,7 +36,9 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
 }
 
-export function Notifications({ hrefFor, onOpen }: NotificationLinks) {
+export function Notifications({ hrefFor, onOpen, onNavigate }: NotificationLinks & {
+  onNavigate: (projectId: string, target: ProjectTarget) => void
+}) {
   const [open, setOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [refresh, setRefresh] = useState(0)
@@ -45,12 +47,79 @@ export function Notifications({ hrefFor, onOpen }: NotificationLinks) {
   const disclosure = useRef<HTMLDetailsElement>(null)
   const trigger = useRef<HTMLElement>(null)
   const headRequest = useRef<AbortController | null>(null)
+  const newest = useRef<bigint>(undefined)
+  const desktopNotice = useRef<Notification | null>(null)
+  const supported = window.isSecureContext && typeof window.Notification === 'function'
+  const [permission, setPermission] = useState<NotificationPermission>(() => supported ? Notification.permission : 'default')
+  const [desktopEnabled, setDesktopEnabled] = useState(false)
+  const [askingPermission, setAskingPermission] = useState(false)
+  const [desktopError, setDesktopError] = useState('')
+
+  const showDesktopNotice = useEffectEvent((page: NotificationPage) => {
+    if (!desktopEnabled) return
+    if (Notification.permission !== 'granted') {
+      setPermission(Notification.permission)
+      setDesktopEnabled(false)
+      desktopNotice.current?.close()
+      return
+    }
+    const top = page.items[0]
+    const previous = newest.current
+    const id = top && /^\d+$/.test(top.notificationId) ? BigInt(top.notificationId) : 0n
+    if (previous !== undefined && id <= previous) return
+    newest.current = id
+    if (previous === undefined) return
+    const item = page.items.find(candidate => !candidate.read && /^\d+$/.test(candidate.notificationId)
+      && BigInt(candidate.notificationId) > previous)
+    if (!item) return
+
+    const target = item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
+    try {
+      desktopNotice.current?.close()
+      const notice = new Notification('研究工作台', { body: '收到一条新的站内通知。', tag: `research-notice-${item.notificationId}` })
+      desktopNotice.current = notice
+      notice.onclick = () => {
+        window.focus()
+        onNavigate(item.projectId, target)
+        close()
+        notice.close()
+      }
+      notice.onerror = () => setDesktopError('桌面通知发送失败。可继续查看站内通知。')
+    } catch {
+      setDesktopError('当前浏览器无法显示桌面通知。可继续查看站内通知。')
+    }
+  })
+
+  useEffect(() => () => desktopNotice.current?.close(), [])
+
+  async function toggleDesktop() {
+    setDesktopError('')
+    if (desktopEnabled) {
+      desktopNotice.current?.close()
+      setDesktopEnabled(false)
+      return
+    }
+    setAskingPermission(true)
+    try {
+      const result = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission
+      setPermission(result)
+      setDesktopEnabled(result === 'granted')
+      if (result === 'granted') {
+        newest.current = undefined
+        refreshHead()
+      }
+    } catch {
+      setDesktopError('无法请求浏览器通知权限。可继续查看站内通知。')
+    } finally {
+      setAskingPermission(false)
+    }
+  }
 
   useEffect(() => {
     let timer: number | undefined
 
     async function poll() {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState !== 'visible' && !desktopEnabled) return
       const controller = new AbortController()
       headRequest.current = controller
       const signal = requestSignal(controller)
@@ -58,6 +127,7 @@ export function Notifications({ hrefFor, onOpen }: NotificationLinks) {
         const page = await listNotifications(signal)
         signal.throwIfAborted()
         setUnreadCount(page.unreadCount)
+        showDesktopNotice(page)
         if (open) {
           setHistory((current) => prependLatest(current, page))
           setHeadFailed(false)
@@ -85,7 +155,7 @@ export function Notifications({ hrefFor, onOpen }: NotificationLinks) {
       document.removeEventListener('visibilitychange', resumeIfVisible)
       stop()
     }
-  }, [open, refresh])
+  }, [open, refresh, desktopEnabled])
 
   function refreshHead() {
     headRequest.current?.abort()
@@ -123,11 +193,24 @@ export function Notifications({ hrefFor, onOpen }: NotificationLinks) {
       if (event.defaultPrevented) return
       onOpen(event, projectId, target)
       if (event.defaultPrevented) close()
-    }} history={history} setHistory={setHistory} headFailed={headFailed} refreshHead={refreshHead} />}
+    }} history={history} setHistory={setHistory} headFailed={headFailed} refreshHead={refreshHead} desktopControls={
+      <div className="notification-desktop">
+        <p className="notification-meta" role="status">
+          {!supported ? '当前浏览器环境可使用站内通知。'
+            : permission === 'denied' ? '浏览器已禁止桌面通知。可在站点设置中修改权限，站内通知仍可使用。'
+              : desktopEnabled ? '当前标签页已开启桌面通知。' : '开启后，当前标签页可接收新的桌面通知。'}
+        </p>
+        {supported && <button className="button outline" type="button" disabled={askingPermission} onClick={() => void toggleDesktop()}>
+          {desktopEnabled ? '关闭桌面通知' : permission === 'denied' ? '检查通知权限' : '开启桌面通知'}
+        </button>}
+        {desktopError && <p className="form-error" role="alert">{desktopError}</p>}
+      </div>
+    } />}
   </details>
 }
 
-function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed, refreshHead }: NotificationLinks & {
+function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed, refreshHead, desktopControls }: NotificationLinks & {
+  desktopControls: ReactNode
   history?: History
   setHistory: Dispatch<SetStateAction<History | undefined>>
   headFailed: boolean
@@ -204,6 +287,7 @@ function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed,
   }
 
   return <div className="notification-history">
+    {desktopControls}
     {!!history?.items.length && <ol className="notification-list" aria-label="站内通知" role="list">
       {history.items.map((item) => {
         const target = item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
