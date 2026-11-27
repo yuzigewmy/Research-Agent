@@ -73,47 +73,12 @@ type cfaAccumulator struct {
 }
 
 func newCFA(options CFAOptions, header []string, byName map[string]int) (*cfaAccumulator, error) {
-	if len(options.Constructs) < minCFAConstructs || len(options.Constructs) > maxCFAConstructs {
-		return nil, errCFAConstructs
+	normalized, allIndices, slicesRange, err := normalizeConstructs(
+		options.Constructs, "cfa.constructs.columns", header, byName, errCFAConstructs, errCFANames,
+	)
+	if err != nil {
+		return nil, err
 	}
-	usedNames := make(map[string]bool, len(options.Constructs))
-	usedColumns := make(map[int]bool)
-	normalized := make([]CFAConstructOptions, len(options.Constructs))
-	var allIndices []int
-	slicesRange := make([][2]int, len(options.Constructs))
-
-	for i, c := range options.Constructs {
-		name := strings.TrimSpace(c.Name)
-		if name == "" || len(name) > maxValueBytes || !utf8.ValidString(name) {
-			return nil, errCFANames
-		}
-		nameKey := strings.ToLower(name)
-		if usedNames[nameKey] {
-			return nil, errCFANames
-		}
-		usedNames[nameKey] = true
-
-		if len(c.Columns) < minCFAItems || len(c.Columns) > maxCFAItems {
-			return nil, errCFAConstructs
-		}
-		indices, err := selectColumns(byName, "cfa.constructs.columns", c.Columns)
-		if err != nil || len(indices) != len(c.Columns) {
-			return nil, errCFAConstructs
-		}
-		start := len(allIndices)
-		cols := make([]string, len(indices))
-		for j, idx := range indices {
-			if usedColumns[idx] || excludeSummary(strings.ToLower(header[idx])) {
-				return nil, errCFAConstructs
-			}
-			usedColumns[idx] = true
-			cols[j] = header[idx]
-			allIndices = append(allIndices, idx)
-		}
-		slicesRange[i] = [2]int{start, len(allIndices)}
-		normalized[i] = CFAConstructOptions{Name: name, Columns: cols}
-	}
-
 	return &cfaAccumulator{
 		CFA: CFA{
 			CFAOptions: CFAOptions{Constructs: normalized},
@@ -145,28 +110,81 @@ func (a *cfaAccumulator) add(record []string) {
 
 func (a *cfaAccumulator) finish() *CFA {
 	result := &a.CFA
-	n := a.Included
+	cfaRes, _, unavailable := computeMeasurementModel(a.Constructs, a.constructSlices, a.rows, len(a.allIndices))
+	if unavailable != "" {
+		result.UnavailableReason = unavailable
+		return result
+	}
+	result.Result = cfaRes
+	return result
+}
+
+func normalizeConstructs(constructs []CFAConstructOptions, optionPath string, header []string, byName map[string]int, errConstructs, errNames error) ([]CFAConstructOptions, []int, [][2]int, error) {
+	if len(constructs) < minCFAConstructs || len(constructs) > maxCFAConstructs {
+		return nil, nil, nil, errConstructs
+	}
+	usedNames := make(map[string]bool, len(constructs))
+	usedColumns := make(map[int]bool)
+	normalized := make([]CFAConstructOptions, len(constructs))
+	var allIndices []int
+	slicesRange := make([][2]int, len(constructs))
+
+	for i, c := range constructs {
+		name := strings.TrimSpace(c.Name)
+		if name == "" || len(name) > maxValueBytes || !utf8.ValidString(name) {
+			return nil, nil, nil, errNames
+		}
+		nameKey := strings.ToLower(name)
+		if usedNames[nameKey] {
+			return nil, nil, nil, errNames
+		}
+		usedNames[nameKey] = true
+
+		if len(c.Columns) < minCFAItems || len(c.Columns) > maxCFAItems {
+			return nil, nil, nil, errConstructs
+		}
+		indices, err := selectColumns(byName, optionPath, c.Columns)
+		if err != nil || len(indices) != len(c.Columns) {
+			return nil, nil, nil, errConstructs
+		}
+		start := len(allIndices)
+		cols := make([]string, len(indices))
+		for j, idx := range indices {
+			if usedColumns[idx] || excludeSummary(strings.ToLower(header[idx])) {
+				return nil, nil, nil, errConstructs
+			}
+			usedColumns[idx] = true
+			cols[j] = header[idx]
+			allIndices = append(allIndices, idx)
+		}
+		slicesRange[i] = [2]int{start, len(allIndices)}
+		normalized[i] = CFAConstructOptions{Name: name, Columns: cols}
+	}
+	return normalized, allIndices, slicesRange, nil
+}
+
+// computeMeasurementModel estimates first-order standardized loadings, CR, AVE,
+// standardized latent scores (mean 0, sample std 1), and Fornell-Larcker correlation matrix.
+func computeMeasurementModel(constructs []CFAConstructOptions, constructSlices [][2]int, rows [][]float64, totalItems int) (*CFAResult, [][]float64, string) {
+	n := len(rows)
 	if n < 3 {
-		result.UnavailableReason = "INSUFFICIENT_ROWS"
-		return result
+		return nil, nil, "INSUFFICIENT_ROWS"
 	}
 
-	totalItems := len(a.allIndices)
-	fullCorr, means, stds, ok := pearsonCorrelationMatrix(a.rows, totalItems)
+	fullCorr, means, stds, ok := pearsonCorrelationMatrix(rows, totalItems)
 	if !ok {
-		result.UnavailableReason = "CONSTANT_COLUMN"
-		return result
+		return nil, nil, "CONSTANT_COLUMN"
 	}
 
-	numConstructs := len(a.Constructs)
+	numConstructs := len(constructs)
 	constructScores := make([][]float64, n)
 	for i := range n {
 		constructScores[i] = make([]float64, numConstructs)
 	}
 
 	constructResults := make([]CFAConstructResult, numConstructs)
-	for cIdx, c := range a.Constructs {
-		start, end := a.constructSlices[cIdx][0], a.constructSlices[cIdx][1]
+	for cIdx, c := range constructs {
+		start, end := constructSlices[cIdx][0], constructSlices[cIdx][1]
 		k := end - start
 		subCorr := make([][]float64, k)
 		for i := range k {
@@ -219,7 +237,7 @@ func (a *cfaAccumulator) finish() *CFA {
 		for i := range n {
 			var score float64
 			for j := range k {
-				z := (a.rows[i][start+j] - means[start+j]) / stds[start+j]
+				z := (rows[i][start+j] - means[start+j]) / stds[start+j]
 				score += weights[j] * z
 			}
 			constructScores[i][cIdx] = score
@@ -235,10 +253,17 @@ func (a *cfaAccumulator) finish() *CFA {
 		}
 	}
 
-	scoreCorr, _, _, ok := pearsonCorrelationMatrix(constructScores, numConstructs)
+	scoreCorr, scoreMeans, scoreStds, ok := pearsonCorrelationMatrix(constructScores, numConstructs)
 	if !ok {
-		result.UnavailableReason = "CONSTANT_CONSTRUCT"
-		return result
+		return nil, nil, "CONSTANT_CONSTRUCT"
+	}
+
+	stdScores := make([][]float64, n)
+	for i := range n {
+		stdScores[i] = make([]float64, numConstructs)
+		for cIdx := range numConstructs {
+			stdScores[i][cIdx] = (constructScores[i][cIdx] - scoreMeans[cIdx]) / scoreStds[cIdx]
+		}
 	}
 
 	allDiscriminant := true
@@ -259,10 +284,9 @@ func (a *cfaAccumulator) finish() *CFA {
 		}
 	}
 
-	result.Result = &CFAResult{
+	return &CFAResult{
 		Constructs:        constructResults,
 		CorrelationMatrix: scoreCorr,
 		DiscriminantValid: allDiscriminant,
-	}
-	return result
+	}, stdScores, ""
 }

@@ -41,6 +41,7 @@ type Options struct {
 	PSM                *PSMOptions                `json:"psm,omitempty"`
 	Conjoint           *ConjointOptions           `json:"conjoint,omitempty"`
 	CFA                *CFAOptions                `json:"cfa,omitempty"`
+	SEM                *SEMOptions                `json:"sem,omitempty"`
 	Sheet              string                     `json:"sheet,omitempty"`
 	WeightColumn       string                     `json:"weightColumn,omitempty"`
 	CategoryMappings   []CategoryMapping          `json:"categoryMappings,omitempty"`
@@ -86,6 +87,7 @@ type Report struct {
 	PSM                *PSM                `json:"psm,omitempty"`
 	Conjoint           *Conjoint           `json:"conjoint,omitempty"`
 	CFA                *CFA                `json:"cfa,omitempty"`
+	SEM                *SEM                `json:"sem,omitempty"`
 	Weighting          *Weighting          `json:"weighting,omitempty"`
 	PlanSource         *AnalysisPlanSource `json:"planSource,omitempty"`
 	Demo               bool                `json:"demo"`
@@ -188,21 +190,21 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	}
 	var reliability *reliabilityAccumulator
 	if options.Reliability != nil {
-		reliability, err = newReliability(*options.Reliability, header, byName)
+		reliability, err = newReliability(*options.Reliability, header, byName, options.WeightColumn != "")
 		if err != nil {
 			return Report{}, err
 		}
 	}
 	var regression *regressionAccumulator
 	if options.Regression != nil {
-		regression, err = newRegression(*options.Regression, header, byName)
+		regression, err = newRegression(*options.Regression, header, byName, options.WeightColumn != "")
 		if err != nil {
 			return Report{}, err
 		}
 	}
 	var multipleRegression *multipleRegressionAccumulator
 	if options.MultipleRegression != nil {
-		multipleRegression, err = newMultipleRegression(*options.MultipleRegression, header, byName)
+		multipleRegression, err = newMultipleRegression(*options.MultipleRegression, header, byName, options.WeightColumn != "")
 		if err != nil {
 			return Report{}, err
 		}
@@ -238,6 +240,13 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	var cfa *cfaAccumulator
 	if options.CFA != nil {
 		cfa, err = newCFA(*options.CFA, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var sem *semAccumulator
+	if options.SEM != nil {
+		sem, err = newSEM(*options.SEM, header, byName)
 		if err != nil {
 			return Report{}, err
 		}
@@ -321,8 +330,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 		case StatusValid:
 			report.Valid++
 			var weight uint64
+			wStatus := weightDisabled
 			if weights != nil {
-				weight = weights.add(record)
+				weight, wStatus = weights.add(record)
 			}
 			if crossTab != nil {
 				if err := crossTab.add(record, weight, mappings); err != nil {
@@ -330,13 +340,13 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 				}
 			}
 			if reliability != nil {
-				reliability.add(record)
+				reliability.add(record, weight, wStatus)
 			}
 			if regression != nil {
-				regression.add(record)
+				regression.add(record, weight, wStatus)
 			}
 			if multipleRegression != nil {
-				multipleRegression.add(record)
+				multipleRegression.add(record, weight, wStatus)
 			}
 			if factorAnalysis != nil {
 				factorAnalysis.add(record)
@@ -352,6 +362,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 			}
 			if cfa != nil {
 				cfa.add(record)
+			}
+			if sem != nil {
+				sem.add(record)
 			}
 			for i := range accumulators {
 				accumulators[i].add(record, weight, mappings)
@@ -398,6 +411,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	}
 	if cfa != nil {
 		report.CFA = cfa.finish()
+	}
+	if sem != nil {
+		report.SEM = sem.finish()
 	}
 	if weights != nil {
 		report.Weighting = weights.finish()

@@ -253,6 +253,16 @@ function ReportReliability({ summaries, result, busy, error, onCalculate }: {
       <p className="survey-note">本次题项 <bdi>{result.columns.join('、')}</bdi></p>
       <p className="survey-note">纳入 {result.included} 份，缺失 {result.missing} 份，非数值 {result.nonNumeric} 份。</p>
       {result.alpha === undefined && <p className="survey-note">计算需要至少两份完整数值答卷，且总分须有变异。</p>}
+      {result.weighted && <div className="survey-section" data-survey-reliability-weighted>
+        <strong>
+          {result.weighted.alpha === undefined
+            ? '加权 Cronbach α 无法计算'
+            : `加权 Cronbach α ${numberFormat.format(result.weighted.alpha)}`}
+        </strong>
+        <p className="survey-note">
+          加权纳入 {result.weighted.included} 份，权重合计 {numberFormat.format(result.weighted.weightSum)}，缺失权重 {result.weighted.missingWeight} 份，无效权重 {result.weighted.invalidWeight} 份。
+        </p>
+      </div>}
     </div>}
     {columns.length >= 2 ? <>
       <p className="survey-note" id={`${id}-help`}>

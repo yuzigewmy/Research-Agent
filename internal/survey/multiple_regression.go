@@ -38,25 +38,44 @@ type MultipleRegressionFit struct {
 	DFResidual       int                             `json:"dfResidual"`
 }
 
-// MultipleRegression reports OLS regression over complete finite rows among valid responses.
-type MultipleRegression struct {
-	MultipleRegressionOptions
+// WeightedMultipleRegression reports WLS multiple linear regression over complete
+// finite rows with valid positive weights.
+type WeightedMultipleRegression struct {
 	Included          int                    `json:"included"`
-	Missing           int                    `json:"missing"`
-	NonNumeric        int                    `json:"nonNumeric"`
+	WeightSum         float64                `json:"weightSum"`
+	MissingWeight     int                    `json:"missingWeight"`
+	InvalidWeight     int                    `json:"invalidWeight"`
 	Fit               *MultipleRegressionFit `json:"fit,omitempty"`
 	UnavailableReason string                 `json:"unavailableReason,omitempty"`
 }
 
-type multipleRegressionAccumulator struct {
-	MultipleRegression
-	yIndex   int
-	xIndices []int
-	rows     [][]float64
-	yValues  []float64
+// MultipleRegression reports OLS regression over complete finite rows among valid responses.
+type MultipleRegression struct {
+	MultipleRegressionOptions
+	Included          int                         `json:"included"`
+	Missing           int                         `json:"missing"`
+	NonNumeric        int                         `json:"nonNumeric"`
+	Fit               *MultipleRegressionFit      `json:"fit,omitempty"`
+	UnavailableReason string                      `json:"unavailableReason,omitempty"`
+	Weighted          *WeightedMultipleRegression `json:"weighted,omitempty"`
 }
 
-func newMultipleRegression(options MultipleRegressionOptions, header []string, byName map[string]int) (*multipleRegressionAccumulator, error) {
+type multipleRegressionAccumulator struct {
+	MultipleRegression
+	yIndex          int
+	xIndices        []int
+	rows            [][]float64
+	yValues         []float64
+	weightedEnabled bool
+	weightedRows    [][]float64
+	weightedY       []float64
+	weightedWeights []float64
+	weightedUnits   uint64
+	missingWeight   int
+	invalidWeight   int
+}
+
+func newMultipleRegression(options MultipleRegressionOptions, header []string, byName map[string]int, weighted bool) (*multipleRegressionAccumulator, error) {
 	if len(options.PredictorColumns) < minMultipleRegressionPredictors || len(options.PredictorColumns) > maxMultipleRegressionPredictors {
 		return nil, errMultipleRegressionColumns
 	}
@@ -83,12 +102,13 @@ func newMultipleRegression(options MultipleRegressionOptions, header []string, b
 				PredictorColumns: predictors,
 			},
 		},
-		yIndex:   yIndex,
-		xIndices: xIndices,
+		yIndex:          yIndex,
+		xIndices:        xIndices,
+		weightedEnabled: weighted,
 	}, nil
 }
 
-func (a *multipleRegressionAccumulator) add(record []string) {
+func (a *multipleRegressionAccumulator) add(record []string, weight uint64, wStatus weightStatus) {
 	if fieldAt(record, a.yIndex) == "" {
 		a.Missing++
 		return
@@ -116,42 +136,81 @@ func (a *multipleRegressionAccumulator) add(record []string) {
 	a.Included++
 	a.yValues = append(a.yValues, y)
 	a.rows = append(a.rows, xs)
+	if a.weightedEnabled {
+		switch wStatus {
+		case weightValid:
+			a.weightedRows = append(a.weightedRows, xs)
+			a.weightedY = append(a.weightedY, y)
+			a.weightedWeights = append(a.weightedWeights, weightUnitsToFloat(weight))
+			a.weightedUnits += weight
+		case weightMissing:
+			a.missingWeight++
+		case weightInvalid:
+			a.invalidWeight++
+		}
+	}
 }
 
 func (a *multipleRegressionAccumulator) finish() *MultipleRegression {
 	result := &a.MultipleRegression
-	n := a.Included
-	k := len(a.xIndices)
-	if n < k+2 {
-		result.UnavailableReason = "INSUFFICIENT_ROWS"
-		return result
+	result.Fit, result.UnavailableReason = fitLinearRegression(a.rows, a.yValues, nil, a.PredictorColumns)
+	if a.weightedEnabled {
+		wRes := &WeightedMultipleRegression{
+			Included:      len(a.weightedRows),
+			WeightSum:     weightUnitsToFloat(a.weightedUnits),
+			MissingWeight: a.missingWeight,
+			InvalidWeight: a.invalidWeight,
+		}
+		wRes.Fit, wRes.UnavailableReason = fitLinearRegression(a.weightedRows, a.weightedY, a.weightedWeights, a.PredictorColumns)
+		result.Weighted = wRes
+	}
+	return result
+}
+
+// fitLinearRegression solves OLS (weights == nil) or WLS (weights > 0) with intercept
+// for k >= 1 predictors using weighted centering and Householder QR.
+func fitLinearRegression(rows [][]float64, yValues []float64, weights []float64, predictorNames []string) (*MultipleRegressionFit, string) {
+	n := len(rows)
+	k := len(predictorNames)
+	if k == 0 || n < k+2 {
+		return nil, "INSUFFICIENT_ROWS"
 	}
 
-	// Center and scale predictors for numerical stability, then transform back.
 	meanX := make([]float64, k)
-	var meanY float64
+	var meanY, wSum float64
 	for i := range n {
-		meanY += a.yValues[i]
+		w := 1.0
+		if weights != nil {
+			w = weights[i]
+		}
+		wSum += w
+		meanY += w * yValues[i]
 		for j := range k {
-			meanX[j] += a.rows[i][j]
+			meanX[j] += w * rows[i][j]
 		}
 	}
-	meanY /= float64(n)
+	if wSum <= 0 || math.IsNaN(wSum) || math.IsInf(wSum, 0) {
+		return nil, "INSUFFICIENT_ROWS"
+	}
+	meanY /= wSum
 	for j := range k {
-		meanX[j] /= float64(n)
+		meanX[j] /= wSum
 	}
 
 	scaleX := make([]float64, k)
 	for i := range n {
+		w := 1.0
+		if weights != nil {
+			w = weights[i]
+		}
 		for j := range k {
-			d := a.rows[i][j] - meanX[j]
-			scaleX[j] += d * d
+			d := rows[i][j] - meanX[j]
+			scaleX[j] += w * d * d
 		}
 	}
 	for j := range k {
 		if scaleX[j] <= 0 || math.IsNaN(scaleX[j]) || math.IsInf(scaleX[j], 0) {
-			result.UnavailableReason = "COLLINEAR_PREDICTORS"
-			return result
+			return nil, "COLLINEAR_PREDICTORS"
 		}
 		scaleX[j] = math.Sqrt(scaleX[j])
 	}
@@ -160,28 +219,32 @@ func (a *multipleRegressionAccumulator) finish() *MultipleRegression {
 	dy := make([]float64, n)
 	var tss float64
 	for i := range n {
+		w := 1.0
+		sqrtW := 1.0
+		if weights != nil {
+			w = weights[i]
+			sqrtW = math.Sqrt(w)
+		}
 		z[i] = make([]float64, k)
 		for j := range k {
-			z[i][j] = (a.rows[i][j] - meanX[j]) / scaleX[j]
+			z[i][j] = sqrtW * (rows[i][j] - meanX[j]) / scaleX[j]
 		}
-		dy[i] = a.yValues[i] - meanY
-		tss += dy[i] * dy[i]
+		diffY := yValues[i] - meanY
+		dy[i] = sqrtW * diffY
+		tss += w * diffY * diffY
 	}
 
 	r, qty, ok := householderQR(z, dy)
 	if !ok {
-		result.UnavailableReason = "COLLINEAR_PREDICTORS"
-		return result
+		return nil, "COLLINEAR_PREDICTORS"
 	}
 	gamma, ok := solveUpperTriangular(r, qty)
 	if !ok {
-		result.UnavailableReason = "COLLINEAR_PREDICTORS"
-		return result
+		return nil, "COLLINEAR_PREDICTORS"
 	}
 	rInv, ok := invertUpperTriangular(r)
 	if !ok {
-		result.UnavailableReason = "COLLINEAR_PREDICTORS"
-		return result
+		return nil, "COLLINEAR_PREDICTORS"
 	}
 
 	betas := make([]float64, k)
@@ -190,27 +253,28 @@ func (a *multipleRegressionAccumulator) finish() *MultipleRegression {
 		betas[j] = gamma[j] / scaleX[j]
 		intercept -= betas[j] * meanX[j]
 		if math.IsNaN(betas[j]) || math.IsInf(betas[j], 0) {
-			result.UnavailableReason = "OUT_OF_RANGE"
-			return result
+			return nil, "OUT_OF_RANGE"
 		}
 	}
 	if math.IsNaN(intercept) || math.IsInf(intercept, 0) {
-		result.UnavailableReason = "OUT_OF_RANGE"
-		return result
+		return nil, "OUT_OF_RANGE"
 	}
 
 	var rss float64
 	for i := range n {
+		w := 1.0
+		if weights != nil {
+			w = weights[i]
+		}
 		pred := intercept
 		for j := range k {
-			pred += betas[j] * a.rows[i][j]
+			pred += betas[j] * rows[i][j]
 		}
-		resid := a.yValues[i] - pred
-		rss += resid * resid
+		resid := yValues[i] - pred
+		rss += w * resid * resid
 	}
 	if math.IsNaN(rss) || math.IsInf(rss, 0) {
-		result.UnavailableReason = "OUT_OF_RANGE"
-		return result
+		return nil, "OUT_OF_RANGE"
 	}
 
 	dfModel := k
@@ -234,14 +298,14 @@ func (a *multipleRegressionAccumulator) finish() *MultipleRegression {
 		}
 	}
 
-	// Var(intercept) = sigma^2 * (1/n + meanX^T * C * meanX).
+	// Var(intercept) = sigma^2 * (1/wSum + meanX^T * C * meanX).
 	var quadForm float64
 	for i := range k {
 		for j := range k {
 			quadForm += meanX[i] * cov[i][j] * meanX[j]
 		}
 	}
-	interceptSE := math.Sqrt(max(0, sigmaSq*(1.0/float64(n)+quadForm)))
+	interceptSE := math.Sqrt(max(0, sigmaSq*(1.0/wSum+quadForm)))
 	interceptCoef := MultipleRegressionCoefficient{
 		Name:        "截距",
 		Coefficient: intercept,
@@ -258,7 +322,7 @@ func (a *multipleRegressionAccumulator) finish() *MultipleRegression {
 	for j := range k {
 		se := math.Sqrt(max(0, sigmaSq*cov[j][j]))
 		entry := MultipleRegressionCoefficient{
-			Name:        a.PredictorColumns[j],
+			Name:        predictorNames[j],
 			Coefficient: betas[j],
 			StdError:    se,
 		}
@@ -291,6 +355,5 @@ func (a *multipleRegressionAccumulator) finish() *MultipleRegression {
 			}
 		}
 	}
-	result.Fit = fit
-	return result
+	return fit, ""
 }

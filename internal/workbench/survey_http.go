@@ -25,6 +25,7 @@ type surveyCreateInput struct {
 		PSM                *survey.PSMOptions                `json:"psm"`
 		Conjoint           *survey.ConjointOptions           `json:"conjoint"`
 		CFA                *survey.CFAOptions                `json:"cfa"`
+		SEM                *survey.SEMOptions                `json:"sem"`
 		Sheet              string                            `json:"sheet"`
 		WeightColumn       string                            `json:"weightColumn"`
 		CategoryMappings   []survey.CategoryMapping          `json:"categoryMappings"`
@@ -98,6 +99,7 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 		PSM:                input.Options.PSM,
 		Conjoint:           input.Options.Conjoint,
 		CFA:                input.Options.CFA,
+		SEM:                input.Options.SEM,
 		Sheet:              input.Options.Sheet,
 		WeightColumn:       input.Options.WeightColumn,
 		CategoryMappings:   input.Options.CategoryMappings,

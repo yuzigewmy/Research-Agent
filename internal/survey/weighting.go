@@ -27,25 +27,38 @@ type weightAccumulator struct {
 	units uint64
 }
 
-func (w *weightAccumulator) add(record []string) uint64 {
+type weightStatus uint8
+
+const (
+	weightDisabled weightStatus = iota
+	weightValid
+	weightMissing
+	weightInvalid
+)
+
+func (w *weightAccumulator) add(record []string) (uint64, weightStatus) {
 	value := fieldAt(record, w.index)
 	if value == "" {
 		w.Missing++
-		return 0
+		return 0, weightMissing
 	}
 	if !weightDecimal.MatchString(value) {
 		w.Invalid++
-		return 0
+		return 0, weightInvalid
 	}
 	whole, fraction, _ := strings.Cut(value, ".")
 	units, err := strconv.ParseUint(whole+fraction+strings.Repeat("0", 6-len(fraction)), 10, 64)
 	if err != nil || units == 0 || units > maxWeight {
 		w.Invalid++
-		return 0
+		return 0, weightInvalid
 	}
 	w.Included++
 	w.units += units
-	return units
+	return units, weightValid
+}
+
+func weightUnitsToFloat(units uint64) float64 {
+	return float64(units) / float64(weightScale)
 }
 
 func (w *weightAccumulator) finish() *Weighting {

@@ -111,6 +111,17 @@ func MapSettings(source Options, sourceColumns, targetColumns []string, fields [
 		}
 		result.CFA = &CFAOptions{Constructs: constructs}
 	}
+	if sem := source.SEM; sem != nil {
+		constructs := make([]CFAConstructOptions, len(sem.Constructs))
+		for i, c := range sem.Constructs {
+			constructs[i] = CFAConstructOptions{
+				Name:    c.Name,
+				Columns: translateList(c.Columns),
+			}
+		}
+		paths := append([]SEMPathOptions(nil), sem.Paths...)
+		result.SEM = &SEMOptions{Constructs: constructs, Paths: paths}
+	}
 	for _, rule := range source.CategoryMappings {
 		rule.Column = translate(rule.Column)
 		result.CategoryMappings = append(result.CategoryMappings, rule)

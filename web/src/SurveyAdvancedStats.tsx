@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import {
   cfaConstructLimit, cfaItemLimit, conjointAttributeLimit, factorAnalysisColumnLimit,
-  multipleRegressionPredictorLimit,
+  multipleRegressionPredictorLimit, semPathLimit,
 } from './surveys'
 import type {
   SurveyCFA, SurveyCFAConstructOptions, SurveyCFAOptions,
@@ -9,7 +9,8 @@ import type {
   SurveyFactorAnalysis, SurveyFactorAnalysisOptions,
   SurveyKano, SurveyKanoOptions,
   SurveyMultipleRegression, SurveyMultipleRegressionOptions,
-  SurveyOptions, SurveyPSM, SurveyPSMOptions, SurveyReport, SurveySummary,
+  SurveyOptions, SurveyPSM, SurveyPSMOptions, SurveyReport,
+  SurveySEM, SurveySEMOptions, SurveySEMPathOptions, SurveySummary,
 } from './surveys'
 
 export type AdvancedStatMethod =
@@ -19,6 +20,7 @@ export type AdvancedStatMethod =
   | 'psm'
   | 'conjoint'
   | 'cfa'
+  | 'sem'
 
 const numberFormat = new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 6 })
 const scientificFormat = new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 4, notation: 'scientific' })
@@ -92,6 +94,34 @@ function MultipleRegressionView({ columns, result, busy, onCalculate }: {
           </table>
         </div>
       </> : <p className="survey-note">{unavailableText(result.unavailableReason)}</p>}
+      {result.weighted && <div className="survey-section" data-survey-mr-weighted>
+        <p className="survey-note">
+          <strong>加权多元线性回归（WLS）</strong>：纳入 {result.weighted.included} 份，权重合计 {fmtNum(result.weighted.weightSum)}，缺失权重 {result.weighted.missingWeight} 份，无效权重 {result.weighted.invalidWeight} 份。
+        </p>
+        {result.weighted.fit ? <>
+          <dl className="survey-counts" aria-label="加权多元线性回归汇总">
+            {result.weighted.fit.rSquared !== undefined && <div><dt>加权 R²</dt><dd>{fmtNum(result.weighted.fit.rSquared)}</dd></div>}
+            {result.weighted.fit.adjustedRSquared !== undefined && <div><dt>加权调整 R²</dt><dd>{fmtNum(result.weighted.fit.adjustedRSquared)}</dd></div>}
+            {result.weighted.fit.fStat !== undefined && <div><dt>加权 F 值</dt><dd>{fmtNum(result.weighted.fit.fStat)}</dd></div>}
+            <div><dt>自由度</dt><dd>{result.weighted.fit.dfModel} / {result.weighted.fit.dfResidual}</dd></div>
+          </dl>
+          <div className="survey-cross-tab-table" role="region" aria-label="加权多元线性回归系数表" tabIndex={0}>
+            <table>
+              <thead><tr>
+                <th scope="col">变量</th><th scope="col">加权系数</th><th scope="col">标准误</th><th scope="col">t 值</th>
+              </tr></thead>
+              <tbody>
+                {[result.weighted.fit.intercept, ...result.weighted.fit.predictors].map((item) => <tr key={item.name}>
+                  <th scope="row" dir="auto">{item.name}</th>
+                  <td>{fmtNum(item.coefficient)}</td>
+                  <td>{fmtNum(item.stdError)}</td>
+                  <td>{item.tStat === undefined ? '—' : fmtNum(item.tStat)}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </> : <p className="survey-note">{unavailableText(result.weighted.unavailableReason)}</p>}
+      </div>}
     </div>}
     {columns.length >= 3 ? <>
       <div className="field">
@@ -511,6 +541,218 @@ function CFAView({ columns, result, busy, onCalculate }: {
   </div>
 }
 
+function hasSemCycle(names: string[], paths: SurveySEMPathOptions[]): boolean {
+  const indexByName = new Map<string, number>()
+  names.forEach((n, i) => indexByName.set(n.toLowerCase(), i))
+  const inDegree = new Array<number>(names.length).fill(0)
+  const adj: number[][] = Array.from({ length: names.length }, () => [])
+  for (const p of paths) {
+    const u = indexByName.get(p.from.trim().toLowerCase())
+    const v = indexByName.get(p.to.trim().toLowerCase())
+    if (u === undefined || v === undefined) continue
+    if (u === v) return true
+    adj[u].push(v)
+    inDegree[v]++
+  }
+  const queue: number[] = []
+  for (let i = 0; i < names.length; i++) if (inDegree[i] === 0) queue.push(i)
+  let visited = 0
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    visited++
+    for (const nxt of adj[cur]) {
+      inDegree[nxt]--
+      if (inDegree[nxt] === 0) queue.push(nxt)
+    }
+  }
+  return visited !== names.length
+}
+
+function SEMView({ columns, result, busy, onCalculate }: {
+  columns: string[]
+  result?: SurveySEM
+  busy: boolean
+  onCalculate: (opts: SurveySEMOptions) => void
+}) {
+  const id = useId()
+  const [constructs, setConstructs] = useState<SurveyCFAConstructOptions[]>(() =>
+    result?.constructs?.length ? result.constructs : [
+      { name: '潜变量 1', columns: [] },
+      { name: '潜变量 2', columns: [] },
+    ],
+  )
+  const [paths, setPaths] = useState<SurveySEMPathOptions[]>(() =>
+    result?.paths?.length ? result.paths : [{ from: '潜变量 1', to: '潜变量 2' }],
+  )
+  const usedCols = new Map<string, number>()
+  constructs.forEach((c, idx) => {
+    for (const col of c.columns) usedCols.set(col, idx)
+  })
+  const names = constructs.map((c) => c.name.trim())
+  const uniqueNames = new Set(names.map((n) => n.toLowerCase()))
+  const validNameSet = new Set(names.filter(Boolean).map((n) => n.toLowerCase()))
+  const edgeKeys = new Set<string>()
+  let pathsValid = paths.length >= 1 && paths.length <= semPathLimit
+  for (const p of paths) {
+    const fk = p.from.trim().toLowerCase()
+    const tk = p.to.trim().toLowerCase()
+    const key = `${fk}->${tk}`
+    if (!fk || !tk || fk === tk || !validNameSet.has(fk) || !validNameSet.has(tk) || edgeKeys.has(key)) {
+      pathsValid = false
+      break
+    }
+    edgeKeys.add(key)
+  }
+  const cyclic = pathsValid && hasSemCycle(names, paths)
+  const canRun = !busy && constructs.length >= 2 && constructs.length <= cfaConstructLimit
+    && names.every((n) => n.length > 0) && uniqueNames.size === constructs.length
+    && constructs.every((c) => c.columns.length >= 2 && c.columns.length <= cfaItemLimit)
+    && pathsValid && !cyclic
+
+  return <div className="survey-section" data-survey-adv-panel="sem">
+    {result && <div className="survey-section" role="status" data-survey-adv-result="sem">
+      <p className="survey-note">
+        纳入 {result.included} 份，缺失 {result.missing} 份，非数值 {result.nonNumeric} 份。
+      </p>
+      {result.result ? <>
+        <div className="survey-cross-tab-table" role="region" aria-label="SEM 结构路径系数表" tabIndex={0}>
+          <table>
+            <thead><tr>
+              <th scope="col">路径（From → To）</th><th scope="col">标准化系数 β</th><th scope="col">标准误</th><th scope="col">t 值</th>
+            </tr></thead>
+            <tbody>{result.result.paths.map((p) => <tr key={`${p.from}->${p.to}`}>
+              <th scope="row" dir="auto">{p.from} → {p.to}</th>
+              <td>{fmtNum(p.beta)}</td>
+              <td>{fmtNum(p.stdError)}</td>
+              <td>{p.tStat === undefined ? '—' : fmtNum(p.tStat)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div className="survey-cross-tab-table" role="region" aria-label="内生潜变量解释度" tabIndex={0}>
+          <table>
+            <thead><tr>
+              <th scope="col">内生潜变量</th><th scope="col">前驱潜变量</th><th scope="col">样本量</th><th scope="col">R²</th><th scope="col">调整 R²</th>
+            </tr></thead>
+            <tbody>{result.result.endogenous.map((e) => <tr key={e.construct}>
+              <th scope="row" dir="auto">{e.construct}</th>
+              <td dir="auto">{e.predictors.join('、')}</td>
+              <td>{e.included}</td>
+              <td>{e.rSquared === undefined ? '—' : fmtNum(e.rSquared)}</td>
+              <td>{e.adjustedRSquared === undefined ? '—' : fmtNum(e.adjustedRSquared)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div className="survey-cross-tab-table" role="region" aria-label="SEM 测量模型收敛与区分效度" tabIndex={0}>
+          <table>
+            <thead><tr>
+              <th scope="col">潜变量</th><th scope="col">CR</th><th scope="col">AVE</th><th scope="col">√AVE</th><th scope="col">收敛效度</th><th scope="col">区分效度</th><th scope="col">观测项标准化载荷</th>
+            </tr></thead>
+            <tbody>{result.result.constructs.map((c) => <tr key={c.name}>
+              <th scope="row" dir="auto">{c.name}</th>
+              <td>{fmtNum(c.cr)}</td>
+              <td>{fmtNum(c.ave)}</td>
+              <td>{fmtNum(c.sqrtAve)}</td>
+              <td>{c.convergentValid ? '达标' : '偏低'}</td>
+              <td>{c.discriminantValid ? '通过' : '未通过'}</td>
+              <td dir="auto">{c.items.map((it) => `${it.column}: ${fmtNum(it.loading)}`).join('；')}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      </> : <p className="survey-note">{unavailableText(result.unavailableReason)}</p>}
+    </div>}
+    {columns.length >= 4 ? <>
+      {constructs.map((construct, index) => <div className="survey-adv-construct" key={index}>
+        <div className="survey-heading">
+          <div className="field">
+            <label htmlFor={`${id}-sem-c-${index}`}>潜变量 {index + 1} 名称</label>
+            <input id={`${id}-sem-c-${index}`} data-survey-sem-name={index} type="text" maxLength={128} disabled={busy}
+              value={construct.name} onChange={(e) => {
+                const prevName = construct.name
+                const val = e.currentTarget.value
+                setConstructs((cur) => cur.map((item, i) => i === index ? { ...item, name: val } : item))
+                setPaths((cur) => cur.map((p) => ({
+                  from: p.from === prevName ? val : p.from,
+                  to: p.to === prevName ? val : p.to,
+                })))
+              }} />
+          </div>
+          {constructs.length > 2 && <button type="button" className="button outline" disabled={busy}
+            onClick={() => {
+              const removed = construct.name
+              setConstructs((cur) => cur.filter((_, i) => i !== index))
+              setPaths((cur) => cur.filter((p) => p.from !== removed && p.to !== removed))
+            }}>移除</button>}
+        </div>
+        <fieldset className="survey-scale-items" disabled={busy}>
+          <legend>观测题项（已选 {construct.columns.length} 项，需 2 至 {cfaItemLimit} 项）</legend>
+          {columns.map((col) => {
+            const owner = usedCols.get(col)
+            const checked = construct.columns.includes(col)
+            const blocked = (owner !== undefined && owner !== index) || (!checked && construct.columns.length >= cfaItemLimit)
+            return <label key={col}>
+              <input type="checkbox" data-survey-sem-col={`${index}:${col}`} checked={checked} disabled={blocked}
+                onChange={(e) => {
+                  const isChecked = e.currentTarget.checked
+                  setConstructs((cur) => cur.map((item, i) => i === index
+                    ? { ...item, columns: isChecked ? [...item.columns, col] : item.columns.filter((x) => x !== col) }
+                    : item))
+                }} />
+              <bdi>{col}</bdi>
+            </label>
+          })}
+        </fieldset>
+      </div>)}
+      <div className="survey-section">
+        <p className="survey-note">有向结构路径（1 至 {semPathLimit} 条，须构成无环有向图 DAG）：</p>
+        {paths.map((p, idx) => <div className="survey-cross-tab-fields" key={idx}>
+          <div className="field">
+            <label htmlFor={`${id}-sem-from-${idx}`}>路径 {idx + 1} 起点</label>
+            <select id={`${id}-sem-from-${idx}`} data-survey-sem-from={idx} value={p.from} disabled={busy}
+              onChange={(e) => {
+                const val = e.currentTarget.value
+                setPaths((cur) => cur.map((item, i) => i === idx ? { ...item, from: val } : item))
+              }}>
+              <option value="">请选择起点潜变量</option>
+              {names.filter(Boolean).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-sem-to-${idx}`}>路径 {idx + 1} 终点</label>
+            <select id={`${id}-sem-to-${idx}`} data-survey-sem-to={idx} value={p.to} disabled={busy}
+              onChange={(e) => {
+                const val = e.currentTarget.value
+                setPaths((cur) => cur.map((item, i) => i === idx ? { ...item, to: val } : item))
+              }}>
+              <option value="">请选择终点潜变量</option>
+              {names.filter(Boolean).map((n) => <option key={n} value={n} disabled={n === p.from}>{n}</option>)}
+            </select>
+          </div>
+          {paths.length > 1 && <button type="button" className="button outline" disabled={busy}
+            onClick={() => setPaths((cur) => cur.filter((_, i) => i !== idx))}>删除路径</button>}
+        </div>)}
+        {cyclic && <p className="form-error" role="alert">当前路径存在环路或自环，请调整为有向无环图（DAG）。</p>}
+      </div>
+      <div className="survey-actions">
+        {constructs.length < cfaConstructLimit && <button type="button" className="button outline" data-survey-sem-add-construct disabled={busy}
+          onClick={() => setConstructs((cur) => [...cur, { name: `潜变量 ${cur.length + 1}`, columns: [] }])}>
+          添加潜变量
+        </button>}
+        {paths.length < semPathLimit && <button type="button" className="button outline" data-survey-sem-add-path disabled={busy}
+          onClick={() => setPaths((cur) => [...cur, { from: names[0] ?? '', to: names[1] ?? '' }])}>
+          添加路径
+        </button>}
+        <button type="button" className="button outline" data-survey-sem-submit disabled={!canRun}
+          onClick={() => onCalculate({
+            constructs: constructs.map((c) => ({ name: c.name.trim(), columns: c.columns })),
+            paths: paths.map((p) => ({ from: p.from.trim(), to: p.to.trim() })),
+          })}>
+          计算结构方程路径
+        </button>
+      </div>
+    </> : <p className="survey-note">至少需要 4 个可统计字段（2 个潜变量，各 2 个观测题项）。</p>}
+  </div>
+}
+
 const tabs: { id: AdvancedStatMethod; label: string; hasResult: (report: SurveyReport) => boolean }[] = [
   { id: 'multiple-regression', label: '多元线性回归', hasResult: (r) => !!r.multipleRegression },
   { id: 'factor-analysis', label: '效度与因子分析', hasResult: (r) => !!r.factorAnalysis },
@@ -518,6 +760,7 @@ const tabs: { id: AdvancedStatMethod; label: string; hasResult: (report: SurveyR
   { id: 'psm', label: 'PSM 价格敏感度', hasResult: (r) => !!r.psm },
   { id: 'conjoint', label: '联合分析', hasResult: (r) => !!r.conjoint },
   { id: 'cfa', label: '基础 CFA 效度', hasResult: (r) => !!r.cfa },
+  { id: 'sem', label: '结构方程路径', hasResult: (r) => !!r.sem },
 ]
 
 export function ReportAdvancedStats({
@@ -561,6 +804,8 @@ export function ReportAdvancedStats({
         onCalculate={(conjoint) => onCalculate({ conjoint }, 'conjoint')} />}
       {activeTab === 'cfa' && <CFAView columns={columns} result={report.cfa} busy={busy}
         onCalculate={(cfa) => onCalculate({ cfa }, 'cfa')} />}
+      {activeTab === 'sem' && <SEMView columns={columns} result={report.sem} busy={busy}
+        onCalculate={(sem) => onCalculate({ sem }, 'sem')} />}
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>
   </details>
