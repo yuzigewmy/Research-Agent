@@ -106,6 +106,7 @@ const zhMessages = {
 
   'panel.administration': '项目管理',
   'panel.memorySummary': '研究记忆与来源链',
+  'panel.backgroundTasks': '后台任务',
   'panel.conversation': '项目对话',
   'panel.researchPlan': '研究计划',
   'panel.turnTasks': '此对话的任务',
@@ -247,6 +248,7 @@ const enMessages: Record<I18nKey, string> = {
 
   'panel.administration': 'Project Administration',
   'panel.memorySummary': 'Research Memory & Provenance',
+  'panel.backgroundTasks': 'Background Tasks',
   'panel.conversation': 'Conversation',
   'panel.researchPlan': 'Research Plan',
   'panel.turnTasks': 'Tasks for This Turn',
