@@ -3,6 +3,7 @@ import { Conversation } from './Conversation'
 import { DiagramPanel } from './DiagramPanel'
 import { EngineeringPreview } from './EngineeringPreview'
 import { LiteraturePanel } from './LiteraturePanel'
+import { isPDFEvidenceReference } from './ManuscriptPDFEvidence'
 import { MaterialPanel } from './MaterialPanel'
 import type { ReviewLink } from './notificationApi'
 import { ProjectAdministration } from './ProjectAdministration'
@@ -225,7 +226,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
       <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} onReportSaved={addWorkspacePath} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
-        onManuscriptSelection={addManuscriptSelection} />
+        onManuscriptSelection={addManuscriptSelection} pdfReferences={references.filter(isPDFEvidenceReference)} />
       {project.templateId === 'engineering_project' && (
         <EngineeringPreview key={`${project.projectId}:${project.status}`} projectId={project.projectId}
           archived={project.status === 'ARCHIVED'} />

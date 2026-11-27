@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, ComponentProps, FormEvent } from 'react'
 import { ManuscriptEvidence } from './ManuscriptEvidence'
+import { ManuscriptPDFEvidence } from './ManuscriptPDFEvidence'
+import type { PDFEvidenceReference } from './ManuscriptPDFEvidence'
 import { ManuscriptReview } from './ManuscriptReview'
 import { MarkdownPreview } from './MarkdownPreview'
 import { SelectionEdit } from './SelectionEdit'
@@ -151,6 +153,7 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
     {markdownExtension.test(document.path) && <>
       <MarkdownPreview file={document} />
       <ManuscriptEvidence projectId={projectId} versionId={document.versionId} readOnly />
+      <ManuscriptPDFEvidence projectId={projectId} versionId={document.versionId} readOnly />
     </>}
     {!isCurrent && document.content.trim() && markdownExtension.test(document.path) && <>
       <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
@@ -219,13 +222,14 @@ type WorkspaceProps = {
   manuscriptIntake?: boolean
   manuscriptSelections: readonly ManuscriptSelection[]
   onManuscriptSelection: (selection: ManuscriptSelection) => void
+  pdfReferences: readonly PDFEvidenceReference[]
 }
 
 export function WorkspacePanel(props: WorkspaceProps) {
   return <ProjectWorkspace key={props.projectId} {...props} />
 }
 
-function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscriptSelections, onManuscriptSelection }: WorkspaceProps) {
+function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscriptSelections, onManuscriptSelection, pdfReferences }: WorkspaceProps) {
   const id = useId()
   const load = useCallback((signal: AbortSignal, cursor?: string, search?: string) => listFiles(projectId, signal, cursor, undefined, search), [projectId])
   const page = useFilePage(load, 'path')
@@ -582,6 +586,8 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
         <MarkdownPreview key={document.versionId} file={document} />
         <ManuscriptEvidence projectId={projectId} versionId={document.versionId}
           selection={selectedQuote} blockReason={restoreBlocked} />
+        <ManuscriptPDFEvidence projectId={projectId} versionId={document.versionId}
+          references={pdfReferences} selection={selectedQuote} blockReason={restoreBlocked} />
       </>}
       {isMarkdown && document.content.trim() && <>
         <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
