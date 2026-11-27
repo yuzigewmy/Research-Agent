@@ -12,7 +12,29 @@ export const templates = {
   engineering_project: '工程项目',
   experiment: '实验计划',
   automatic_review: '多轮审稿',
+  full_research: '科研全流程',
+  chinese_paper: '中文论文',
+  humanities_paper: '人文社科论文',
+  thesis: '学位论文',
+  existing_materials: '已有材料成稿',
+  market_research: '市场调查',
+  math_modeling: '数学建模竞赛',
+  big_data_contest: '大数据竞赛',
 } as const
+
+export const projectStartModeLabels = {
+  save_only: '仅保存项目（默认）',
+  start_workflow: '创建后立即启动工作流',
+  collaborate: '创建后进入对话协同',
+} as const
+
+export type ProjectStartMode = keyof typeof projectStartModeLabels
+
+export const projectStartModeHelp: Record<ProjectStartMode, string> = {
+  save_only: '仅保存项目设置，进入项目详情后再决定下一步。',
+  start_workflow: '创建后按默认参数立即启动工作流，并在项目详情呈现运行状态。',
+  collaborate: '自动将默认协作设为「建议任务，确认后运行」，并聚焦到对话区。',
+}
 
 export type TemplateId = keyof typeof templates
 export type CourseTemplateId = Extract<TemplateId, 'course_paper' | 'course_report'>
@@ -51,6 +73,9 @@ export interface Project {
   goal?: string
   deliverables?: string
   defaultTurnMode?: TurnMode
+  maxModelRuns?: number
+  maxOutputTokens?: number
+  modelRunsUsed?: number
 }
 
 export interface ProjectPage {
@@ -62,6 +87,7 @@ export interface CreateProject {
   requestId: string
   title: string
   templateId: TemplateId
+  startMode?: ProjectStartMode
 }
 
 export interface ProjectFilters {
@@ -74,7 +100,16 @@ export type ProjectChanges = {
   displayName?: string
   status?: ProjectStatus
   defaultTurnMode?: TurnMode
-} & ({ title: string } | { displayName: string } | { status: ProjectStatus } | { defaultTurnMode: TurnMode })
+  maxModelRuns?: number
+  maxOutputTokens?: number
+} & (
+  | { title: string }
+  | { displayName: string }
+  | { status: ProjectStatus }
+  | { defaultTurnMode: TurnMode }
+  | { maxModelRuns: number }
+  | { maxOutputTokens: number }
+)
 
 export type UpdateProject = ProjectChanges & { requestId: string; expectedRevision: number }
 
@@ -107,6 +142,9 @@ export function isProject(value: unknown): value is Project {
     && (value.goal === undefined || typeof value.goal === 'string')
     && (value.deliverables === undefined || typeof value.deliverables === 'string')
     && (value.defaultTurnMode === undefined || isTurnMode(value.defaultTurnMode))
+    && (value.maxModelRuns === undefined || (typeof value.maxModelRuns === 'number' && Number.isSafeInteger(value.maxModelRuns) && value.maxModelRuns >= 0))
+    && (value.maxOutputTokens === undefined || (typeof value.maxOutputTokens === 'number' && Number.isSafeInteger(value.maxOutputTokens) && value.maxOutputTokens >= 0))
+    && (value.modelRunsUsed === undefined || (typeof value.modelRunsUsed === 'number' && Number.isSafeInteger(value.modelRunsUsed) && value.modelRunsUsed >= 0))
 }
 
 function isProjectPage(value: unknown): value is ProjectPage {

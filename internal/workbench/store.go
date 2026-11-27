@@ -18,8 +18,8 @@ import (
 
 const (
 	workspaceDatabase      = "projects.sqlite3"
-	workspaceSchemaVersion = 65
-	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
+	workspaceSchemaVersion = 66
+	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode, max_model_runs, max_output_tokens`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -38,12 +38,22 @@ type Project struct {
 	Goal            string `json:"goal,omitempty"`
 	Deliverables    string `json:"deliverables,omitempty"`
 	DefaultTurnMode string `json:"defaultTurnMode"`
+	MaxModelRuns    int    `json:"maxModelRuns"`
+	MaxOutputTokens int    `json:"maxOutputTokens"`
+	ModelRunsUsed   int    `json:"modelRunsUsed"`
 }
+
+const (
+	projectStartSaveOnly      = "save_only"
+	projectStartWorkflow      = "start_workflow"
+	projectStartCollaborate   = "collaborate"
+)
 
 type createProjectInput struct {
 	RequestID  string `json:"requestId"`
 	Title      string `json:"title"`
 	TemplateID string `json:"templateId"`
+	StartMode  string `json:"startMode,omitempty"`
 }
 
 type projectCursor struct {
@@ -453,6 +463,11 @@ func migrate(db *sql.DB, target int) error {
 			return err
 		}
 	}
+	if version < 66 && target >= 66 {
+		if _, err := tx.Exec(projectTechnicalLimitsSchema); err != nil {
+			return err
+		}
+	}
 	if err := recoverDraftPlans(tx); err != nil {
 		return err
 	}
@@ -479,14 +494,18 @@ func migrate(db *sql.DB, target int) error {
 }
 
 func (s *Store) createProject(ctx context.Context, input createProjectInput) (Project, bool, error) {
+	defaultMode := turnModeChat
+	if input.StartMode == projectStartCollaborate {
+		defaultMode = turnModeConfirm
+	}
 	project := Project{
 		ProjectID: rand.Text(), Title: input.Title, TemplateID: input.TemplateID,
-		Status: projectReady, Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout), DefaultTurnMode: turnModeChat,
+		Status: projectReady, Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout), DefaultTurnMode: defaultMode,
 	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO projects (project_id, title, created_title, template_id, status, revision, created_at, request_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (request_id) DO NOTHING
-	`, project.ProjectID, project.Title, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID)
+		INSERT INTO projects (project_id, title, created_title, template_id, status, revision, created_at, request_id, default_turn_mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (request_id) DO NOTHING
+	`, project.ProjectID, project.Title, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID, project.DefaultTurnMode)
 	if err != nil {
 		return Project{}, false, err
 	}
@@ -504,11 +523,23 @@ func (s *Store) createProject(ctx context.Context, input createProjectInput) (Pr
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, false, errRequestConflict
 	}
+	if err == nil {
+		project.ModelRunsUsed, err = projectModelRunsUsed(ctx, s.db, project.ProjectID)
+	}
 	return project, false, err
 }
 
 func (s *Store) getProject(ctx context.Context, id string) (Project, error) {
-	return scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE project_id = ?`, id))
+	project, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE project_id = ?`, id))
+	if err != nil {
+		return Project{}, err
+	}
+	used, err := projectModelRunsUsed(ctx, s.db, id)
+	if err != nil {
+		return Project{}, err
+	}
+	project.ModelRunsUsed = used
+	return project, nil
 }
 
 func (s *Store) listProjects(ctx context.Context, cursor projectCursor, limit int, status, search string) ([]Project, error) {
@@ -537,12 +568,23 @@ func (s *Store) listProjects(ctx context.Context, cursor projectCursor, limit in
 		}
 		projects = append(projects, project)
 	}
-	return projects, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range projects {
+		used, err := projectModelRunsUsed(ctx, s.db, projects[i].ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		projects[i].ModelRunsUsed = used
+	}
+	return projects, nil
 }
 
 func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	var project Project
 	err := row.Scan(&project.ProjectID, &project.Title, &project.DisplayName, &project.TemplateID, &project.Status,
-		&project.Revision, &project.CreatedAt, &project.Goal, &project.Deliverables, &project.DefaultTurnMode)
+		&project.Revision, &project.CreatedAt, &project.Goal, &project.Deliverables, &project.DefaultTurnMode,
+		&project.MaxModelRuns, &project.MaxOutputTokens)
 	return project, err
 }

@@ -44,6 +44,7 @@ type Client struct {
 	model           string
 	apiKey          string
 	reasoningEffort string
+	maxOutputTokens int
 	http            *http.Client
 }
 
@@ -83,6 +84,16 @@ func (c *Client) ModelInfo() (model, reasoningEffort string) {
 func (c *Client) ForModel(model, reasoningEffort string) *Client {
 	selected := *c
 	selected.model, selected.reasoningEffort = model, reasoningEffort
+	return &selected
+}
+
+// WithMaxOutputTokens returns a shallow copy capped to the project's technical output token limit.
+func (c *Client) WithMaxOutputTokens(tokens int) *Client {
+	if c == nil || tokens <= 0 {
+		return c
+	}
+	selected := *c
+	selected.maxOutputTokens = tokens
 	return &selected
 }
 
@@ -130,10 +141,18 @@ func (c *Client) StreamWithTool(ctx context.Context, messages []Message, tool To
 }
 
 func (c *Client) stream(ctx context.Context, messages []Message, outputTokens int, tool *Tool, emit func(string) error) (json.RawMessage, error) {
-	outputTokens = max(2048, outputTokens)
+	if c.maxOutputTokens > 0 {
+		if outputTokens <= 0 || outputTokens > c.maxOutputTokens {
+			outputTokens = c.maxOutputTokens
+		}
+	} else {
+		outputTokens = max(2048, outputTokens)
+	}
 	payload := chatRequest{Model: c.model, Messages: messages, Stream: true, ReasoningEffort: c.reasoningEffort}
 	if c.reasoningEffort == "" {
 		payload.MaxTokens = outputTokens
+	} else if c.maxOutputTokens > 0 {
+		payload.MaxCompletionTokens = outputTokens
 	} else {
 		payload.MaxCompletionTokens = max(8192, outputTokens+4096)
 	}

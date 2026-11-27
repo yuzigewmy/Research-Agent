@@ -38,6 +38,12 @@ function defaultSettings(defaults: TemplateDefaults) {
   if (defaults.software) fields.push(['软件版本号', defaults.software.version])
   if (defaults.maxRounds !== undefined) fields.push(['最多审稿轮次', `${defaults.maxRounds} 轮`])
   if (defaults.targetScore !== undefined) fields.push(['目标分数', `${defaults.targetScore} 分`])
+  if (defaults.maxStepRetries !== undefined) fields.push(['单步失败重试上限', `${defaults.maxStepRetries} 次`])
+  if (defaults.contestId) {
+    const contest = defaults.contests?.find((item) => item.id === defaults.contestId)
+    fields.push(['默认竞赛规格', contest ? contest.name : defaults.contestId])
+  }
+  if (defaults.contests?.length) fields.push(['内置公开赛事', `覆盖 ${defaults.contests.length} 项公开赛事（2026 规则校验）`])
   return fields
 }
 

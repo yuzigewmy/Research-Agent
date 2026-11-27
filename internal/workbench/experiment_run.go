@@ -61,6 +61,9 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 		}
 		model = model.ForModel(modelName, reasoningEffort)
 	}
+	if project.MaxOutputTokens > 0 {
+		model = model.WithMaxOutputTokens(project.MaxOutputTokens)
+	}
 	if sourceTurnID != "" {
 		source, err := s.taskTurnContext(ctx, projectID, sourceTurnID)
 		if err != nil {
@@ -79,6 +82,9 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	}
 	if isPatentWorkflow(key) {
 		return s.generatePatentStep(ctx, model, project, task, key, input, options)
+	}
+	if isExpandedWorkflow(key) {
+		return s.generateExpandedWorkflowStep(ctx, model, project, task, key, input, evidence, options)
 	}
 	var sources []reviewSource
 	first := 0

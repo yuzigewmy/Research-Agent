@@ -38,6 +38,26 @@ interface WorkflowStepDefinition {
   key: string
   title: string
   requiresModel?: boolean
+  optional?: boolean
+}
+
+export interface MathModelingContest {
+  id: string
+  name: string
+  language: 'zh' | 'en'
+  ruleYear: number
+  verifiedAt: string
+  reminders: string[]
+}
+
+export function isMathModelingContest(value: unknown): value is MathModelingContest {
+  const contest = value as Partial<MathModelingContest> | null
+  return !!contest && typeof contest.id === 'string' && contest.id.length > 0
+    && typeof contest.name === 'string' && contest.name.length > 0
+    && (contest.language === 'zh' || contest.language === 'en')
+    && typeof contest.ruleYear === 'number' && Number.isSafeInteger(contest.ruleYear)
+    && typeof contest.verifiedAt === 'string'
+    && Array.isArray(contest.reminders) && contest.reminders.every((item) => typeof item === 'string')
 }
 
 interface WorkflowArtifactSource {
@@ -247,6 +267,9 @@ export interface WorkflowRun extends WorkflowRunSummary {
   course?: CourseSettings
   software?: SoftwareSettings
   patent?: PatentSettings
+  contest?: MathModelingContest
+  skippedSteps?: string[]
+  maxStepRetries?: number
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
 }
@@ -255,6 +278,7 @@ export interface WorkflowSnapshot {
   run: WorkflowRun | null
   modelConfigured: boolean
   modelOptions?: WorkflowModelOption[]
+  contests?: MathModelingContest[]
   softwarePdfConfigured?: boolean
   patentWordConfigured?: boolean
   steps: WorkflowStepDefinition[]
@@ -272,6 +296,9 @@ export interface StartWorkflowInput {
   course?: CourseOptions
   software?: SoftwareOptions
   patent?: PatentOptions
+  contestId?: string
+  skippedSteps?: string[]
+  maxStepRetries?: number
   throughStep?: string
 }
 
@@ -312,6 +339,7 @@ function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
   const step = value as Partial<WorkflowStepDefinition> | null
   return !!step && typeof step.key === 'string' && /^[a-z][a-z0-9-]*$/.test(step.key) && typeof step.title === 'string'
     && (step.requiresModel === undefined || typeof step.requiresModel === 'boolean')
+    && (step.optional === undefined || typeof step.optional === 'boolean')
 }
 
 function isPathId(value: unknown): value is string {
@@ -487,6 +515,9 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.course === undefined || isCourseSettings(run.course))
     && (run.software === undefined || isSoftwareSettings(run.software))
     && (run.patent === undefined || isPatentSettings(run.patent))
+    && (run.contest === undefined || isMathModelingContest(run.contest))
+    && (run.skippedSteps === undefined || (Array.isArray(run.skippedSteps) && run.skippedSteps.every((item) => typeof item === 'string')))
+    && (run.maxStepRetries === undefined || (typeof run.maxStepRetries === 'number' && Number.isSafeInteger(run.maxStepRetries) && run.maxStepRetries >= 1))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }
 
@@ -496,6 +527,7 @@ function isSnapshot(value: unknown): value is WorkflowSnapshot {
     && (snapshot.modelOptions === undefined || (Array.isArray(snapshot.modelOptions)
       && snapshot.modelOptions.every(isWorkflowModelOption)
       && new Set(snapshot.modelOptions.map(({ id }) => id)).size === snapshot.modelOptions.length))
+    && (snapshot.contests === undefined || (Array.isArray(snapshot.contests) && snapshot.contests.every(isMathModelingContest)))
     && (snapshot.softwarePdfConfigured === undefined || typeof snapshot.softwarePdfConfigured === 'boolean')
     && (snapshot.patentWordConfigured === undefined || typeof snapshot.patentWordConfigured === 'boolean')
     && (snapshot.run === null || isRun(snapshot.run))

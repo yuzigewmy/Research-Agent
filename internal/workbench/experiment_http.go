@@ -52,17 +52,22 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		Key           string `json:"key"`
 		Title         string `json:"title"`
 		RequiresModel bool   `json:"requiresModel,omitempty"`
+		Optional      bool   `json:"optional,omitempty"`
 	}
 	key := projectWorkflowKey(project.TemplateID)
 	stages := workflowStages[key]
 	result := struct {
-		Run                   *WorkflowRun  `json:"run"`
-		Steps                 []stepInfo    `json:"steps"`
-		ModelConfigured       bool          `json:"modelConfigured"`
-		ModelOptions          []modelOption `json:"modelOptions,omitempty"`
-		SoftwarePDFConfigured *bool         `json:"softwarePdfConfigured,omitempty"`
-		PatentWordConfigured  *bool         `json:"patentWordConfigured,omitempty"`
+		Run                   *WorkflowRun          `json:"run"`
+		Steps                 []stepInfo            `json:"steps"`
+		ModelConfigured       bool                  `json:"modelConfigured"`
+		ModelOptions          []modelOption         `json:"modelOptions,omitempty"`
+		Contests              []mathModelingContest `json:"contests,omitempty"`
+		SoftwarePDFConfigured *bool                 `json:"softwarePdfConfigured,omitempty"`
+		PatentWordConfigured  *bool                 `json:"patentWordConfigured,omitempty"`
 	}{Steps: make([]stepInfo, len(stages)), ModelConfigured: api.model != nil, ModelOptions: api.models.optionsFor(project.TemplateID)}
+	if key == mathModelingWorkflow {
+		result.Contests = allMathModelingContests()
+	}
 	if isSoftwareRegistrationWorkflow(key) {
 		result.SoftwarePDFConfigured = new(api.softwarePDFFont != "")
 	}
@@ -70,7 +75,7 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		result.PatentWordConfigured = new(api.patentWordConfigured())
 	}
 	for index, stage := range stages {
-		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title, RequiresModel: stage.prompt != ""}
+		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title, RequiresModel: stage.prompt != "", Optional: stage.optional}
 	}
 	run, err := api.store.latestWorkflow(r.Context(), projectID)
 	switch {
@@ -158,6 +163,12 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对学位设置和月份。正文目标为 500 至 30000 字，文献目标为 1 至 80 条，补充要求上限为 4 KiB。")
 		case errors.Is(err, errTopicCandidate):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择本轮的入围题目。")
+		case errors.Is(err, errWorkflowRunConfig):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对工作流可选跳过步骤或单步重试次数（1 至 5 次）。")
+		case errors.Is(err, errWorkflowContest):
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择公开目录中的数学建模赛事规格。")
+		case errors.Is(err, errWorkflowRetryBudget):
+			writeError(w, http.StatusConflict, "WORKFLOW_RETRY_BUDGET_EXCEEDED", "该步骤已达到本轮设定的重试上限。可跳过可选步骤、取消本轮或开启新一轮。")
 		case err != nil:
 			writeTaskError(w, "change workflow run", err)
 		default:

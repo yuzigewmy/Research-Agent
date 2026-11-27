@@ -252,6 +252,9 @@ func (s *Store) generateTaskResult(ctx context.Context, model *inference.Client,
 	if err != nil {
 		return taskResult{}, err
 	}
+	if project.MaxOutputTokens > 0 {
+		model = model.WithMaxOutputTokens(project.MaxOutputTokens)
+	}
 	if task.workflowRunID != "" {
 		return s.generateWorkflowResult(ctx, model, project, task)
 	}

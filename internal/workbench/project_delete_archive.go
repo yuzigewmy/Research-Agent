@@ -153,7 +153,7 @@ func (s *Store) registerProjectArchiveAndDelete(mux *http.ServeMux) {
 }
 
 func countProjectActiveTasks(ctx context.Context, db workspaceQuery, projectID string) (int, error) {
-	var taskActive, turnActive, workflowActive int
+	var taskActive, turnActive, workflowActive, scriptActive int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks
 		WHERE project_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING')`, projectID).Scan(&taskActive); err != nil {
 		return 0, err
@@ -168,7 +168,11 @@ func countProjectActiveTasks(ctx context.Context, db workspaceQuery, projectID s
 			return 0, err
 		}
 	}
-	return taskActive + turnActive + workflowActive, nil
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM script_runs
+		WHERE project_id = ? AND status IN ('QUEUED', 'RUNNING', 'CANCELLING')`, projectID).Scan(&scriptActive); err != nil {
+		return 0, err
+	}
+	return taskActive + turnActive + workflowActive + scriptActive, nil
 }
 
 func (s *Store) projectDeletePreview(ctx context.Context, projectID string) (ProjectDeletePreview, error) {
@@ -275,6 +279,9 @@ func (s *Store) deleteProject(ctx context.Context, projectID string, input delet
 		`DELETE FROM workflow_runs WHERE project_id = ?`,
 		`DELETE FROM turn_events WHERE turn_id IN (SELECT turn_id FROM turns WHERE project_id = ?)`,
 		`DELETE FROM turns WHERE project_id = ?`,
+		`DELETE FROM script_run_artifacts WHERE run_id IN (SELECT run_id FROM script_runs WHERE project_id = ?)`,
+		`DELETE FROM script_runs WHERE project_id = ?`,
+		`DELETE FROM survey_analysis_plans WHERE project_id = ?`,
 		`DELETE FROM survey_runs WHERE project_id = ?`,
 		`DELETE FROM questionnaire_responses WHERE project_id = ?`,
 		`DELETE FROM questionnaires WHERE project_id = ?`,

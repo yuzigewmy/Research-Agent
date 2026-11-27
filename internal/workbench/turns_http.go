@@ -87,6 +87,8 @@ func (c conversation) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "MODEL_UNAVAILABLE", "请先配置对话模型。")
 	case errors.Is(err, errConversationModelUnavailable):
 		writeError(w, http.StatusUnprocessableEntity, "CONVERSATION_MODEL_UNAVAILABLE", "所选模型当前不可用，请刷新会话后重新选择。")
+	case errors.Is(err, errModelRunBudgetExceeded):
+		writeError(w, http.StatusTooManyRequests, "MODEL_RUN_BUDGET_EXCEEDED", "该项目已达到单项目模型调用次数上限。请在项目管理中调高上限后继续。")
 	case err != nil:
 		writeStoreError(w, "begin turn", err)
 	case created:
@@ -135,6 +137,9 @@ func (c conversation) reply(ctx context.Context, model *inference.Client, projec
 }
 
 func (c conversation) generate(ctx context.Context, model *inference.Client, project Project, turn Turn) (turnProposal, error) {
+	if project.MaxOutputTokens > 0 {
+		model = model.WithMaxOutputTokens(project.MaxOutputTokens)
+	}
 	previous, err := c.store.listTurns(ctx, project.ProjectID, turn.ordinal, 6)
 	if err != nil {
 		return turnProposal{}, err

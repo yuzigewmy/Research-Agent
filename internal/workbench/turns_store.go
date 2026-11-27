@@ -186,6 +186,9 @@ func (s *Store) beginTurn(ctx context.Context, projectID string, input sendTurnI
 		}
 		return Turn{}, Project{}, false, errModelUnavailable
 	}
+	if err := checkProjectModelRunBudget(ctx, tx, projectID); err != nil {
+		return Turn{}, Project{}, false, err
+	}
 	var running bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM turns WHERE project_id = ? AND status = 'RUNNING')`, projectID).Scan(&running); err != nil {
 		return Turn{}, Project{}, false, err

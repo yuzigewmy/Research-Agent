@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -108,9 +109,12 @@ type WorkflowRun struct {
 	TopicChoice         *topicChoice      `json:"topicChoice,omitempty"`
 	Proposal            *proposalTargets  `json:"proposal,omitempty"`
 	Course              *courseSettings   `json:"course,omitempty"`
-	Software            *softwareSettings `json:"software,omitempty"`
-	Patent              *patentSettings   `json:"patent,omitempty"`
-	Model               string            `json:"model,omitempty"`
+	Software            *softwareSettings    `json:"software,omitempty"`
+	Patent              *patentSettings      `json:"patent,omitempty"`
+	Contest             *mathModelingContest `json:"contest,omitempty"`
+	SkippedSteps        []string             `json:"skippedSteps,omitempty"`
+	MaxStepRetries      int                  `json:"maxStepRetries,omitempty"`
+	Model               string               `json:"model,omitempty"`
 	ReasoningEffort     string            `json:"reasoningEffort,omitempty"`
 	modelID             string
 	modelConnection     string
@@ -155,6 +159,9 @@ type workflowRequest struct {
 	Course           *courseOptions    `json:"course"`
 	Software         *softwareOptions  `json:"software"`
 	Patent           *patentOptions    `json:"patent"`
+	ContestID        string            `json:"contestId"`
+	SkippedSteps     []string          `json:"skippedSteps"`
+	MaxStepRetries   int               `json:"maxStepRetries"`
 	ModelID          string            `json:"modelId"`
 	StepModelIDs     map[string]string `json:"stepModelIds"`
 	sourceTurnID     string
@@ -212,6 +219,24 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 		run.Patent = new(patentSettings)
 		if err := json.Unmarshal([]byte(run.optionsJSON), run.Patent); err != nil {
 			return WorkflowRun{}, err
+		}
+	}
+	runCfg := parseWorkflowRunConfig(run.optionsJSON)
+	run.SkippedSteps = runCfg.SkippedSteps
+	run.MaxStepRetries = runCfg.MaxStepRetries
+	if run.MaxStepRetries == 0 {
+		run.MaxStepRetries = defaultMaxStepRetries
+	}
+	if run.WorkflowKey == mathModelingWorkflow {
+		contestID := runCfg.ContestID
+		if contestID == "" {
+			contestID = defaultMathModelingContestID
+		}
+		if contest, ok := mathModelingContestFor(contestID); ok {
+			run.Contest = &contest
+			if run.Language == "" {
+				run.Language = contest.Language
+			}
 		}
 	}
 	stages := workflowStages[run.WorkflowKey]
@@ -282,6 +307,12 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	if skipReason != "" {
 		step := &run.Steps[run.step]
 		step.Status, step.Message = workflowStepSkipped, skipReason
+	}
+	for i := range run.Steps {
+		if run.Steps[i].Status == "PENDING" && slices.Contains(run.SkippedSteps, run.Steps[i].Key) &&
+			(run.Status == workflowDone || i < run.step) {
+			run.Steps[i].Status, run.Steps[i].Message = workflowStepSkipped, "启动时已设为跳过"
+		}
 	}
 	run.AcceptStepKey = acceptableWorkflowStep(run, stages)
 	run.SkipStepKey = skippableWorkflowStep(run, stages)
@@ -431,6 +462,17 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 			if req.ThroughStep != "" {
 				return WorkflowRun{}, false, errWorkflowRange
 			}
+			if current.Status == taskFailed {
+				var failedCount int
+				if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks
+					WHERE workflow_run_id = ? AND workflow_step = ? AND workflow_superseded = 0 AND status = 'FAILED'`,
+					current.RunID, current.step).Scan(&failedCount); err != nil {
+					return WorkflowRun{}, false, err
+				}
+				if failedCount > current.MaxStepRetries {
+					return WorkflowRun{}, false, errWorkflowRetryBudget
+				}
+			}
 		default:
 			return WorkflowRun{}, false, errWorkflowState
 		}
@@ -440,6 +482,11 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	}
 	if queuesWork && current.modelConnection != "" && current.modelConnection != req.models.option(defaultModelID).connection {
 		return WorkflowRun{}, false, errWorkflowModelConnection
+	}
+	if queuesWork {
+		if err := checkProjectModelRunBudget(ctx, tx, projectID); err != nil {
+			return WorkflowRun{}, false, err
+		}
 	}
 
 	switch action {
@@ -461,7 +508,8 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 			return WorkflowRun{}, false, err
 		}
 		evidence := "[]"
-		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || isProposalWorkflow(key) || isCourseWorkflow(key) {
+		if key == reviewWorkflow || key == paperWorkflow || key == topicWorkflow || isProposalWorkflow(key) ||
+			isCourseWorkflow(key) || expandedWorkflowUsesLiterature(key) {
 			limit := target
 			if limit == 0 {
 				limit = defaultReviewTarget
@@ -590,14 +638,15 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 	step := task.workflowStep
 	var stages []workflowStage
 	if status == taskSucceeded {
-		var key, mode string
+		var key, mode, optionsJSON string
 		var templateCheckpoints bool
 		var end int
-		if err := tx.QueryRowContext(ctx, `SELECT w.workflow_key, w.checkpoints, w.range_end, COALESCE(t.mode, '')
+		if err := tx.QueryRowContext(ctx, `SELECT w.workflow_key, w.checkpoints, w.range_end, COALESCE(t.mode, ''), w.options_json
 			FROM workflow_runs w LEFT JOIN turns t ON t.turn_id = w.range_source_turn_id WHERE w.run_id = ?`,
-			task.workflowRunID).Scan(&key, &templateCheckpoints, &end, &mode); err != nil {
+			task.workflowRunID).Scan(&key, &templateCheckpoints, &end, &mode, &optionsJSON); err != nil {
 			return err
 		}
+		runCfg := parseWorkflowRunConfig(optionsJSON)
 		checkpoints := workflowCheckpoints(templateCheckpoints, mode)
 		stages = workflowStages[key]
 		if key == topicWorkflow && step == topicShortlistStep && !checkpoints {
@@ -610,8 +659,13 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 				return err
 			}
 		}
-		if step+1 == len(stages) {
+		nextStep := step + 1
+		for nextStep < len(stages) && slices.Contains(runCfg.SkippedSteps, stages[nextStep].key) {
+			nextStep++
+		}
+		if nextStep >= len(stages) {
 			status = workflowDone
+			step = len(stages) - 1
 		} else {
 			switch {
 			case checkpoints && key == topicWorkflow && step == topicShortlistStep:
@@ -623,7 +677,14 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 			default:
 				status = taskQueued
 			}
-			step++
+			step = nextStep
+		}
+	}
+	if status == taskQueued && stages[step].prompt != "" {
+		if err := checkProjectModelRunBudget(ctx, tx, projectID); errors.Is(err, errModelRunBudgetExceeded) {
+			status = workflowPaused
+		} else if err != nil {
+			return err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET
