@@ -158,7 +158,7 @@ func (s *Store) generateCourseStep(ctx context.Context, model *inference.Client,
 	if err := json.Unmarshal([]byte(evidence), &sources); err != nil {
 		return taskResult{}, err
 	}
-	stages, sections := workflowStages[key], courseSections[key]
+	stages, sections := workflowStagesForRun(key, options), courseSections[key]
 	stage := stages[task.workflowStep]
 	// The final two steps compile and check the preceding section artifacts.
 	firstSection := len(stages) - len(sections) - 2
@@ -227,7 +227,13 @@ func (s *Store) generateCourseStep(ctx context.Context, model *inference.Client,
 	for _, markdown := range previous {
 		input += "\n\n已完成章节节选\n" + excerptRunes(markdown, 600)
 	}
-	section := sections[task.workflowStep-firstSection]
+	var section courseSection
+	for _, candidate := range sections {
+		if candidate.key == stage.key {
+			section = candidate
+			break
+		}
+	}
 	goal := settings.TargetCharacters * section.share / 100
 	input += fmt.Sprintf("\n\n本节标题：%s\n本节目标字数：%d\n本节写作要点：%s", section.title, goal, section.focus)
 	markdown, err := streamTaskMarkdownWithBudget(ctx, model, stage.prompt, input, 2*goal+512)

@@ -325,6 +325,26 @@ export interface ProjectEvidenceChainItem {
   citationTitle?: string
 }
 
+export interface ProjectAffectedClaim {
+  kind: 'comparison' | 'pdf'
+  linkId: string
+  manuscriptPath: string
+  manuscriptVersionId: string
+  selectedText: string
+  sourceSummary: string
+  impactReason: string
+  suggestedAction: string
+}
+
+export interface ProjectMissingEvidenceFile {
+  path: string
+  versionId: string
+  sha256: string
+  size: number
+  updatedAt: string
+  reason: string
+}
+
 export interface ProjectMemorySummary {
   project: {
     projectId: string
@@ -341,6 +361,8 @@ export interface ProjectMemorySummary {
   completedComparisonCount: number
   latestWorkflow?: ProjectMemoryWorkflow
   evidenceChain: ProjectEvidenceChainItem[]
+  affectedClaims: ProjectAffectedClaim[]
+  missingEvidenceFiles: ProjectMissingEvidenceFile[]
 }
 
 function isNonNegativeInt(value: unknown): value is number {
@@ -394,6 +416,8 @@ function isProjectMemorySummary(value: unknown): value is ProjectMemorySummary {
     && isNonNegativeInt(value.verifiedCitationCount)
     && isNonNegativeInt(value.completedComparisonCount)
     && Array.isArray(value.evidenceChain)
+    && Array.isArray(value.affectedClaims)
+    && Array.isArray(value.missingEvidenceFiles)
 }
 
 export function getProjectDeletePreview(projectId: string, signal: AbortSignal) {

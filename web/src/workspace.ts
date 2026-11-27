@@ -190,3 +190,63 @@ export async function restoreVersion(projectId: string, versionId: string, baseS
     body: JSON.stringify({ baseSha256 }), signal,
   })
 }
+
+export interface BatchRestorePreviewItem {
+  path: string
+  currentVersionId: string
+  currentSha256: string
+  targetVersionId: string
+  targetSha256: string
+  changed: boolean
+  summary: string
+}
+
+export interface BatchRestoreResult {
+  beforeSnapshots: FileRecord[]
+  restoredFiles: FileRecord[]
+}
+
+function isBatchRestorePreviewItem(value: unknown): value is BatchRestorePreviewItem {
+  const item = value as Partial<BatchRestorePreviewItem> | null
+  return !!item && typeof item.path === 'string' && item.path.length > 0
+    && isPathId(item.currentVersionId) && isPathId(item.targetVersionId)
+    && typeof item.currentSha256 === 'string' && typeof item.targetSha256 === 'string'
+    && typeof item.changed === 'boolean' && typeof item.summary === 'string'
+}
+
+function isBatchRestorePreviewResponse(value: unknown): value is { items: BatchRestorePreviewItem[] } {
+  const res = value as { items?: unknown } | null
+  return !!res && Array.isArray(res.items) && res.items.every(isBatchRestorePreviewItem)
+}
+
+function isBatchRestoreResult(value: unknown): value is BatchRestoreResult {
+  const res = value as Partial<BatchRestoreResult> | null
+  return !!res && Array.isArray(res.beforeSnapshots) && res.beforeSnapshots.every(isFileRecord)
+    && Array.isArray(res.restoredFiles) && res.restoredFiles.every(isFileRecord)
+}
+
+export async function previewBatchRestore(
+  projectId: string,
+  items: ReadonlyArray<{ path: string; targetVersionId: string }>,
+  signal: AbortSignal,
+) {
+  return request(`${projectPath(projectId)}/workspace/restore-preview`, isBatchRestorePreviewResponse, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+    signal,
+  })
+}
+
+export async function executeBatchRestore(
+  projectId: string,
+  items: ReadonlyArray<{ path: string; targetVersionId: string; expectedCurrentSha256: string }>,
+  signal: AbortSignal,
+) {
+  return request(`${projectPath(projectId)}/workspace/restore-batch`, isBatchRestoreResult, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+    signal,
+  })
+}

@@ -21,12 +21,12 @@ type workflowArtifactRecord struct {
 }
 
 func workflowArtifactStep(ctx context.Context, db workspaceQuery, projectID, runID, key string) (int, string, error) {
-	var workflow string
-	if err := db.QueryRowContext(ctx, `SELECT workflow_key FROM workflow_runs WHERE project_id = ? AND run_id = ?`,
-		projectID, runID).Scan(&workflow); err != nil {
+	var workflow, optionsJSON string
+	if err := db.QueryRowContext(ctx, `SELECT workflow_key, options_json FROM workflow_runs WHERE project_id = ? AND run_id = ?`,
+		projectID, runID).Scan(&workflow, &optionsJSON); err != nil {
 		return 0, "", err
 	}
-	for i, stage := range workflowStages[workflow] {
+	for i, stage := range workflowStagesForRun(workflow, optionsJSON) {
 		if stage.key == key {
 			return i, workflowArtifactFilename(workflow, stage), nil
 		}

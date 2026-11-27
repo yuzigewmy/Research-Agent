@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"unicode/utf8"
 
 	"research-agent/internal/literature"
@@ -15,12 +16,34 @@ import (
 const projectMemoryBriefMaxRunes = 800
 
 type ProjectMemorySummary struct {
-	Project                  projectMemoryMeta        `json:"project"`
-	ResearchBrief            *projectMemoryBrief      `json:"researchBrief,omitempty"`
-	VerifiedCitationCount    int                      `json:"verifiedCitationCount"`
-	CompletedComparisonCount int                      `json:"completedComparisonCount"`
-	LatestWorkflow           *projectMemoryWorkflow   `json:"latestWorkflow,omitempty"`
-	EvidenceChain            []projectEvidenceChain   `json:"evidenceChain"`
+	Project                  projectMemoryMeta            `json:"project"`
+	ResearchBrief            *projectMemoryBrief          `json:"researchBrief,omitempty"`
+	VerifiedCitationCount    int                          `json:"verifiedCitationCount"`
+	CompletedComparisonCount int                          `json:"completedComparisonCount"`
+	LatestWorkflow           *projectMemoryWorkflow       `json:"latestWorkflow,omitempty"`
+	EvidenceChain            []projectEvidenceChain       `json:"evidenceChain"`
+	AffectedClaims           []projectAffectedClaim       `json:"affectedClaims"`
+	MissingEvidenceFiles     []projectMissingEvidenceFile `json:"missingEvidenceFiles"`
+}
+
+type projectAffectedClaim struct {
+	Kind                string `json:"kind"`
+	LinkID              string `json:"linkId"`
+	ManuscriptPath      string `json:"manuscriptPath"`
+	ManuscriptVersionID string `json:"manuscriptVersionId"`
+	SelectedText        string `json:"selectedText"`
+	SourceSummary       string `json:"sourceSummary"`
+	ImpactReason        string `json:"impactReason"`
+	SuggestedAction     string `json:"suggestedAction"`
+}
+
+type projectMissingEvidenceFile struct {
+	Path      string `json:"path"`
+	VersionID string `json:"versionId"`
+	SHA256    string `json:"sha256"`
+	Size      int    `json:"size"`
+	UpdatedAt string `json:"updatedAt"`
+	Reason    string `json:"reason"`
 }
 
 type projectMemoryMeta struct {
@@ -117,7 +140,9 @@ func (s *Store) projectMemorySummary(ctx context.Context, projectID string) (Pro
 			Goal:         project.Goal,
 			Deliverables: project.Deliverables,
 		},
-		EvidenceChain: make([]projectEvidenceChain, 0),
+		EvidenceChain:        make([]projectEvidenceChain, 0),
+		AffectedClaims:       make([]projectAffectedClaim, 0),
+		MissingEvidenceFiles: make([]projectMissingEvidenceFile, 0),
 	}
 
 	if briefFile, err := currentWorkspaceFile(ctx, tx, projectID, "research/brief.md"); err == nil {
@@ -248,6 +273,103 @@ func (s *Store) projectMemorySummary(ctx context.Context, projectID string) (Pro
 		return ProjectMemorySummary{}, err
 	}
 	pdfRows.Close()
+
+	linkedPaths := make(map[string]bool)
+	for _, item := range summary.EvidenceChain {
+		linkedPaths[item.ManuscriptPath] = true
+		if item.SourceChanged {
+			claim := projectAffectedClaim{
+				Kind:                item.Kind,
+				LinkID:              item.LinkID,
+				ManuscriptPath:      item.ManuscriptPath,
+				ManuscriptVersionID: item.ManuscriptVersionID,
+				SelectedText:        item.SelectedText,
+				SourceSummary:       item.SourceSummary,
+			}
+			if item.Kind == "comparison" {
+				claim.ImpactReason = fmt.Sprintf("关联数据文件 %s 已换版，原指标 %s = %s 需按新版数据复核", item.SourcePath, item.Metric, item.Value)
+				claim.SuggestedAction = "建议重新运行配对计算并更新此论点绑定的指标与数据版本"
+			} else {
+				claim.ImpactReason = fmt.Sprintf("关联资料 %s 已有同名新版，原第 %d 页引用需复核", item.MaterialName, item.Page)
+				claim.SuggestedAction = "建议核对新版 PDF 对应页码与引文并更新证据绑定"
+			}
+			summary.AffectedClaims = append(summary.AffectedClaims, claim)
+		}
+	}
+
+	verifiedDOIs := make([]string, 0)
+	citRows, err := tx.QueryContext(ctx, `SELECT doi FROM literature_citations WHERE project_id = ?`, projectID)
+	if err != nil {
+		return ProjectMemorySummary{}, err
+	}
+	for citRows.Next() {
+		var doi string
+		if err := citRows.Scan(&doi); err != nil {
+			citRows.Close()
+			return ProjectMemorySummary{}, err
+		}
+		if doi != "" {
+			verifiedDOIs = append(verifiedDOIs, strings.ToLower(doi))
+		}
+	}
+	if err := citRows.Err(); err != nil {
+		citRows.Close()
+		return ProjectMemorySummary{}, err
+	}
+	citRows.Close()
+
+	mdRows, err := tx.QueryContext(ctx, `SELECT `+workspaceFileColumns+` FROM workspace_versions
+		WHERE project_id = ? AND ordinal IN (
+			SELECT MAX(ordinal) FROM workspace_versions
+			WHERE project_id = ? AND (LOWER(path) LIKE '%.md' OR LOWER(path) LIKE '%.markdown')
+			GROUP BY path
+		)
+		ORDER BY ordinal DESC LIMIT 100`, projectID, projectID)
+	if err != nil {
+		return ProjectMemorySummary{}, err
+	}
+	var mdFiles []WorkspaceFile
+	for mdRows.Next() {
+		file, err := scanWorkspaceFile(mdRows)
+		if err != nil {
+			mdRows.Close()
+			return ProjectMemorySummary{}, err
+		}
+		mdFiles = append(mdFiles, file)
+	}
+	if err := mdRows.Err(); err != nil {
+		mdRows.Close()
+		return ProjectMemorySummary{}, err
+	}
+	mdRows.Close()
+
+	for _, file := range mdFiles {
+		if linkedPaths[file.Path] {
+			continue
+		}
+		hasVerifiedRef := false
+		if len(verifiedDOIs) > 0 {
+			if doc, readErr := s.readWorkspaceDocument(file); readErr == nil {
+				lowerContent := strings.ToLower(doc.Content)
+				for _, doi := range verifiedDOIs {
+					if strings.Contains(lowerContent, doi) {
+						hasVerifiedRef = true
+						break
+					}
+				}
+			}
+		}
+		if !hasVerifiedRef {
+			summary.MissingEvidenceFiles = append(summary.MissingEvidenceFiles, projectMissingEvidenceFile{
+				Path:      file.Path,
+				VersionID: file.VersionID,
+				SHA256:    file.SHA256,
+				Size:      file.Size,
+				UpdatedAt: file.CreatedAt,
+				Reason:    "尚未关联配对指标数据、PDF 选文或已核验文献来源，存在缺证据风险",
+			})
+		}
+	}
 
 	return summary, nil
 }

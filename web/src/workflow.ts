@@ -39,6 +39,7 @@ interface WorkflowStepDefinition {
   title: string
   requiresModel?: boolean
   optional?: boolean
+  dependsOn?: string[]
 }
 
 export interface MathModelingContest {
@@ -269,6 +270,7 @@ export interface WorkflowRun extends WorkflowRunSummary {
   patent?: PatentSettings
   contest?: MathModelingContest
   skippedSteps?: string[]
+  stepOrder?: string[]
   maxStepRetries?: number
   scope: { startStep: string; endStep: string }
   steps: WorkflowStep[]
@@ -298,6 +300,7 @@ export interface StartWorkflowInput {
   patent?: PatentOptions
   contestId?: string
   skippedSteps?: string[]
+  stepOrder?: string[]
   maxStepRetries?: number
   throughStep?: string
 }
@@ -340,6 +343,7 @@ function isStepDefinition(value: unknown): value is WorkflowStepDefinition {
   return !!step && typeof step.key === 'string' && /^[a-z][a-z0-9-]*$/.test(step.key) && typeof step.title === 'string'
     && (step.requiresModel === undefined || typeof step.requiresModel === 'boolean')
     && (step.optional === undefined || typeof step.optional === 'boolean')
+    && (step.dependsOn === undefined || (Array.isArray(step.dependsOn) && step.dependsOn.every((dep) => typeof dep === 'string')))
 }
 
 function isPathId(value: unknown): value is string {
@@ -517,6 +521,7 @@ function isRun(value: unknown): value is WorkflowRun {
     && (run.patent === undefined || isPatentSettings(run.patent))
     && (run.contest === undefined || isMathModelingContest(run.contest))
     && (run.skippedSteps === undefined || (Array.isArray(run.skippedSteps) && run.skippedSteps.every((item) => typeof item === 'string')))
+    && (run.stepOrder === undefined || (Array.isArray(run.stepOrder) && run.stepOrder.every((item) => typeof item === 'string')))
     && (run.maxStepRetries === undefined || (typeof run.maxStepRetries === 'number' && Number.isSafeInteger(run.maxStepRetries) && run.maxStepRetries >= 1))
     && isScope(run.scope, run.steps) && isRunSummary(run)
 }

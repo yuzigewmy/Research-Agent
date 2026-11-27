@@ -38,6 +38,7 @@ type workflowRunConfig struct {
 	SkippedSteps   []string `json:"skippedSteps,omitempty"`
 	MaxStepRetries int      `json:"maxStepRetries,omitempty"`
 	ContestID      string   `json:"contestId,omitempty"`
+	StepOrder      []string `json:"stepOrder,omitempty"`
 }
 
 func parseWorkflowRunConfig(optionsJSON string) workflowRunConfig {
@@ -50,7 +51,7 @@ func parseWorkflowRunConfig(optionsJSON string) workflowRunConfig {
 
 func applyWorkflowRunConfig(baseOptionsJSON, key, action string, req workflowRequest) (string, error) {
 	if action != workflowStart {
-		if len(req.SkippedSteps) != 0 || req.MaxStepRetries != 0 || req.ContestID != "" {
+		if len(req.SkippedSteps) != 0 || req.MaxStepRetries != 0 || req.ContestID != "" || len(req.StepOrder) != 0 {
 			return "", errWorkflowRunConfig
 		}
 		return baseOptionsJSON, nil
@@ -59,6 +60,14 @@ func applyWorkflowRunConfig(baseOptionsJSON, key, action string, req workflowReq
 		return "", errWorkflowRunConfig
 	}
 	stages := workflowStages[key]
+	var stepOrder []string
+	if len(req.StepOrder) > 0 {
+		validated, err := validateWorkflowStepOrder(key, req.StepOrder)
+		if err != nil {
+			return "", err
+		}
+		stepOrder = validated
+	}
 	var skipped []string
 	if len(req.SkippedSteps) > 0 {
 		seen := make(map[string]bool, len(req.SkippedSteps))
@@ -92,7 +101,7 @@ func applyWorkflowRunConfig(baseOptionsJSON, key, action string, req workflowReq
 		matched, _ := mathModelingContestFor(defaultMathModelingContestID)
 		contest = &matched
 	}
-	if len(skipped) == 0 && req.MaxStepRetries == 0 && contest == nil {
+	if len(skipped) == 0 && req.MaxStepRetries == 0 && contest == nil && len(stepOrder) == 0 {
 		return baseOptionsJSON, nil
 	}
 	merged := make(map[string]any)
@@ -106,6 +115,9 @@ func applyWorkflowRunConfig(baseOptionsJSON, key, action string, req workflowReq
 	}
 	if req.MaxStepRetries > 0 {
 		merged["maxStepRetries"] = req.MaxStepRetries
+	}
+	if len(stepOrder) > 0 {
+		merged["stepOrder"] = stepOrder
 	}
 	if contest != nil {
 		merged["contestId"] = contest.ID
@@ -344,7 +356,7 @@ func expandedWorkflowStages(key string) []workflowStage {
 }
 
 func (s *Store) generateExpandedWorkflowStep(ctx context.Context, model *inference.Client, project Project, task Task, key, input, evidence, options string) (taskResult, error) {
-	stages := workflowStages[key]
+	stages := workflowStagesForRun(key, options)
 	stage := stages[task.workflowStep]
 	var contest *mathModelingContest
 	if key == mathModelingWorkflow {

@@ -74,9 +74,10 @@ function WorkflowRunContext({ run }: { run: WorkflowRun }) {
       {run.model && <>本轮模型 <bdi>{run.model}</bdi> · </>}
       推理档 <bdi>{run.reasoningEffort || '默认'}</bdi>
     </p>}
-    {run.maxStepRetries !== undefined && <p className="workflow-note">
-      单步重试上限 {run.maxStepRetries} 次
+    {(run.maxStepRetries !== undefined || (run.stepOrder && run.stepOrder.length > 0)) && <p className="workflow-note">
+      {run.maxStepRetries !== undefined && <>单步重试上限 {run.maxStepRetries} 次</>}
       {run.skippedSteps?.length ? ` · 启动时跳过步骤：${run.skippedSteps.join('、')}` : ''}
+      {run.stepOrder?.length ? ` · 自定义步骤顺序：${run.steps.map((s) => s.title).join(' → ')}` : ''}
     </p>}
   </>
 }
@@ -312,6 +313,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const [patentDraft, setPatentDraft] = useState(initialPatentDraft)
   const [preferredContestId, setPreferredContestId] = useState(initialContestId ?? '')
   const [skippedSteps, setSkippedSteps] = useState<string[]>([])
+  const [customStepOrder, setCustomStepOrder] = useState<string[]>([])
   const [maxStepRetriesText, setMaxStepRetriesText] = useState('2')
   const [throughStep, setThroughStep] = useState('')
   const autoStartedRef = useRef(false)
@@ -347,7 +349,17 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const selectedCancel = canCancel && cancelTarget && run?.runId === cancelTarget.runId ? cancelTarget : null
   const confirmingCancel = selectedCancel !== null
   const cancelConfirmationId = `${headingId}-cancel-confirmation`
-  const steps = (canStart ? snapshot.steps : run?.steps) ?? []
+  const defaultStartSteps = snapshot?.steps ?? []
+  const orderedStartSteps = (() => {
+    if (!canStart || customStepOrder.length !== defaultStartSteps.length || customStepOrder.length === 0) {
+      return defaultStartSteps
+    }
+    const byKey = new Map(defaultStartSteps.map((step) => [step.key, step]))
+    const mapped = customStepOrder.map((key) => byKey.get(key)).filter((step): step is NonNullable<typeof step> => !!step)
+    return mapped.length === defaultStartSteps.length ? mapped : defaultStartSteps
+  })()
+  const isCustomOrder = canStart && orderedStartSteps.some((step, idx) => step.key !== defaultStartSteps[idx]?.key)
+  const steps = (canStart ? orderedStartSteps : run?.steps) ?? []
   const rangeStartIndex = rangeCompleted ? run.steps.findIndex((step) => step.status !== 'SUCCEEDED') : canStart ? 0 : -1
   const rangeSteps = rangeStartIndex >= 0 ? steps.slice(rangeStartIndex) : []
   const firstStep = rangeSteps[0]
@@ -468,6 +480,27 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     setReload((value) => value + 1)
   }
 
+  function canSwapStartSteps(indexA: number, indexB: number) {
+    if (indexA < 0 || indexB >= orderedStartSteps.length || indexB !== indexA + 1) return false
+    const first = orderedStartSteps[indexA]
+    const second = orderedStartSteps[indexB]
+    return !second.dependsOn?.includes(first.key)
+  }
+
+  function moveStartStep(index: number, delta: -1 | 1) {
+    const targetIndex = index + delta
+    const low = Math.min(index, targetIndex)
+    const high = Math.max(index, targetIndex)
+    if (!canSwapStartSteps(low, high)) return
+    const nextOrder = orderedStartSteps.map((step) => step.key)
+    const temp = nextOrder[low]
+    nextOrder[low] = nextOrder[high]
+    nextOrder[high] = temp
+    setCustomStepOrder(nextOrder)
+    if (retry?.kind === 'start') setRetry(null)
+    setActionError('')
+  }
+
   function changeStepModel(stepKey: string, value: string) {
     const modelId = modelOptions.find(({ id }) => id === value)?.id
     if ((value !== '' && !modelId) || modelId === stepModelChoices.get(stepKey)) return
@@ -556,6 +589,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             patent: patent?.options,
             contestId: selectedContest?.id,
             skippedSteps: activeSkipped.length ? activeSkipped : undefined,
+            stepOrder: isCustomOrder ? orderedStartSteps.map((step) => step.key) : undefined,
             maxStepRetries: parsedRetries !== 2 ? parsedRetries : undefined,
             throughStep: endStep || undefined,
           } }
@@ -600,6 +634,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         setStepModelChoices(new Map())
         setCheckpoints(defaultCheckpoints)
         setSkippedSteps([])
+        setCustomStepOrder([])
         setMaxStepRetriesText('2')
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
         if (isSoftware) setSoftwareDraft(initialSoftwareDraft())
@@ -796,6 +831,45 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
               <p className="workflow-note" id={`${headingId}-contest-help`}>
                 默认语言：{selectedContest.language === 'en' ? '英文' : '中文'} · 规则校验：{selectedContest.verifiedAt} · 交付提醒：{selectedContest.reminders.join('；')}
               </p>
+            </div>
+          )}
+          {canStart && orderedStartSteps.length > 1 && (
+            <div className="field workflow-step-order">
+              <div className="workflow-step-order-header">
+                <span>执行步骤顺序（无前置依赖的步骤可调整）</span>
+                {isCustomOrder && (
+                  <button className="button outline" type="button"
+                    disabled={actionDisabled || retryStart !== null}
+                    onClick={() => {
+                      setCustomStepOrder([])
+                      if (retry?.kind === 'start') setRetry(null)
+                    }}>恢复默认顺序</button>
+                )}
+              </div>
+              <ol className="workflow-step-order-list" aria-label="自定义步骤顺序">
+                {orderedStartSteps.map((step, index) => {
+                  const canMoveUp = canSwapStartSteps(index - 1, index)
+                  const canMoveDown = canSwapStartSteps(index, index + 1)
+                  return (
+                    <li key={step.key} className="workflow-step-order-item" data-step-order-key={step.key}>
+                      <span className="workflow-step-order-title">
+                        {index + 1}. {step.title}
+                        {step.optional ? '（可选）' : ''}
+                      </span>
+                      <div className="workflow-step-order-controls">
+                        <button className="button outline" type="button"
+                          aria-label={`上移步骤：${step.title}`}
+                          disabled={actionDisabled || retryStart !== null || !canMoveUp}
+                          onClick={() => moveStartStep(index, -1)}>上移</button>
+                        <button className="button outline" type="button"
+                          aria-label={`下移步骤：${step.title}`}
+                          disabled={actionDisabled || retryStart !== null || !canMoveDown}
+                          onClick={() => moveStartStep(index, 1)}>下移</button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ol>
             </div>
           )}
           {canStart && optionalSteps.length > 0 && (

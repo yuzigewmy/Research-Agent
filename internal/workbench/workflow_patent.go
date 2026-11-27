@@ -119,7 +119,7 @@ func patentManuscriptSections(markdown string) ([]int, error) {
 }
 
 func (s *Store) generatePatentStep(ctx context.Context, model *inference.Client, project Project, task Task, workflow, input, options string) (taskResult, error) {
-	stage := workflowStages[workflow][task.workflowStep]
+	stage := workflowStagesForRun(workflow, options)[task.workflowStep]
 	var settings patentSettings
 	if err := json.Unmarshal([]byte(options), &settings); err != nil {
 		return taskResult{}, err

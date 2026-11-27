@@ -73,6 +73,9 @@ func (s *Store) workflowProposalOptions(ctx context.Context, project Project, mo
 		return nil, nil
 	}
 	stages := workflowStages[key]
+	if action == workflowContinue {
+		stages = workflowStagesForRun(key, run.optionsJSON)
+	}
 	steps := make([]workflowStepDefinition, 0, len(stages)-start)
 	for _, stage := range stages[start:] {
 		steps = append(steps, workflowStepDefinition{Key: stage.key, Title: stage.title})
@@ -175,7 +178,7 @@ func confirmWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, turnID stri
 		return false, errWorkflowProposalStale
 	}
 	if automatic && record.Action == workflowContinue && latest.step > 0 &&
-		workflowStages[latest.WorkflowKey][latest.step-1].checkpoint {
+		workflowStagesForRun(latest.WorkflowKey, latest.optionsJSON)[latest.step-1].checkpoint {
 		return false, errWorkflowCheckpoint
 	}
 	req := workflowRequest{RequestID: rand.Text(), ThroughStep: record.Scope.EndStep, Checkpoints: new(record.Checkpoints),

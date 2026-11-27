@@ -49,13 +49,15 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type stepInfo struct {
-		Key           string `json:"key"`
-		Title         string `json:"title"`
-		RequiresModel bool   `json:"requiresModel,omitempty"`
-		Optional      bool   `json:"optional,omitempty"`
+		Key           string   `json:"key"`
+		Title         string   `json:"title"`
+		RequiresModel bool     `json:"requiresModel,omitempty"`
+		Optional      bool     `json:"optional,omitempty"`
+		DependsOn     []string `json:"dependsOn,omitempty"`
 	}
 	key := projectWorkflowKey(project.TemplateID)
 	stages := workflowStages[key]
+	deps := workflowStepDeps(key)
 	result := struct {
 		Run                   *WorkflowRun          `json:"run"`
 		Steps                 []stepInfo            `json:"steps"`
@@ -75,7 +77,13 @@ func (api workflows) latest(w http.ResponseWriter, r *http.Request) {
 		result.PatentWordConfigured = new(api.patentWordConfigured())
 	}
 	for index, stage := range stages {
-		result.Steps[index] = stepInfo{Key: stage.key, Title: stage.title, RequiresModel: stage.prompt != "", Optional: stage.optional}
+		result.Steps[index] = stepInfo{
+			Key:           stage.key,
+			Title:         stage.title,
+			RequiresModel: stage.prompt != "",
+			Optional:      stage.optional,
+			DependsOn:     deps[stage.key],
+		}
 	}
 	run, err := api.store.latestWorkflow(r.Context(), projectID)
 	switch {
@@ -163,6 +171,8 @@ func (api workflows) change(action string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对学位设置和月份。正文目标为 500 至 30000 字，文献目标为 1 至 80 条，补充要求上限为 4 KiB。")
 		case errors.Is(err, errTopicCandidate):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择本轮的入围题目。")
+		case errors.Is(err, errWorkflowStepOrder):
+			writeError(w, http.StatusUnprocessableEntity, "INVALID_STEP_ORDER", "步骤顺序不合法或违反前置依赖，关键步骤不能排在其依赖步骤之前。")
 		case errors.Is(err, errWorkflowRunConfig):
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对工作流可选跳过步骤或单步重试次数（1 至 5 次）。")
 		case errors.Is(err, errWorkflowContest):

@@ -46,7 +46,7 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 		return taskResult{}, err
 	}
 	input := researchTaskInput(project, task.Instruction)
-	stages := workflowStages[key]
+	stages := workflowStagesForRun(key, options)
 	stage := stages[task.workflowStep]
 	var stepModels workflowStepModels
 	if err := json.Unmarshal([]byte(stepModelsJSON), &stepModels); err != nil {
@@ -113,7 +113,7 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	}
 	if isProposalWorkflow(key) {
 		input += "\n\n本轮开题设置（JSON）：\n" + options
-		if stage.key == "check" || (key == proposalWorkflow && task.workflowStep >= firstProposalSection) {
+		if stage.key == "check" || (key == proposalWorkflow && stage.key != "sources" && stage.key != "outline") {
 			var goals proposalTargets
 			if err := json.Unmarshal([]byte(options), &goals); err != nil {
 				return taskResult{}, err
@@ -121,7 +121,7 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 			if stage.key == "check" {
 				return s.checkProposal(ctx, projectID, task.workflowRunID, goals, sources)
 			}
-			return s.sectionedProposalResult(ctx, model, project, task, input, goals, sources)
+			return s.sectionedProposalResult(ctx, model, project, task, stage, input, goals, sources)
 		}
 	}
 	previous, err := s.workflowContext(ctx, task, stages, first)
