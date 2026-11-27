@@ -139,3 +139,184 @@ func TestQuestionnairePublishesCollectsAndExportsResponses(t *testing.T) {
 		t.Fatalf("analysis did not use the single collected response: %+v", analysis.surveyRunInfo)
 	}
 }
+
+func TestQuestionnaireBranchingValidationAndSubmission(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	handler := NewHandler(store, nil, HandlerConfig{})
+	request := func(method, path, body string, status int, out any) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), method, "http://127.0.0.1"+path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != status {
+			t.Fatalf("%s %s: got HTTP %d, want %d: %s", method, path, res.Code, status, res.Body)
+		}
+		if out != nil {
+			if err := json.Unmarshal(res.Body.Bytes(), out); err != nil {
+				t.Fatalf("decode %s: %v", res.Body, err)
+			}
+		}
+		return res
+	}
+
+	var project Project
+	request(http.MethodPost, projectsPath, `{"requestId":"branch-survey","title":"分支问卷项目","templateId":"interactive_survey"}`, http.StatusCreated, &project)
+	projectPath := projectsPath + "/" + project.ProjectID
+	admin := projectPath + "/questionnaire"
+
+	invalidPayloads := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "jump to self",
+			body: `{"expectedRevision":0,"title":"测试","intro":"","questions":[
+				{"id":"q1","label":"意愿","type":"single","required":true,"options":["是","否"],"branches":[{"option":"是","target":"q1"}]},
+				{"id":"q2","label":"补充","type":"text","required":true}
+			]}`,
+		},
+		{
+			name: "jump backward cycle",
+			body: `{"expectedRevision":0,"title":"测试","intro":"","questions":[
+				{"id":"q1","label":"第一题","type":"single","required":true,"options":["甲","乙"]},
+				{"id":"q2","label":"第二题","type":"single","required":true,"options":["丙","丁"],"branches":[{"option":"丙","target":"q1"}]}
+			]}`,
+		},
+		{
+			name: "unknown target",
+			body: `{"expectedRevision":0,"title":"测试","intro":"","questions":[
+				{"id":"q1","label":"第一题","type":"single","required":true,"options":["甲","乙"],"branches":[{"option":"甲","target":"q99"}]},
+				{"id":"q2","label":"第二题","type":"text","required":false}
+			]}`,
+		},
+		{
+			name: "invalid option",
+			body: `{"expectedRevision":0,"title":"测试","intro":"","questions":[
+				{"id":"q1","label":"第一题","type":"single","required":true,"options":["甲","乙"],"branches":[{"option":"丙","target":"q2"}]},
+				{"id":"q2","label":"第二题","type":"text","required":false}
+			]}`,
+		},
+		{
+			name: "duplicate branch option",
+			body: `{"expectedRevision":0,"title":"测试","intro":"","questions":[
+				{"id":"q1","label":"第一题","type":"single","required":true,"options":["甲","乙"],"branches":[{"option":"甲","target":"q2"},{"option":"甲","target":"__END__"}]},
+				{"id":"q2","label":"第二题","type":"text","required":false}
+			]}`,
+		},
+		{
+			name: "text question with branch",
+			body: `{"expectedRevision":0,"title":"测试","intro":"","questions":[
+				{"id":"q1","label":"开放题","type":"text","required":true,"branches":[{"option":"甲","target":"__END__"}]},
+				{"id":"q2","label":"第二题","type":"text","required":false}
+			]}`,
+		},
+	}
+	for _, tc := range invalidPayloads {
+		t.Run(tc.name, func(t *testing.T) {
+			request(http.MethodPut, admin, tc.body, http.StatusBadRequest, nil)
+		})
+	}
+
+	validDraft := `{
+		"expectedRevision": 0,
+		"title": "园区服务回访问卷",
+		"intro": "请根据实际情况作答。",
+		"questions": [
+			{
+				"id": "q1",
+				"label": "本次体验方式",
+				"type": "single",
+				"required": true,
+				"options": ["现场办理", "线上办理", "暂不参与"],
+				"branches": [
+					{"option": "线上办理", "target": "q3"},
+					{"option": "暂不参与", "target": "__END__"}
+				]
+			},
+			{"id": "q2", "label": "现场窗口说明", "type": "text", "required": true},
+			{"id": "q3", "label": "整体满意度", "type": "single", "required": true, "options": ["满意", "一般"]},
+			{"id": "q4", "label": "其他建议", "type": "text", "required": false}
+		]
+	}`
+	var draft, published questionnaireSnapshot
+	request(http.MethodPut, admin, validDraft, http.StatusOK, &draft)
+	if len(draft.Questions) != 4 || len(draft.Questions[0].Branches) != 2 {
+		t.Fatalf("branches not preserved in saved draft: %+v", draft)
+	}
+	request(http.MethodPost, admin+"/publish", fmt.Sprintf(`{"expectedRevision":%d}`, draft.Revision), http.StatusOK, &published)
+	public := "/api/v1/questionnaires/" + published.PublicID
+	var visibleDef questionnaireDefinition
+	request(http.MethodGet, public, "", http.StatusOK, &visibleDef)
+	if len(visibleDef.Questions) != 4 || len(visibleDef.Questions[0].Branches) != 2 ||
+		visibleDef.Questions[0].Branches[0].Target != "q3" || visibleDef.Questions[0].Branches[1].Target != "__END__" {
+		t.Fatalf("unexpected public definition branches: %+v", visibleDef)
+	}
+
+	// 分支 A：选「线上办理」跳过必答题 q2，进入 q3 和 q4。
+	const branchABody = `{"requestId":"branch-a","answers":{"q1":"线上办理","q3":"满意"}}`
+	var receiptA, replayA questionnaireReceipt
+	request(http.MethodPost, public+"/responses", branchABody, http.StatusCreated, &receiptA)
+	request(http.MethodPost, public+"/responses", branchABody, http.StatusOK, &replayA)
+	if receiptA != replayA || receiptA.ResponseID == "" {
+		t.Fatalf("branch A replay mismatch: first=%+v, replay=%+v", receiptA, replayA)
+	}
+	// 分支 A 缺少可见必答题 q3 -> 拒绝。
+	request(http.MethodPost, public+"/responses", `{"requestId":"branch-a-missing-q3","answers":{"q1":"线上办理"}}`, http.StatusUnprocessableEntity, nil)
+	// 分支 A 提交被跳过题 q2 的非空答案 -> 拒绝。
+	request(http.MethodPost, public+"/responses", `{"requestId":"branch-a-hidden-q2","answers":{"q1":"线上办理","q2":"不应填写","q3":"满意"}}`, http.StatusUnprocessableEntity, nil)
+
+	// 分支 B：选「暂不参与」直接结束问卷，跳过必答题 q2、q3 和选答题 q4。
+	const branchBBody = `{"requestId":"branch-b","answers":{"q1":"暂不参与"}}`
+	var receiptB, replayB questionnaireReceipt
+	request(http.MethodPost, public+"/responses", branchBBody, http.StatusCreated, &receiptB)
+	request(http.MethodPost, public+"/responses", branchBBody, http.StatusOK, &replayB)
+	if receiptB != replayB || receiptB.ResponseID == "" {
+		t.Fatalf("branch B replay mismatch: first=%+v, replay=%+v", receiptB, replayB)
+	}
+	// 分支 B 提交被跳过题 q3 的非空答案 -> 拒绝。
+	request(http.MethodPost, public+"/responses", `{"requestId":"branch-b-hidden-q3","answers":{"q1":"暂不参与","q3":"满意"}}`, http.StatusUnprocessableEntity, nil)
+
+	// 默认路径：选「现场办理」按题序展示 q2（必答）、q3（必答）、q4（选答）。
+	request(http.MethodPost, public+"/responses", `{"requestId":"default-missing-q2","answers":{"q1":"现场办理","q3":"一般"}}`, http.StatusUnprocessableEntity, nil)
+	var receiptC questionnaireReceipt
+	request(http.MethodPost, public+"/responses", `{"requestId":"default-path","answers":{"q1":"现场办理","q2":"三号窗口","q3":"一般","q4":"等候时间可缩短"}}`, http.StatusCreated, &receiptC)
+
+	// 核对 CSV 导出：完整题序列，被跳过的题目为空单元格。
+	export := request(http.MethodGet, admin+"/responses.csv", "", http.StatusOK, nil)
+	rows, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(export.Body.String(), "\uFEFF"))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHeader := []string{"response_id", "submitted_at", "source", "q1 - 本次体验方式", "q2 - 现场窗口说明", "q3 - 整体满意度", "q4 - 其他建议"}
+	if len(rows) != 4 || !slices.Equal(rows[0], wantHeader) {
+		t.Fatalf("unexpected CSV header or row count: %q", rows)
+	}
+	wantRows := [][]string{
+		{receiptA.ResponseID, receiptA.SubmittedAt, "web", "线上办理", "", "满意", ""},
+		{receiptB.ResponseID, receiptB.SubmittedAt, "web", "暂不参与", "", "", ""},
+		{receiptC.ResponseID, receiptC.SubmittedAt, "web", "现场办理", "三号窗口", "一般", "等候时间可缩短"},
+	}
+	for i, want := range wantRows {
+		if !slices.Equal(rows[i+1], want) {
+			t.Fatalf("CSV row %d = %q, want %q", i+1, rows[i+1], want)
+		}
+	}
+
+	// 保存为资料并能进入原有问卷分析。
+	var material Material
+	request(http.MethodPost, admin+"/responses/material", "", http.StatusCreated, &material)
+	var analysis surveyRun
+	request(http.MethodPost, projectPath+"/surveys",
+		fmt.Sprintf(`{"requestId":"branch-analysis","materialId":%q,"options":{"requiredColumns":["q1 - 本次体验方式"]}}`, material.MaterialID),
+		http.StatusCreated, &analysis)
+	if analysis.Total != 3 || analysis.Valid != 3 {
+		t.Fatalf("unexpected analysis counts: %+v", analysis.surveyRunInfo)
+	}
+}

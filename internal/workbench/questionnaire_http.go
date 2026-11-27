@@ -149,7 +149,7 @@ func writeQuestionnaireError(w http.ResponseWriter, operation string, err error)
 	case errors.Is(err, errQuestionnaireFull):
 		writeError(w, http.StatusConflict, "QUESTIONNAIRE_FULL", "本问卷的答卷已满。")
 	case errors.Is(err, errQuestionnaireAnswers):
-		writeError(w, http.StatusUnprocessableEntity, "INVALID_ANSWERS", "请核对必答题、单选选项和文本回答长度。")
+		writeError(w, http.StatusUnprocessableEntity, "INVALID_ANSWERS", "请核对可见必答题、单选选项和文本回答长度。")
 	case errors.Is(err, errRequestConflict):
 		writeError(w, http.StatusConflict, "REQUEST_ID_CONFLICT", "该提交编号已有不同的答卷。")
 	default:
