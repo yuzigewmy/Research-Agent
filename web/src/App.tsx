@@ -16,6 +16,7 @@ import type { TaskLink } from './tasks'
 import type { WorkflowRunLink } from './WorkflowRunHistory'
 import { WorkspaceBackup } from './WorkspaceBackup'
 import { WorkspaceComponents } from './WorkspaceComponents'
+import { useWorkbenchPreferences, WorkbenchPreferences } from './WorkbenchPreferences'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
@@ -84,6 +85,7 @@ function Workbench() {
   const { projectId: selectedId, target } = selection
   const [catalog, setCatalog] = useState<Catalog>({ kind: 'loading' })
   const list = useProjectList()
+  const preferences = useWorkbenchPreferences()
   const heading = useRef<HTMLHeadingElement>(null)
   const focusOnNavigate = useRef(false)
   const creating = selectedId === null
@@ -150,10 +152,11 @@ function Workbench() {
         <h1>研究工作台</h1>
         <Notifications hrefFor={projectUrl} onOpen={followProjectLink} onNavigate={navigate} />
       </header>
+      <WorkbenchPreferences {...preferences} />
       <ModelConnection />
       <WorkspaceBackup />
       <WorkspaceComponents />
-      <div className="workbench-grid">
+      <div className="workbench-grid" data-sidebar-hidden={preferences.sidebarHidden}>
         <section className="project-panel" aria-labelledby="workspace-title">
           <header className="panel-heading">
             <h2 id="workspace-title" ref={heading} tabIndex={-1}>
@@ -178,7 +181,7 @@ function Workbench() {
             taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
             reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh} />}
         </section>
-        <ProjectList list={list} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
+        <ProjectList list={list} hidden={preferences.sidebarHidden} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>
     </main>
   )

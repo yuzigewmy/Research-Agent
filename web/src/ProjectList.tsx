@@ -103,18 +103,19 @@ export function useProjectList() {
 
 interface ProjectListProps {
   list: ReturnType<typeof useProjectList>
+  hidden: boolean
   selectedId: string | null
   hrefFor: (id: string) => string
   onOpen: (event: MouseEvent<HTMLAnchorElement>, id: string) => void
 }
 
-export function ProjectList({ list, selectedId, hrefFor, onOpen }: ProjectListProps) {
+export function ProjectList({ list, hidden, selectedId, hrefFor, onOpen }: ProjectListProps) {
   const { items, status, nextCursor, retry, loadMore, filters, filter } = list
   const [query, setQuery] = useState(filters.q)
   const queryId = useId()
   const queryInput = useRef<HTMLInputElement>(null)
   return (
-    <section className="project-index" aria-labelledby="project-index-title">
+    <section className="project-index" id="project-index" hidden={hidden} aria-labelledby="project-index-title">
       <header className="panel-heading"><h2 id="project-index-title">项目列表</h2></header>
       <div className="project-filters">
         <div role="group" aria-label="项目范围" className="project-scope">
