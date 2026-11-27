@@ -61,7 +61,17 @@ export type SurveyRegression = SurveyRegressionOptions & {
   | { fit?: never; unavailableReason: SurveyRegressionUnavailableReason }
 )
 
+export interface SurveyCategoryMapping {
+  column: string
+  from: string
+  to: string
+}
+
+export const categoryMappingLimit = 64
+export const categoryMappingValueByteLimit = 128
+
 export interface SurveyOptions {
+  categoryMappings?: SurveyCategoryMapping[]
   sheet?: string
   requiredColumns?: string[]
   duplicateColumns?: string[]
@@ -193,10 +203,18 @@ function isSheetName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
+function isCategoryMappings(value: unknown): value is SurveyCategoryMapping[] {
+  return Array.isArray(value) && value.length <= categoryMappingLimit && value.every((entry: unknown) => {
+    const mapping = entry as Partial<SurveyCategoryMapping> | null
+    return !!mapping && typeof mapping.column === 'string' && typeof mapping.from === 'string' && typeof mapping.to === 'string'
+  })
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
   return (options.sheet === undefined || isSheetName(options.sheet))
+    && (options.categoryMappings === undefined || isCategoryMappings(options.categoryMappings))
     && (options.requiredColumns === undefined || isStringList(options.requiredColumns))
     && (options.duplicateColumns === undefined || isStringList(options.duplicateColumns))
     && (options.reviews === undefined || (Array.isArray(options.reviews) && options.reviews.every(isReview)))

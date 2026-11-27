@@ -53,17 +53,18 @@ type columnSummary struct {
 	weightedSum     big.Rat
 }
 
-func (s *columnSummary) add(record []string, weight uint64) {
+func (s *columnSummary) add(record []string, weight uint64, mappings categoryMappings) {
 	value := fieldAt(record, s.index)
 	if value == "" {
 		return
 	}
 	s.Answered++
-	if len(value) <= maxValueBytes {
+	category := mappings.label(s.index, value)
+	if len(category) <= maxValueBytes {
 		if s.counts == nil {
 			s.counts = make(map[string]int)
 		}
-		s.counts[value]++
+		s.counts[category]++
 	}
 	number, ok := parseFiniteNumber(value)
 	if !ok {

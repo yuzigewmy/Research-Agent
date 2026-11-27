@@ -143,6 +143,23 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		MaterialSHA256 string        `json:"materialSha256"`
 		Report         survey.Report `json:"report"`
 	}
+	codedBody := strings.Replace(strings.Replace(body, "analysis-1", "coded", 1), `"weightColumn":`,
+		`"categoryMappings":[{"column":"Station","from":"South","to":"North"}],"weightColumn":`, 1)
+	coded := request(http.MethodPost, base, codedBody, http.StatusCreated).Body.String()
+	var codedRun struct {
+		AnalysisID string
+		Options    survey.Options
+		Report     survey.Report
+	}
+	if err := json.Unmarshal([]byte(coded), &codedRun); err != nil || len(codedRun.Options.CategoryMappings) != 1 ||
+		!reflect.DeepEqual(codedRun.Report.CrossTab.Counts, [][]int{{1, 2}}) || codedRun.Report.Valid != run.Report.Valid {
+		t.Fatalf("unexpected coded report: %s (%v)", coded, err)
+	}
+	if request(http.MethodPost, base, codedBody, http.StatusOK).Body.String() != coded ||
+		request(http.MethodGet, base+"/"+codedRun.AnalysisID+"/download", "", http.StatusOK).Body.String() != coded {
+		t.Fatal("replay or download changed the coded report")
+	}
+	request(http.MethodPost, base, strings.Replace(codedBody, `"to":"North"`, `"to":"East"`, 1), http.StatusConflict)
 	updated := request(http.MethodPost, base, newBody, http.StatusCreated).Body.Bytes()
 	if err := json.Unmarshal(updated, &replacement); err != nil || replacement.AnalysisID == run.AnalysisID ||
 		replacement.MaterialSHA256 != newCSV.SHA256 || replacement.Report.CrossTab == nil ||

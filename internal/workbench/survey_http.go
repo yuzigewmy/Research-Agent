@@ -21,6 +21,7 @@ type surveyCreateInput struct {
 		Regression       *survey.RegressionOptions  `json:"regression"`
 		Sheet            string                     `json:"sheet"`
 		WeightColumn     string                     `json:"weightColumn"`
+		CategoryMappings []survey.CategoryMapping   `json:"categoryMappings"`
 		Reviews          []struct {
 			Row    int    `json:"row"`
 			Accept *bool  `json:"accept"`
@@ -70,12 +71,13 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 	}
 	options := survey.Options{
 		RequiredColumns: input.Options.RequiredColumns, DuplicateColumns: input.Options.DuplicateColumns,
-		Reviews:      make([]survey.Review, 0, len(input.Options.Reviews)),
-		CrossTab:     input.Options.CrossTab,
-		Reliability:  input.Options.Reliability,
-		Regression:   input.Options.Regression,
-		Sheet:        input.Options.Sheet,
-		WeightColumn: input.Options.WeightColumn,
+		Reviews:          make([]survey.Review, 0, len(input.Options.Reviews)),
+		CrossTab:         input.Options.CrossTab,
+		Reliability:      input.Options.Reliability,
+		Regression:       input.Options.Regression,
+		Sheet:            input.Options.Sheet,
+		WeightColumn:     input.Options.WeightColumn,
+		CategoryMappings: input.Options.CategoryMappings,
 	}
 	for _, review := range input.Options.Reviews {
 		if review.Accept == nil {

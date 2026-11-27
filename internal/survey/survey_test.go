@@ -23,6 +23,36 @@ func TestAnalyzeWeightedMeanUsesNumericResponsesAndValidWeights(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMapsCategoriesForFrequenciesAndCrossTab(t *testing.T) {
+	csv := "站点,得分,权重,_quality_status\n北岸,2,0.1,\n北岸站,5,0.2,held\n南岸,5,1,\n北岸站,9,5,invalid\n北岸,2,9,\n"
+	options := Options{
+		DuplicateColumns: []string{"站点", "得分"},
+		Reviews:          []Review{{Row: 2, Accept: true, Reason: "核对原件"}},
+		WeightColumn:     "权重",
+		CrossTab:         &CrossTabOptions{RowColumn: "站点", ColumnColumn: "得分"},
+		CategoryMappings: []CategoryMapping{{Column: "站点", From: " 北岸站 ", To: "北岸"}, {Column: "得分", From: "5", To: "五分"}},
+	}
+	report, err := Analyze(strings.NewReader(csv), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Valid != 3 || report.Invalid != 2 || !slices.Equal(report.Summaries[0].Frequencies, []Frequency{{Value: "北岸", Count: 2}, {Value: "南岸", Count: 1}}) {
+		t.Fatalf("unexpected quality counts or frequencies: %+v", report)
+	}
+	if summary := report.Summaries[1]; summary.Numeric != 3 || *summary.Mean != 4 || summary.Weighted.Included != 3 {
+		t.Fatalf("unexpected numeric summary: %+v", summary)
+	}
+	tab := report.CrossTab
+	if !slices.Equal(tab.RowLabels, []string{"北岸", "南岸"}) || !slices.Equal(tab.ColumnLabels, []string{"2", "五分"}) ||
+		!slices.Equal(tab.RowTotals, []int{2, 1}) || !slices.Equal(tab.Weighted.RowTotals, []string{"0.3", "1"}) {
+		t.Fatalf("unexpected mapped cross-tab: %+v", tab)
+	}
+	options.CategoryMappings = append(options.CategoryMappings, CategoryMapping{Column: "站点", From: "北岸站", To: "上游"})
+	if _, err := Analyze(strings.NewReader(csv), options); err == nil {
+		t.Fatal("accepted duplicate mappings after trimming")
+	}
+}
+
 func TestAnalyze(t *testing.T) {
 	csv := "\ufeff\"Score\",Choice,Hours,Scale,Notes,FullName,e-mail,Respondent ID,手机号码,_quality_status,__synthetic__\r\n" +
 		"10,Beta,1,4,\"two\nlines\",Example A,a@example.test,1,123,,true\n" +

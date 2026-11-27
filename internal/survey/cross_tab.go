@@ -69,8 +69,9 @@ func newCrossTab(options CrossTabOptions, header []string, byName map[string]int
 	return acc, nil
 }
 
-func (c *crossTabAccumulator) add(record []string, weight uint64) error {
-	row, column := fieldAt(record, c.rowIndex), fieldAt(record, c.columnIndex)
+func (c *crossTabAccumulator) add(record []string, weight uint64, mappings categoryMappings) error {
+	row := mappings.label(c.rowIndex, fieldAt(record, c.rowIndex))
+	column := mappings.label(c.columnIndex, fieldAt(record, c.columnIndex))
 	if row == "" || column == "" {
 		c.Missing++
 		return nil

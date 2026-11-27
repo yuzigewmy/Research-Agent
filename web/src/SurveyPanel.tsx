@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
+import { ReportCoding } from './SurveyCoding'
 import { ReportRegression } from './SurveyRegression'
 import {
   analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, readSurvey,
@@ -15,10 +16,11 @@ const rowPageSize = 20
 const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
-type SurveyCalculation = 'analyze' | 'weighting' | 'cross-tab' | 'reliability' | 'regression'
+type SurveyCalculation = 'analyze' | 'coding' | 'weighting' | 'cross-tab' | 'reliability' | 'regression'
 type SurveyOperation = SurveyCalculation | 'read'
 const surveyOperationLabels: Record<SurveyOperation, string> = {
   analyze: '正在分析并保存报告…',
+  coding: '正在应用分类编码并保存报告…',
   weighting: '正在更新权重并保存报告…',
   'cross-tab': '正在计算交叉统计…',
   reliability: '正在计算量表信度…',
@@ -497,6 +499,9 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
     <ReportWeighting summaries={report.summaries} valid={report.valid} result={report.weighting} busy={busy}
       error={calculationError?.kind === 'weighting' ? calculationError.message : undefined}
       onApply={(weightColumn) => onAnalyze({ ...options, weightColumn }, 'weighting')} />
+    <ReportCoding summaries={report.summaries} mappings={options.categoryMappings} busy={busy}
+      error={calculationError?.kind === 'coding' ? calculationError.message : undefined}
+      onApply={(rules) => onAnalyze({ ...options, categoryMappings: rules.length ? rules : undefined }, 'coding')} />
     <ReportSummary summaries={report.summaries} valid={report.valid} />
     <ReportCrossTab summaries={report.summaries} result={report.crossTab} busy={busy}
       error={calculationError?.kind === 'cross-tab' ? calculationError.message : undefined}

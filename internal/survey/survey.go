@@ -37,6 +37,7 @@ type Options struct {
 	Regression       *RegressionOptions  `json:"regression,omitempty"`
 	Sheet            string              `json:"sheet,omitempty"`
 	WeightColumn     string              `json:"weightColumn,omitempty"`
+	CategoryMappings []CategoryMapping   `json:"categoryMappings,omitempty"`
 }
 
 // Review resolves a pending response by its one-based record number after the header.
@@ -135,6 +136,10 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 		if !excludeSummary(key) {
 			accumulators = append(accumulators, columnSummary{index: i, Summary: Summary{Column: name}})
 		}
+	}
+	mappings, err := compileCategoryMappings(options.CategoryMappings, byName)
+	if err != nil {
+		return Report{}, err
 	}
 	required, err := selectColumns(byName, "requiredColumns", options.RequiredColumns)
 	if err != nil {
@@ -252,7 +257,7 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 				weight = weights.add(record)
 			}
 			if crossTab != nil {
-				if err := crossTab.add(record, weight); err != nil {
+				if err := crossTab.add(record, weight, mappings); err != nil {
 					return Report{}, err
 				}
 			}
@@ -263,7 +268,7 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 				regression.add(record)
 			}
 			for i := range accumulators {
-				accumulators[i].add(record, weight)
+				accumulators[i].add(record, weight, mappings)
 			}
 		case StatusInvalid:
 			report.Invalid++
