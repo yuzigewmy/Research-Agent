@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { errorMessage } from './projects'
+import { errorMessage, request } from './projects'
+import { isFileRecord } from './workspace'
+import type { FileRecord } from './workspace'
 import { saveComparisonReport } from './tasks'
 
-export function ExperimentReportHandoff({ projectId, taskId, onSaved }: {
+export function ExperimentReportHandoff({ projectId, taskId, onSaved, remoteDigest }: {
   projectId: string
   taskId: string
   onSaved: (path: string) => void
+  remoteDigest?: string
 }) {
   const active = useRef<AbortController | null>(null)
   const [saving, setSaving] = useState(false)
@@ -21,7 +24,11 @@ export function ExperimentReportHandoff({ projectId, taskId, onSaved }: {
     setError('')
     try {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
-      const file = await saveComparisonReport(projectId, taskId, signal)
+      const file = remoteDigest
+        ? await request(`/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/remote-comparison/result/workspace`,
+          (value): value is FileRecord => isFileRecord(value) && value.sha256 === remoteDigest
+            && value.path === `experiments/${taskId}/remote-comparison.json`, { method: 'POST', signal })
+        : await saveComparisonReport(projectId, taskId, signal)
       if (controller.signal.aborted) return
       onSaved(file.path)
       setSaved(true)

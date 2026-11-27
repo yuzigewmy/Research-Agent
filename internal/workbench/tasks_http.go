@@ -54,6 +54,10 @@ func (api researchTasks) register(mux *http.ServeMux) {
 
 func (api researchTasks) saveComparisonReport(w http.ResponseWriter, r *http.Request) {
 	file, err := api.store.saveComparisonReport(r.Context(), r.PathValue("id"), r.PathValue("taskId"))
+	writeComparisonArtifactSave(w, file, err)
+}
+
+func writeComparisonArtifactSave(w http.ResponseWriter, file WorkspaceFile, err error) {
 	if errors.Is(err, errWorkspaceConflict) {
 		writeError(w, http.StatusConflict, "REVISION_CONFLICT", "报告的保存位置已有其他内容。请在文本工作区核对该文件。")
 		return

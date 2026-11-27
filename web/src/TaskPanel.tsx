@@ -299,7 +299,8 @@ function TaskCard({ projectId, task, statusId, modelConfigured, pending, onActio
       </div>}
       {isExperimentComparison && task.status === 'SUCCEEDED' && <>
         {currentInputs[0] && <ExperimentEvidence projectId={projectId} taskId={task.taskId} input={currentInputs[0]} />}
-        <RemoteComparison key={JSON.stringify([projectId, task.taskId])} projectId={projectId} taskId={task.taskId} />
+        <RemoteComparison key={JSON.stringify([projectId, task.taskId])} projectId={projectId} taskId={task.taskId}
+          onReportSaved={onReportSaved} />
       </>}
       {isExperimentComparison &&
         <ExperimentAttempts projectId={projectId} taskId={task.taskId} revision={task.revision} />}

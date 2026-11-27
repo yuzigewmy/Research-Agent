@@ -14,7 +14,11 @@ func (s *Store) saveComparisonReport(ctx context.Context, projectID, taskID stri
 	if artifact.kind != experimentComparisonTask {
 		return WorkspaceFile{}, sql.ErrNoRows
 	}
-	file := workspaceTextFile("experiments/"+taskID+"/comparison.json", artifact.jsonArtifact)
+	return s.saveComparisonArtifact(ctx, projectID, "experiments/"+taskID+"/comparison.json", artifact.jsonArtifact)
+}
+
+func (s *Store) saveComparisonArtifact(ctx context.Context, projectID, path, content string) (WorkspaceFile, error) {
+	file := workspaceTextFile(path, content)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return WorkspaceFile{}, err
@@ -33,7 +37,7 @@ func (s *Store) saveComparisonReport(ctx context.Context, projectID, taskID stri
 	if !errors.Is(err, sql.ErrNoRows) {
 		return WorkspaceFile{}, err
 	}
-	file, err = s.insertWorkspaceVersion(ctx, tx, projectID, file, &artifact.jsonArtifact)
+	file, err = s.insertWorkspaceVersion(ctx, tx, projectID, file, &content)
 	if err != nil {
 		return WorkspaceFile{}, err
 	}

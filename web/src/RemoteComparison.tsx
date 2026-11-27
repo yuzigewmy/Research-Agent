@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ExperimentReportHandoff } from './ExperimentReportHandoff'
 import { ProjectDate } from './ProjectDetails'
 import { errorMessage, ProjectApiError, request } from './projects'
 
@@ -79,7 +80,11 @@ async function downloadResult(path: string, expectedDigest: string, signal: Abor
   }
 }
 
-export function RemoteComparison({ projectId, taskId }: { projectId: string; taskId: string }) {
+export function RemoteComparison({ projectId, taskId, onReportSaved }: {
+  projectId: string
+  taskId: string
+  onReportSaved?: (path: string) => void
+}) {
   const path = `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/remote-comparison`
   const resultPath = `${path}/result`
   const active = useRef<AbortController | null>(null)
@@ -187,6 +192,8 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
             event.preventDefault()
             void run('result')
           }}>下载远程结果 JSON</a>}
+        {resultDigest && onReportSaved && <ExperimentReportHandoff projectId={projectId} taskId={taskId}
+          remoteDigest={resultDigest} onSaved={onReportSaved} />}
       </div>
     </div>
   </details>

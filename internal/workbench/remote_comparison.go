@@ -178,6 +178,7 @@ func registerRemoteComparison(mux *http.ServeMux, store *Store, node *ComputeNod
 	path := projectsPath + "/{id}/tasks/{taskId}/remote-comparison"
 	mux.HandleFunc("GET "+path, store.remoteComparisonHandler(node, "snapshot"))
 	mux.HandleFunc("GET "+path+"/result", store.remoteComparisonHandler(node, "result"))
+	mux.HandleFunc("POST "+path+"/result/workspace", store.remoteComparisonHandler(node, "workspace"))
 	mux.HandleFunc("POST "+path+"/submit", store.remoteComparisonHandler(node, "submit"))
 	mux.HandleFunc("POST "+path+"/refresh", store.remoteComparisonHandler(node, "refresh"))
 	mux.HandleFunc("POST "+path+"/cancel", store.remoteComparisonHandler(node, "cancel"))
@@ -201,9 +202,14 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			writeRemoteComparison(w, node, job)
 			return
 		}
-		if action == "result" {
-			if job.Status != taskSucceeded || job.InputSHA256 != report.Input.SHA256 || computeDigest([]byte(job.result)) != job.ResultSHA256 {
+		if action == "result" || action == "workspace" {
+			if job.Status != taskSucceeded || job.result == "" || job.InputSHA256 != report.Input.SHA256 || computeDigest([]byte(job.result)) != job.ResultSHA256 {
 				writeError(w, http.StatusNotFound, "RESULT_NOT_FOUND", "没有通过校验的远程计算结果。")
+				return
+			}
+			if action == "workspace" {
+				file, err := s.saveComparisonArtifact(ctx, projectID, "experiments/"+taskID+"/remote-comparison.json", job.result)
+				writeComparisonArtifactSave(w, file, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")

@@ -103,10 +103,13 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 		if err := store.finishTask(ctx, project, claim, taskSucceeded, "", calculated); err != nil {
 			t.Fatal(err)
 		}
-		return projectsPath + "/" + project + "/tasks/" + task.TaskID + "/remote-comparison"
+		return task.TaskID
 	}
-	path := completeComparison("pair")
-	stopPath := completeComparison("stop-pair")
+	taskID := completeComparison("pair")
+	stopTaskID := completeComparison("stop-pair")
+	taskBase := projectsPath + "/" + project + "/tasks/"
+	path := taskBase + taskID + "/remote-comparison"
+	stopPath := taskBase + stopTaskID + "/remote-comparison"
 	if _, err := store.saveWorkspaceDocument(ctx, project, source.Path, source.SHA256, "baseline,variant\n1,99\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +161,7 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 		t.Fatalf("wrong recovered receipt or unexpected transfer: %+v, submissions %d, transfers %d", snapshot, submissions.Load(), results.Load())
 	}
 	request(http.MethodGet, path+"/result", http.StatusNotFound)
+	request(http.MethodPost, path+"/result/workspace", http.StatusNotFound)
 	request(http.MethodPost, path+"/retrieve", http.StatusBadGateway)
 	request(http.MethodGet, path+"/result", http.StatusNotFound)
 	if err := json.Unmarshal(request(http.MethodPost, path+"/retrieve", http.StatusOK).Body.Bytes(), &snapshot); err != nil ||
@@ -186,5 +190,28 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	result := request(http.MethodGet, path+"/result", http.StatusOK)
 	if result.Header().Get("X-Result-SHA256") != job.ResultSHA256 || computeDigest(result.Body.Bytes()) != job.ResultSHA256 {
 		t.Fatal("downloaded bytes do not match the recovered receipt")
+	}
+	publication := path + "/result/workspace"
+	request(http.MethodPost, strings.Replace(publication, project, other, 1), http.StatusNotFound)
+	var published WorkspaceFile
+	if err := json.Unmarshal(request(http.MethodPost, publication, http.StatusOK).Body.Bytes(), &published); err != nil ||
+		published.Path != "experiments/"+taskID+"/remote-comparison.json" ||
+		published.SHA256 != job.ResultSHA256 || published.Size != result.Body.Len() {
+		t.Fatalf("unexpected workspace receipt: %+v (%v)", published, err)
+	}
+	stored, err := store.readWorkspaceDocument(published)
+	if err != nil || stored.Content != result.Body.String() {
+		t.Fatalf("saved version differs from remote result: %v", err)
+	}
+	edited, err := store.saveWorkspaceDocument(ctx, project, published.Path, published.SHA256, stored.Content+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replay WorkspaceFile
+	if err := json.Unmarshal(request(http.MethodPost, publication, http.StatusOK).Body.Bytes(), &replay); err != nil || replay != published {
+		t.Fatalf("replay did not return the original report: %+v (%v)", replay, err)
+	}
+	if latest, err := store.workspaceFile(ctx, project, published.Path); err != nil || latest.VersionID != edited.VersionID {
+		t.Fatalf("replay displaced the edited version: %+v (%v)", latest, err)
 	}
 }
