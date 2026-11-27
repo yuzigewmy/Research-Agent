@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { LocalDirectory } from './LocalDirectory'
 import { MaterialImageGeneration } from './MaterialImageGeneration'
 import { MaterialImagePreview } from './MaterialImagePreview'
 import { MaterialImageReview } from './MaterialImageReview'
@@ -219,6 +220,11 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
           </>}
         </div>
       </div>
+      <LocalDirectory projectId={projectId} onImported={(material) => {
+        if (matchesMaterialQuery(material.name, appliedQuery.current)) {
+          setItems((current) => mergeMaterials(current, [material]))
+        }
+      }} />
       <details className="material-generation" onToggle={(event) => setGenerationOpen(event.currentTarget.open)}>
         <summary>生成科研图片</summary>
         {generationOpen && <MaterialImageGeneration projectId={projectId} onMaterial={(material) => {
