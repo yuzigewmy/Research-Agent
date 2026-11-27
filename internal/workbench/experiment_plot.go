@@ -61,8 +61,11 @@ func renderExperimentPlot(ctx context.Context, report experimentComparisonReport
 	var out strings.Builder
 	out.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 570 582" width="570" height="582" role="img" aria-labelledby="plot-title plot-desc">`)
 	out.WriteString(`<title id="plot-title">基线与方案配对散点图</title><desc id="plot-desc">横轴为基线，纵轴为方案，虚线表示两列数值相等。</desc><metadata>`)
-	fmt.Fprintf(&out, "renderer=%s; method=%s; version=", experimentPlotRevision, experimentComparisonMethod)
-	_ = xml.EscapeText(&out, []byte(report.Input.VersionID))
+	fmt.Fprintf(&out, "renderer=%s; method=%s", experimentPlotRevision, experimentComparisonMethod)
+	if report.Input.VersionID != "" {
+		out.WriteString("; version=")
+		_ = xml.EscapeText(&out, []byte(report.Input.VersionID))
+	}
 	fmt.Fprintf(&out, `; sha256=%s</metadata><rect width="570" height="566" fill="#fff"/><g font-family="sans-serif" fill="#172920"><text x="124" y="32" font-size="20" font-weight="bold">基线与方案配对散点图</text><text x="124" y="55" font-size="13">%d 行参与计算 · %d 行因缺失跳过</text>`, report.Input.SHA256, len(points), skipped)
 	fmt.Fprintf(&out, `<rect x="%d" y="%d" width="%d" height="%d" fill="#f5f8f6" stroke="#a6bbb2"/><path d="M%d %dL%d %d" stroke="#556c63" stroke-dasharray="6 5"/>`, left, top, size, size, left, top+size, left+size, top)
 	shortLabel := func(value *big.Rat, exact string) string {

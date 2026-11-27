@@ -120,9 +120,16 @@ func initializeComputeWorker(db *sql.DB) error {
 		if _, err := tx.Exec(`PRAGMA user_version = 1`); err != nil {
 			return err
 		}
-	case 1:
+	case 1, 2:
 	default:
 		return errors.New("计算节点回执库版本不受支持")
+	}
+	if version < 2 {
+		if _, err := tx.Exec(`ALTER TABLE jobs ADD COLUMN scatter_svg TEXT NOT NULL DEFAULT '';
+			ALTER TABLE jobs ADD COLUMN scatter_sha256 TEXT NOT NULL DEFAULT '';
+			PRAGMA user_version = 2`); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE jobs SET
 		status = CASE status WHEN 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,
@@ -168,6 +175,8 @@ func (worker *ComputeWorker) Handler() http.Handler {
 	mux.HandleFunc("GET "+computeJobsPath+"{jobId}", worker.readJob)
 	mux.HandleFunc("POST "+computeJobsPath+"{jobId}/cancel", worker.cancelJob)
 	mux.HandleFunc("GET "+computeJobsPath+"{jobId}/result", worker.readResult)
+	mux.HandleFunc("GET "+computeJobsPath+"{jobId}/artifacts", worker.listArtifacts)
+	mux.HandleFunc("GET "+computeJobsPath+"{jobId}/artifacts/scatter.svg", worker.readScatter)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -280,10 +289,10 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (worker *ComputeWorker) executeJob(ctx context.Context, job computeJob, source string) (computeJob, error) {
-	job, result := runComputeJob(ctx, job, source)
+	job, result, scatter := runComputeJob(ctx, job, source)
 	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
-	return worker.finishJob(saveCtx, job, result)
+	return worker.finishJob(saveCtx, job, result, scatter)
 }
 
 func (worker *ComputeWorker) replyJob(w http.ResponseWriter, ctx context.Context, id, digest string) {
@@ -299,14 +308,20 @@ func (worker *ComputeWorker) replyJob(w http.ResponseWriter, ctx context.Context
 	writeJSON(w, http.StatusOK, job)
 }
 
-func (worker *ComputeWorker) finishJob(ctx context.Context, job computeJob, result string) (computeJob, error) {
+func (worker *ComputeWorker) finishJob(ctx context.Context, job computeJob, result, scatter string) (computeJob, error) {
+	var scatterSHA256 string
+	if scatter != "" {
+		scatterSHA256 = computeDigest([]byte(scatter))
+	}
 	_, err := worker.db.ExecContext(ctx, `UPDATE jobs SET
 		status = CASE status WHEN 'CANCELLING' THEN 'CANCELLED' ELSE ? END,
 		finished_at = ?, result_sha256 = CASE status WHEN 'RUNNING' THEN ? ELSE '' END,
 		result_json = CASE status WHEN 'RUNNING' THEN ? ELSE '' END,
+		scatter_svg = CASE status WHEN 'RUNNING' THEN ? ELSE '' END,
+		scatter_sha256 = CASE status WHEN 'RUNNING' THEN ? ELSE '' END,
 		message = CASE status WHEN 'RUNNING' THEN ? ELSE '' END
 		WHERE job_id = ? AND status IN ('RUNNING', 'CANCELLING')`,
-		job.Status, job.FinishedAt, job.ResultSHA256, result, job.Message, job.JobID)
+		job.Status, job.FinishedAt, job.ResultSHA256, result, scatter, scatterSHA256, job.Message, job.JobID)
 	if err != nil {
 		return computeJob{}, err
 	}
@@ -354,7 +369,7 @@ func computeDigest(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func runComputeJob(ctx context.Context, job computeJob, source string) (computeJob, string) {
+func runComputeJob(ctx context.Context, job computeJob, source string) (computeJob, string, string) {
 	metrics, err := compareExperimentMetrics(ctx, source)
 	job.FinishedAt = time.Now().UTC().Format(createdAtLayout)
 	if err != nil {
@@ -364,15 +379,21 @@ func runComputeJob(ctx context.Context, job computeJob, source string) (computeJ
 		if errors.As(err, &inputErr) {
 			job.Message = inputErr.Error()
 		}
-		return job, ""
+		return job, "", ""
 	}
 	result, err := json.Marshal(computeJobResult{experimentComparisonMethod, job.InputSHA256, metrics})
 	if err != nil {
 		job.Status, job.Message = taskFailed, "无法生成计算结果。"
-		return job, ""
+		return job, "", ""
 	}
+	plotInput := experimentComparisonReport{Method: experimentComparisonMethod, Input: taskInput{SHA256: job.InputSHA256}, Metrics: metrics}
+	scatter, err := renderExperimentPlot(ctx, plotInput, source)
+	if err != nil || len(scatter) > maxComputeScatterBytes {
+		scatter = ""
+	}
+	job.FinishedAt = time.Now().UTC().Format(createdAtLayout)
 	job.Status, job.ResultSHA256 = taskSucceeded, computeDigest(result)
-	return job, string(result)
+	return job, string(result), scatter
 }
 
 func (worker *ComputeWorker) lookupJob(ctx context.Context, id string) (computeJob, string, error) {

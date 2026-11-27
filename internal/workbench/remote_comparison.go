@@ -65,13 +65,16 @@ type remoteComparison struct {
 	computeJob
 	nodeDigest string
 	result     string
+	scatter    remoteScatter
 }
 
 func readRemoteComparison(ctx context.Context, db workspaceQuery, projectID, taskID string) (remoteComparison, error) {
 	var job remoteComparison
-	err := db.QueryRowContext(ctx, `SELECT job_id, node_digest, input_sha256, status, started_at, finished_at, result_sha256, result_json
+	err := db.QueryRowContext(ctx, `SELECT job_id, node_digest, input_sha256, status, started_at, finished_at, result_sha256, result_json,
+		scatter_size, scatter_sha256, scatter_svg <> ''
 		FROM remote_comparisons WHERE project_id = ? AND task_id = ?`, projectID, taskID).Scan(&job.JobID, &job.nodeDigest,
-		&job.InputSHA256, &job.Status, &job.StartedAt, &job.FinishedAt, &job.ResultSHA256, &job.result)
+		&job.InputSHA256, &job.Status, &job.StartedAt, &job.FinishedAt, &job.ResultSHA256, &job.result,
+		&job.scatter.Size, &job.scatter.SHA256, &job.scatter.Retrieved)
 	return job, err
 }
 
@@ -112,8 +115,11 @@ func (node *ComputeNode) jobRequest(ctx context.Context, method, id, suffix, dig
 	if res.StatusCode != http.StatusOK && (method != http.MethodPut || (res.StatusCode != http.StatusCreated && res.StatusCode != http.StatusAccepted)) {
 		return nil, nil, errRemoteResponse
 	}
-	const maxResponse = 8 << 10
-	body, err := io.ReadAll(io.LimitReader(res.Body, maxResponse+1))
+	maxResponse := 8 << 10
+	if suffix == "artifacts/"+computeScatterName {
+		maxResponse = maxComputeScatterBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, int64(maxResponse)+1))
 	if err != nil || len(body) > maxResponse {
 		return nil, nil, errRemoteResponse
 	}
@@ -184,6 +190,9 @@ func registerRemoteComparison(mux *http.ServeMux, store *Store, node *ComputeNod
 	mux.HandleFunc("POST "+path+"/refresh", store.remoteComparisonHandler(node, "refresh"))
 	mux.HandleFunc("POST "+path+"/cancel", store.remoteComparisonHandler(node, "cancel"))
 	mux.HandleFunc("POST "+path+"/retrieve", store.remoteComparisonHandler(node, "retrieve"))
+	mux.HandleFunc("POST "+path+"/artifacts", store.remoteComparisonHandler(node, "artifacts"))
+	mux.HandleFunc("POST "+path+"/retrieve-scatter", store.remoteComparisonHandler(node, "retrieve-scatter"))
+	mux.HandleFunc("GET "+path+"/scatter", store.remoteComparisonHandler(node, "scatter"))
 }
 
 func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.HandlerFunc {
@@ -201,6 +210,14 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 		}
 		if action == "snapshot" {
 			writeRemoteComparison(w, node, job)
+			return
+		}
+		if action == "scatter" {
+			if job.Status != taskSucceeded || !job.scatter.Retrieved || job.InputSHA256 != report.Input.SHA256 {
+				writeError(w, http.StatusNotFound, "RESULT_NOT_FOUND", "没有通过校验的远程散点图。")
+				return
+			}
+			s.downloadRemoteScatter(w, r, job)
 			return
 		}
 		if action == "result" || action == "workspace" {
@@ -228,12 +245,16 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交空 JSON 对象。")
 			return
 		}
-		if action == "retrieve" {
+		if action == "retrieve" || action == "artifacts" || action == "retrieve-scatter" {
 			if job.Status != taskSucceeded {
 				writeError(w, http.StatusConflict, "RESULT_NOT_READY", "请先查询并确认远程作业已完成。")
 				return
 			}
-			if job.result != "" {
+			if action == "retrieve-scatter" && job.scatter.Size == 0 {
+				writeError(w, http.StatusConflict, "SCATTER_NOT_LISTED", "请先查看远程成果清单。")
+				return
+			}
+			if (action == "retrieve" && job.result != "") || (action == "retrieve-scatter" && job.scatter.Retrieved) {
 				writeRemoteComparison(w, node, job)
 				return
 			}
@@ -270,6 +291,10 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 		}
 		if action == "retrieve" {
 			s.retrieveRemoteComparison(w, r, node, job, report.Metrics)
+			return
+		}
+		if action == "artifacts" || action == "retrieve-scatter" {
+			s.updateRemoteScatter(w, r, node, job, report, action)
 			return
 		}
 		method, source := http.MethodGet, ""
@@ -345,9 +370,14 @@ func writeRemoteComparison(w http.ResponseWriter, node *ComputeNode, job remoteC
 	if job.JobID != "" {
 		receipt = &job.computeJob
 	}
+	var scatter *remoteScatter
+	if job.scatter.Size != 0 {
+		scatter = &job.scatter
+	}
 	writeJSON(w, http.StatusOK, struct {
-		Configured      bool        `json:"configured"`
-		Job             *computeJob `json:"job,omitempty"`
-		ReportRetrieved bool        `json:"reportRetrieved"`
-	}{node != nil, receipt, job.result != ""})
+		Configured      bool           `json:"configured"`
+		Job             *computeJob    `json:"job,omitempty"`
+		ReportRetrieved bool           `json:"reportRetrieved"`
+		Scatter         *remoteScatter `json:"scatter,omitempty"`
+	}{node != nil, receipt, job.result != "", scatter})
 }

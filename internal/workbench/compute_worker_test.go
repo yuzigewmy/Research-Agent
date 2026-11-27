@@ -42,6 +42,16 @@ func TestComputeWorkerUpgradesExistingReceipts(t *testing.T) {
 	if err != nil || job != (computeJob{JobID: id, InputSHA256: digest, Status: taskSucceeded, StartedAt: started, FinishedAt: started, ResultSHA256: resultDigest}) || body != result {
 		t.Fatalf("upgrade changed the old result: %+v (%v)", job, err)
 	}
+	manifestRequest := httptest.NewRequestWithContext(t.Context(), http.MethodGet, computeJobsPath+id+"/artifacts", nil)
+	manifestRequest.Header.Set("Authorization", "Bearer worker-fixture-credential")
+	response := httptest.NewRecorder()
+	worker.Handler().ServeHTTP(response, manifestRequest)
+	var manifest computeArtifactManifest
+	if err := json.Unmarshal(response.Body.Bytes(), &manifest); err != nil || response.Code != http.StatusOK ||
+		manifest.JobID != id || manifest.InputSHA256 != digest || len(manifest.Items) != 1 ||
+		manifest.Items[0] != (computeArtifact{computeReportName, len(result), resultDigest}) {
+		t.Fatalf("old job did not advertise its original report: %d %+v (%v)", response.Code, manifest, err)
+	}
 }
 
 func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
@@ -148,11 +158,13 @@ func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
 	}
 	lateResult := first
 	lateResult.JobID = runningID
-	cancelled, err := worker.finishJob(t.Context(), lateResult, `{"late":true}`)
+	cancelled, err := worker.finishJob(t.Context(), lateResult, `{"late":true}`, "<svg/>")
 	if err != nil || cancelled.Status != taskCancelled || cancelled.ResultSHA256 != "" {
 		t.Fatalf("late success overrode cancellation: %+v (%v)", cancelled, err)
 	}
 	request(http.MethodGet, runningPath+"/result", "", "", true, http.StatusNotFound)
+	request(http.MethodGet, runningPath+"/artifacts", "", "", true, http.StatusNotFound)
+	request(http.MethodGet, runningPath+"/artifacts/scatter.svg", "", "", true, http.StatusNotFound)
 	var repeatedStop computeJob
 	if err := json.Unmarshal(request(http.MethodPost, runningPath+"/cancel", "", digest, true, http.StatusOK).Body.Bytes(), &repeatedStop); err != nil || repeatedStop != cancelled {
 		t.Fatalf("repeated stop did not return the saved receipt: %+v (%v)", repeatedStop, err)
@@ -167,5 +179,20 @@ func TestComputeWorkerKeepsJobAndResultAcrossRestart(t *testing.T) {
 	if err := json.Unmarshal(result.Body.Bytes(), &report); err != nil || report.Method != experimentComparisonMethod || report.InputSHA256 != digest ||
 		report.Metrics != (experimentMetrics{PairedRows: 2, BaselineMean: "3", VariantMean: "9", MeanDifference: "6"}) {
 		t.Fatalf("wrong result: %+v (%v)", report, err)
+	}
+	var manifest computeArtifactManifest
+	if err := json.Unmarshal(request(http.MethodGet, job+"/artifacts", "", "", true, http.StatusOK).Body.Bytes(), &manifest); err != nil ||
+		manifest.JobID != first.JobID || manifest.InputSHA256 != digest || len(manifest.Items) != 2 {
+		t.Fatalf("wrong artifact manifest: %+v (%v)", manifest, err)
+	}
+	if manifest.Items[0] != (computeArtifact{computeReportName, result.Body.Len(), first.ResultSHA256}) {
+		t.Fatalf("unexpected report entry: %+v", manifest.Items[0])
+	}
+	scatter := request(http.MethodGet, job+"/artifacts/scatter.svg", "", "", true, http.StatusOK)
+	wantPlot, err := renderExperimentPlot(t.Context(), experimentComparisonReport{Method: report.Method,
+		Input: taskInput{SHA256: digest}, Metrics: report.Metrics}, source)
+	if err != nil || scatter.Body.String() != wantPlot || manifest.Items[1] != (computeArtifact{computeScatterName, len(wantPlot), computeDigest([]byte(wantPlot))}) ||
+		scatter.Header().Get("X-Result-SHA256") != manifest.Items[1].SHA256 {
+		t.Fatalf("unexpected scatter artifact: %+v (%v)", manifest.Items[1], err)
 	}
 }

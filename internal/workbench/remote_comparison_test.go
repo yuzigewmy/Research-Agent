@@ -17,7 +17,7 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer worker.Close()
-	var submissions, results, stops atomic.Int32
+	var submissions, results, stops, scatterRequests atomic.Int32
 	workerHandler := worker.Handler()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut && submissions.Add(1) > 1 {
@@ -43,6 +43,20 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 				return
 			}
 			_ = connection.Close()
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/artifacts/scatter.svg") && scatterRequests.Add(1) == 1 {
+			tampered := httptest.NewRecorder()
+			workerHandler.ServeHTTP(tampered, r)
+			body := tampered.Body.Bytes()
+			if tampered.Code != http.StatusOK || len(body) == 0 {
+				t.Errorf("node did not produce the scatter: %d", tampered.Code)
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			body[0] = ' '
+			w.Header().Set("X-Result-SHA256", tampered.Header().Get("X-Result-SHA256"))
+			_, _ = w.Write(body)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/result") && results.Add(1) == 1 {
@@ -155,6 +169,7 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	var snapshot struct {
 		Job             computeJob
 		ReportRetrieved bool
+		Scatter         *remoteScatter
 	}
 	if err := json.Unmarshal(request(http.MethodPost, path+"/refresh", http.StatusOK).Body.Bytes(), &snapshot); err != nil {
 		t.Fatal(err)
@@ -163,6 +178,21 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	if job.JobID != pending.JobID || job.Status != taskSucceeded || job.InputSHA256 != source.SHA256 || submissions.Load() != 1 ||
 		snapshot.ReportRetrieved || results.Load() != 0 {
 		t.Fatalf("wrong recovered receipt or unexpected transfer: %+v, submissions %d, transfers %d", snapshot, submissions.Load(), results.Load())
+	}
+	request(http.MethodPost, path+"/retrieve-scatter", http.StatusConflict)
+	if err := json.Unmarshal(request(http.MethodPost, path+"/artifacts", http.StatusOK).Body.Bytes(), &snapshot); err != nil ||
+		snapshot.Scatter == nil || snapshot.Scatter.Retrieved || snapshot.ReportRetrieved || results.Load() != 0 || scatterRequests.Load() != 0 {
+		t.Fatalf("listing transferred artifact bytes or returned an invalid manifest: %+v (%v)", snapshot, err)
+	}
+	request(http.MethodPost, path+"/retrieve-scatter", http.StatusBadGateway)
+	request(http.MethodGet, path+"/scatter", http.StatusNotFound)
+	if err := json.Unmarshal(request(http.MethodPost, path+"/retrieve-scatter", http.StatusOK).Body.Bytes(), &snapshot); err != nil ||
+		snapshot.Scatter == nil || !snapshot.Scatter.Retrieved || snapshot.ReportRetrieved || results.Load() != 0 || scatterRequests.Load() != 2 {
+		t.Fatalf("unexpected scatter retrieval snapshot: %+v (%v)", snapshot, err)
+	}
+	request(http.MethodPost, path+"/retrieve-scatter", http.StatusOK)
+	if scatterRequests.Load() != 2 {
+		t.Fatal("retrieval replay transferred an already saved scatter plot")
 	}
 	request(http.MethodGet, path+"/result", http.StatusNotFound)
 	request(http.MethodPost, path+"/result/workspace", http.StatusNotFound)
@@ -191,6 +221,12 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	}
 	request(http.MethodGet, stopPath+"/result", http.StatusNotFound)
 	handler = NewHandler(store, nil, HandlerConfig{})
+	request(http.MethodGet, strings.Replace(path, project, other, 1)+"/scatter", http.StatusNotFound)
+	plot := request(http.MethodGet, path+"/scatter", http.StatusOK)
+	if plot.Body.Len() != snapshot.Scatter.Size || computeDigest(plot.Body.Bytes()) != snapshot.Scatter.SHA256 ||
+		plot.Header().Get("X-Result-SHA256") != snapshot.Scatter.SHA256 || !strings.HasPrefix(plot.Header().Get("Content-Disposition"), "attachment;") {
+		t.Fatal("offline scatter download differs from the manifest")
+	}
 	result := request(http.MethodGet, path+"/result", http.StatusOK)
 	if result.Header().Get("X-Result-SHA256") != job.ResultSHA256 || computeDigest(result.Body.Bytes()) != job.ResultSHA256 {
 		t.Fatal("downloaded bytes do not match the recovered receipt")
