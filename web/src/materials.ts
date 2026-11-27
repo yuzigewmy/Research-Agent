@@ -21,6 +21,19 @@ export interface MaterialPreview {
   sections?: string[]
 }
 
+export interface MaterialTablePreview {
+  headers: string[]
+  rows: string[][]
+  totalPreviewRows: number
+  truncated: boolean
+  maskedColumns: string[]
+  maskedCellCount: number
+}
+
+export function isTableMaterialName(name: string) {
+  return /\.(csv|tsv)$/i.test(name)
+}
+
 export const materialSizeLimit = 64 * 1024 * 1024
 
 export function archiveFormatLabel(name: string) {
@@ -90,6 +103,33 @@ function isMaterialPreview(value: unknown): value is MaterialPreview {
 
 export function getMaterialPreview(projectId: string, materialId: string, signal: AbortSignal) {
   return request(`${materialPath(projectId, materialId)}/preview`, isMaterialPreview, { signal })
+}
+
+function isMaterialTablePreview(value: unknown): value is MaterialTablePreview {
+  const preview = value as Partial<MaterialTablePreview> | null
+  return !!preview
+    && Array.isArray(preview.headers) && preview.headers.every((cell) => typeof cell === 'string')
+    && Array.isArray(preview.rows) && preview.rows.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === 'string'))
+    && typeof preview.totalPreviewRows === 'number' && Number.isSafeInteger(preview.totalPreviewRows) && preview.totalPreviewRows >= 0
+    && typeof preview.truncated === 'boolean'
+    && Array.isArray(preview.maskedColumns) && preview.maskedColumns.every((col) => typeof col === 'string')
+    && typeof preview.maskedCellCount === 'number' && Number.isSafeInteger(preview.maskedCellCount) && preview.maskedCellCount >= 0
+}
+
+export function getMaterialTablePreview(projectId: string, materialId: string, signal: AbortSignal) {
+  return request(`${materialPath(projectId, materialId)}/table-preview`, isMaterialTablePreview, { signal })
+}
+
+function isDeleteMaterialReceipt(value: unknown): value is { deleted: boolean; materialId: string } {
+  const receipt = value as { deleted?: unknown; materialId?: unknown } | null
+  return !!receipt && receipt.deleted === true && typeof receipt.materialId === 'string'
+}
+
+export function deleteMaterial(projectId: string, materialId: string, signal: AbortSignal) {
+  return request(materialPath(projectId, materialId), isDeleteMaterialReceipt, {
+    method: 'DELETE',
+    signal,
+  })
 }
 
 export function materialDownloadPath(projectId: string, materialId: string) {

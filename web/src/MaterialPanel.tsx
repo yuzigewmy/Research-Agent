@@ -4,8 +4,11 @@ import { LocalDirectory } from './LocalDirectory'
 import { MaterialImageGeneration } from './MaterialImageGeneration'
 import { MaterialImagePreview } from './MaterialImagePreview'
 import { MaterialImageReview } from './MaterialImageReview'
-import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial } from './materials'
-import type { Material, MaterialPreview } from './materials'
+import {
+  archiveFormatLabel, deleteMaterial, getMaterialPreview, getMaterialTablePreview, isTableMaterialName,
+  listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial,
+} from './materials'
+import type { Material, MaterialPreview, MaterialTablePreview } from './materials'
 import { PdfPreview } from './PdfPreview'
 import { WordPreview } from './WordPreviewQuote'
 import { WorkspaceBundleAdd } from './WorkspaceBundle'
@@ -22,7 +25,8 @@ const readTimeout = 10_000
 type ReadStatus = { kind: 'loading' } | { kind: 'error'; message: string }
 type ListStatus = ReadStatus | { kind: 'ready' }
 type PreviewStatus = ReadStatus | { kind: 'ready'; preview: MaterialPreview }
-type UploadFailure = { name: string; message: string }
+type TablePreviewStatus = ReadStatus | { kind: 'ready'; preview: MaterialTablePreview }
+type UploadFailure = { name: string; message: string; file?: File }
 
 function formatSize(size: number) {
   if (size >= 1_048_576) return `${sizeFormat.format(size / 1_048_576)} MiB`
@@ -81,6 +85,69 @@ function MaterialPreviewContent({ projectId, material, onWordQuote, quoteBlocked
   )
 }
 
+function MaterialTablePreviewContent({ projectId, material }: { projectId: string; material: Material }) {
+  const [status, setStatus] = useState<TablePreviewStatus>({ kind: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(readTimeout)])
+    void getMaterialTablePreview(projectId, material.materialId, signal).then((preview) => {
+      if (!controller.signal.aborted) setStatus({ kind: 'ready', preview })
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setStatus({ kind: 'error', message: errorMessage(error) })
+    })
+    return () => controller.abort()
+  }, [projectId, material.materialId, attempt])
+
+  if (status.kind === 'loading') return <p className="material-note" role="status">正在加载脱敏表格预览…</p>
+  if (status.kind === 'error') return (
+    <div className="request-error">
+      <p role="alert">{status.message}</p>
+      <button className="button outline" type="button" onClick={() => {
+        setStatus({ kind: 'loading' })
+        setAttempt((value) => value + 1)
+      }}>重试</button>
+    </div>
+  )
+
+  const { headers, rows, totalPreviewRows, truncated, maskedColumns, maskedCellCount } = status.preview
+  return (
+    <div className="material-table-preview" aria-label={`脱敏表格预览：${material.name}`}>
+      <p className="material-note" role="status">
+        已预览 {totalPreviewRows} 行{truncated ? '（仅显示前 50 行）' : ''} ·{' '}
+        {maskedCellCount > 0 || maskedColumns.length > 0
+          ? `已自动脱敏 ${maskedCellCount} 个敏感单元格${maskedColumns.length > 0 ? `（涉及列：${maskedColumns.join('、')}）` : ''}`
+          : '未检测到需要脱敏的敏感个人信息'}
+      </p>
+      {headers.length === 0 ? (
+        <p className="material-note">表格为空。</p>
+      ) : (
+        <div className="material-table-scroll" tabIndex={0}>
+          <table className="material-table">
+            <thead>
+              <tr>
+                {headers.map((header, idx) => (
+                  <th key={idx} scope="col">{header || `第 ${idx + 1} 列`}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rIdx) => (
+                <tr key={rIdx}>
+                  {headers.map((_, cIdx) => (
+                    <td key={cIdx}>{row[cIdx] ?? ''}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface MaterialPanelProps {
   projectId: string
   onReference?: (material: Material) => void
@@ -105,6 +172,10 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
   const [query, setQuery] = useState('')
   const [pageRequest, setPageRequest] = useState<{ q: string; cursor?: string }>({ q: '' })
   const [previewId, setPreviewId] = useState<string>()
+  const [tablePreviewId, setTablePreviewId] = useState<string>()
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string>()
+  const [removingId, setRemovingId] = useState<string>()
+  const [removeError, setRemoveError] = useState<string>()
   const [imageReviewId, setImageReviewId] = useState<string>()
   const [generationOpen, setGenerationOpen] = useState(false)
   const [uploading, setUploading] = useState<'files' | 'folder'>()
@@ -187,7 +258,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
           setUploadedCount((count) => count + 1)
         } catch (error) {
           if (controller.signal.aborted) return
-          setFailures((current) => [...current, { name: file.name, message: errorMessage(error) }])
+          setFailures((current) => [...current, { name: file.name, message: errorMessage(error), file }])
         }
       }
     } catch (error) {
@@ -197,6 +268,56 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
     } finally {
       uploadRequest.current = null
       if (!controller.signal.aborted) setUploading(undefined)
+    }
+  }
+
+  async function retryFailedUploads() {
+    const retryable = failures.filter((item): item is UploadFailure & { file: File } => !!item.file)
+    if (!retryable.length || uploadRequest.current) return
+    const controller = new AbortController()
+    uploadRequest.current = controller
+    setUploading('files')
+    setUploadedCount(0)
+    const remaining: UploadFailure[] = failures.filter((item) => !item.file)
+    setFailures(remaining)
+    try {
+      for (const item of retryable) {
+        if (controller.signal.aborted) return
+        try {
+          const material = await uploadMaterial(projectId, item.file, controller.signal)
+          if (controller.signal.aborted) return
+          if (matchesMaterialQuery(material.name, appliedQuery.current)) {
+            setItems((current) => mergeMaterials(current, [material]))
+          }
+          setUploadedCount((count) => count + 1)
+        } catch (error) {
+          if (controller.signal.aborted) return
+          setFailures((current) => [...current, { name: item.name, message: errorMessage(error), file: item.file }])
+        }
+      }
+    } finally {
+      uploadRequest.current = null
+      if (!controller.signal.aborted) setUploading(undefined)
+    }
+  }
+
+  async function confirmRemoveMaterial(material: Material) {
+    if (removingId) return
+    const controller = new AbortController()
+    setRemovingId(material.materialId)
+    setRemoveError(undefined)
+    try {
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(readTimeout)])
+      await deleteMaterial(projectId, material.materialId, signal)
+      setItems((current) => current.filter((item) => item.materialId !== material.materialId))
+      if (previewId === material.materialId) setPreviewId(undefined)
+      if (tablePreviewId === material.materialId) setTablePreviewId(undefined)
+      if (imageReviewId === material.materialId) setImageReviewId(undefined)
+      setConfirmRemoveId(undefined)
+    } catch (error) {
+      setRemoveError(errorMessage(error))
+    } finally {
+      setRemovingId(undefined)
     }
   }
 
@@ -255,11 +376,17 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
         已选满 {turnReferenceLimit} 份资料，移除一份后可继续选择。
       </p>}
       {uploadedCount > 0 && !uploading && <p className="material-note" role="status">上传成功 {uploadedCount} 个文件</p>}
-      {failures.length > 0 && <div role="alert">
+      {failures.length > 0 && <div role="alert" className="material-failures-box">
         <ul className="material-failures form-error">
           {failures.map(({ name, message }, index) => <li key={index}><bdi>{name}</bdi> 上传失败：{message}</li>)}
         </ul>
+        {failures.some((item) => !!item.file) && (
+          <button className="button outline" type="button" disabled={!!uploading} onClick={() => void retryFailedUploads()}>
+            重试失败项
+          </button>
+        )}
       </div>}
+      {removeError && <p className="form-error" role="alert">{removeError}</p>}
       {items.length > 0 && <ul className="material-list" role="list">
         {items.map((material) => {
           const isOpen = previewId === material.materialId
@@ -267,6 +394,10 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
           const isPdf = material.format === 'pdf'
           const isWord = material.format === 'word'
           const isArchive = material.format === 'archive'
+          const isTable = isTableMaterialName(material.name)
+          const isTableOpen = tablePreviewId === material.materialId
+          const tableRegion = `${headingId}-table-${material.materialId}`
+          const isConfirmingRemove = confirmRemoveId === material.materialId
           const hasText = !isPdf && !isArchive && (material.kind === 'text' || isWord)
           const imageType = material.kind === 'file' && /\.(png|jpe?g)$/i.test(material.name)
             ? (/\.png$/i.test(material.name) ? 'PNG' : 'JPEG') : undefined
@@ -295,6 +426,12 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
                 {isWord && <p className="material-note" id={wordScopeId}>正文和表格文字节选（预览最多 64 KiB，UTF-8）</p>}
               </div>
               <div className="material-actions">
+                {isTable && <button className="button outline" type="button"
+                  aria-label={`${isTableOpen ? '收起表格预览' : '预览表格（已脱敏）'}：${material.name}`}
+                  aria-expanded={isTableOpen} aria-controls={tableRegion}
+                  onClick={() => setTablePreviewId(isTableOpen ? undefined : material.materialId)}>
+                  {isTableOpen ? '收起表格预览' : '预览表格（已脱敏）'}
+                </button>}
                 {canPreview && <button className="button outline" type="button"
                   aria-label={`${previewLabel}：${material.name}`} aria-expanded={isOpen} aria-controls={previewRegion}
                   aria-describedby={wordScopeId} onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
@@ -312,7 +449,37 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
                   aria-label={`引用资料：${material.name}`} aria-pressed={fullReference} aria-disabled={atLimit}
                   aria-describedby={atLimit ? referenceLimitHint : undefined}
                   onClick={() => { if (!atLimit) onReference(material) }}>引用</button>}
+                <button className="button outline" type="button"
+                  aria-label={`移除资料：${material.name}`}
+                  aria-expanded={isConfirmingRemove}
+                  disabled={removingId === material.materialId}
+                  onClick={() => {
+                    setRemoveError(undefined)
+                    setConfirmRemoveId(isConfirmingRemove ? undefined : material.materialId)
+                  }}>
+                  移除资料
+                </button>
               </div>
+              {isConfirmingRemove && (
+                <div className="material-preview material-remove-confirm" role="group" aria-label={`确认移除：${material.name}`}>
+                  <p className="material-note">
+                    确认仅移除此资料版本（SHA-256 <code>{material.sha256.slice(0, 8)}</code>）？同名其他版本不受影响。
+                  </p>
+                  <div className="material-actions">
+                    <button className="button outline" type="button" disabled={removingId === material.materialId}
+                      onClick={() => void confirmRemoveMaterial(material)}>
+                      {removingId === material.materialId ? '正在移除…' : '确认移除'}
+                    </button>
+                    <button className="button outline" type="button" disabled={removingId === material.materialId}
+                      onClick={() => setConfirmRemoveId(undefined)}>
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
+              {isTable && <div className="material-preview" id={tableRegion} hidden={!isTableOpen}>
+                {isTableOpen && <MaterialTablePreviewContent projectId={projectId} material={material} />}
+              </div>}
               {canViewImage && <div className="material-preview" id={reviewRegion} hidden={!reviewOpen}>
                 {reviewOpen && <MaterialImageReview projectId={projectId} material={material} />}
               </div>}

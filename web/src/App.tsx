@@ -6,6 +6,7 @@ import { ModelConnection } from './ModelConnection'
 import { readReviewLink } from './notificationApi'
 import type { ReviewLink } from './notificationApi'
 import { Notifications } from './Notifications'
+import { ProjectArchiveImport } from './ProjectArchiveImport'
 import { ProjectDetails } from './ProjectDetails'
 import { ProjectDraftPanel } from './ProjectDraftPanel'
 import { ProjectList, useProjectList } from './ProjectList'
@@ -178,10 +179,15 @@ function Workbench() {
             </div>}
             <CreateProjectForm templateItems={templateItems} onCreated={handleCreated} />
             <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
+            <ProjectArchiveImport onImported={handleCreated} />
           </div>
           {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId}
             taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
-            reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh} />}
+            reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh}
+            onDeleted={() => {
+              list.refresh()
+              navigate(null)
+            }} />}
         </section>
         <ProjectList list={list} hidden={preferences.sidebarHidden} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>
