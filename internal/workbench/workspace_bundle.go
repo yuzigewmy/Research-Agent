@@ -110,16 +110,16 @@ func (s *Store) handleWorkspaceBundle(w http.ResponseWriter, r *http.Request) {
 func (s *Store) workspaceBundleSource(ctx context.Context, projectID string, item workspaceBundleItem) (workspaceBundleEntry, error) {
 	if item.Kind == "artifact" {
 		entry := workspaceBundleEntry{Kind: item.Kind, ArtifactID: item.ID}
-		var workflow string
+		var workflow, optionsJSON string
 		var step int
-		err := s.db.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, t.workflow_step, t.created_at, length(CAST(t.markdown AS BLOB))
+		err := s.db.QueryRowContext(ctx, `SELECT w.run_id, w.workflow_key, w.options_json, t.workflow_step, t.created_at, length(CAST(t.markdown AS BLOB))
 			FROM tasks t JOIN workflow_runs w ON w.run_id = t.workflow_run_id AND w.project_id = t.project_id
 			WHERE t.project_id = ? AND t.task_id = ? AND t.status = 'SUCCEEDED'`, projectID, item.ID).
-			Scan(&entry.RunID, &workflow, &step, &entry.CreatedAt, &entry.Size)
+			Scan(&entry.RunID, &workflow, &optionsJSON, &step, &entry.CreatedAt, &entry.Size)
 		if err != nil {
 			return workspaceBundleEntry{}, err
 		}
-		stages := workflowStages[workflow]
+		stages := workflowStagesForRun(workflow, optionsJSON)
 		if step < 0 || step >= len(stages) {
 			return workspaceBundleEntry{}, sql.ErrNoRows
 		}

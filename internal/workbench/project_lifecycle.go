@@ -80,7 +80,7 @@ func projectModelRunsUsed(ctx context.Context, db projectBudgetQuery, projectID 
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM turns WHERE project_id = ?`, projectID).Scan(&turnsCount); err != nil {
 		return 0, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT w.workflow_key, t.workflow_step
+	rows, err := db.QueryContext(ctx, `SELECT w.workflow_key, w.options_json, t.workflow_step
 		FROM tasks t JOIN workflow_runs w ON w.run_id = t.workflow_run_id
 		WHERE t.project_id = ? AND t.workflow_source_version_id IS NULL`, projectID)
 	if err != nil {
@@ -89,12 +89,12 @@ func projectModelRunsUsed(ctx context.Context, db projectBudgetQuery, projectID 
 	defer rows.Close()
 	workflowModelSteps := 0
 	for rows.Next() {
-		var key string
+		var key, optionsJSON string
 		var step int
-		if err := rows.Scan(&key, &step); err != nil {
+		if err := rows.Scan(&key, &optionsJSON, &step); err != nil {
 			return 0, err
 		}
-		stages := workflowStages[key]
+		stages := workflowStagesForRun(key, optionsJSON)
 		if step >= 0 && step < len(stages) && stages[step].prompt != "" {
 			workflowModelSteps++
 		}

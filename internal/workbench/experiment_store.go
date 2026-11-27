@@ -113,6 +113,7 @@ type WorkflowRun struct {
 	Patent              *patentSettings      `json:"patent,omitempty"`
 	Contest             *mathModelingContest `json:"contest,omitempty"`
 	SkippedSteps        []string             `json:"skippedSteps,omitempty"`
+	StepOrder           []string             `json:"stepOrder,omitempty"`
 	MaxStepRetries      int                  `json:"maxStepRetries,omitempty"`
 	Model               string               `json:"model,omitempty"`
 	ReasoningEffort     string            `json:"reasoningEffort,omitempty"`
@@ -161,6 +162,7 @@ type workflowRequest struct {
 	Patent           *patentOptions    `json:"patent"`
 	ContestID        string            `json:"contestId"`
 	SkippedSteps     []string          `json:"skippedSteps"`
+	StepOrder        []string          `json:"stepOrder"`
 	MaxStepRetries   int               `json:"maxStepRetries"`
 	ModelID          string            `json:"modelId"`
 	StepModelIDs     map[string]string `json:"stepModelIds"`
@@ -223,6 +225,7 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 	}
 	runCfg := parseWorkflowRunConfig(run.optionsJSON)
 	run.SkippedSteps = runCfg.SkippedSteps
+	run.StepOrder = runCfg.StepOrder
 	run.MaxStepRetries = runCfg.MaxStepRetries
 	if run.MaxStepRetries == 0 {
 		run.MaxStepRetries = defaultMaxStepRetries
@@ -239,7 +242,7 @@ func readWorkflow(ctx context.Context, tx *sql.Tx, projectID, runID string) (Wor
 			}
 		}
 	}
-	stages := workflowStages[run.WorkflowKey]
+	stages := workflowStagesForRun(run.WorkflowKey, run.optionsJSON)
 	last := run.rangeEnd
 	if last == workflowThroughLast {
 		last = len(stages) - 1
@@ -394,7 +397,12 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 	if req.workflowKey != "" && req.workflowKey != key {
 		return WorkflowRun{}, false, errWorkflowProposalStale
 	}
-	end, err := workflowEndIndex(workflowStages[key], req.ThroughStep)
+	runOptions := options
+	if action != workflowStart {
+		runOptions = current.optionsJSON
+	}
+	stages := workflowStagesForRun(key, runOptions)
+	end, err := workflowEndIndex(stages, req.ThroughStep)
 	if err != nil {
 		return WorkflowRun{}, false, err
 	}
@@ -578,7 +586,7 @@ func applyWorkflowInTx(ctx context.Context, tx *sql.Tx, projectID, action string
 		return WorkflowRun{}, false, err
 	}
 	if queuesWork {
-		if err := enqueueWorkflowStep(ctx, tx, projectID, current.RunID, current.step, workflowStages[current.WorkflowKey][current.step]); err != nil {
+		if err := enqueueWorkflowStep(ctx, tx, projectID, current.RunID, current.step, stages[current.step]); err != nil {
 			return WorkflowRun{}, false, err
 		}
 	}
@@ -648,7 +656,7 @@ func finishWorkflowStep(ctx context.Context, tx *sql.Tx, projectID string, task 
 		}
 		runCfg := parseWorkflowRunConfig(optionsJSON)
 		checkpoints := workflowCheckpoints(templateCheckpoints, mode)
-		stages = workflowStages[key]
+		stages = workflowStagesForRun(key, optionsJSON)
 		if key == topicWorkflow && step == topicShortlistStep && !checkpoints {
 			choice, err := readTopicStep[topicChoice](ctx, tx, task.workflowRunID, step)
 			if err != nil {

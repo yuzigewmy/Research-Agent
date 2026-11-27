@@ -134,7 +134,7 @@ func (s *Store) acceptWorkflowArtifact(ctx context.Context, projectID string, in
 	}
 
 	artifactID = rand.Text()
-	stage := workflowStages[run.WorkflowKey][run.step]
+	stage := workflowStagesForRun(run.WorkflowKey, run.optionsJSON)[run.step]
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
 		(project_id, task_id, instruction, status, created_at, markdown, workflow_run_id, workflow_step, workflow_source_version_id)
 		VALUES (?, ?, ?, 'SUCCEEDED', ?, ?, ?, ?, ?)`, projectID, artifactID, stage.title,

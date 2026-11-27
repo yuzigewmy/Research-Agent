@@ -65,6 +65,7 @@ func (s *Store) readSoftwareBundle(ctx context.Context, projectID, runID string,
 	manifest := softwareBundleManifest{RunID: runID, Revision: revision, WorkflowKey: run.WorkflowKey,
 		Title: run.ProjectTitle, Version: run.Software.Version, Omitted: make([]string, 0, 2)}
 	artifacts := make([]softwareBundleArtifact, 0, len(run.Steps))
+	stages := workflowStagesForRun(run.WorkflowKey, run.optionsJSON)
 	// Read the selected revision and all its bodies from the same database snapshot.
 	for index, step := range run.Steps {
 		if step.ArtifactID == "" {
@@ -74,7 +75,7 @@ func (s *Store) readSoftwareBundle(ctx context.Context, projectID, runID string,
 		if err != nil {
 			return softwareBundleManifest{}, nil, err
 		}
-		name := workflowArtifactFilename(run.WorkflowKey, workflowStages[run.WorkflowKey][index])
+		name := workflowArtifactFilename(run.WorkflowKey, stages[index])
 		artifacts = append(artifacts, softwareBundleArtifact{step.Key, name, artifact.ArtifactID, artifact.markdown})
 	}
 	return manifest, artifacts, nil

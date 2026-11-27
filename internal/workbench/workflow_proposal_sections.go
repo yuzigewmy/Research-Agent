@@ -39,8 +39,8 @@ func sectionedProposalStages() []workflowStage {
 	)
 }
 
-func (s *Store) sectionedProposalResult(ctx context.Context, model *inference.Client, project Project, task Task, input string, goals proposalTargets, sources []reviewSource) (taskResult, error) {
-	if task.workflowStep == firstProposalSection+len(proposalSections) {
+func (s *Store) sectionedProposalResult(ctx context.Context, model *inference.Client, project Project, task Task, stage workflowStage, input string, goals proposalTargets, sources []reviewSource) (taskResult, error) {
+	if stage.key == "manuscript" {
 		return s.assembleProposal(ctx, project, task, sources)
 	}
 	_, outline, err := s.workflowArtifact(ctx, project.ProjectID, task.workflowRunID, "outline")
@@ -55,7 +55,6 @@ func (s *Store) sectionedProposalResult(ctx context.Context, model *inference.Cl
 	for _, markdown := range sections {
 		input += "\n\n已完成章节节选\n" + excerptRunes(markdown, 600)
 	}
-	stage := workflowStages[proposalWorkflow][task.workflowStep]
 	if stage.key == "defense" {
 		markdown, err := streamTaskMarkdown(ctx, model, stage.prompt, input)
 		if err == nil {
@@ -65,7 +64,13 @@ func (s *Store) sectionedProposalResult(ctx context.Context, model *inference.Cl
 		}
 		return taskResult{markdown: markdown}, err
 	}
-	section := proposalSections[task.workflowStep-firstProposalSection]
+	section := proposalSections[0]
+	for _, candidate := range proposalSections {
+		if candidate.key == stage.key {
+			section = candidate
+			break
+		}
+	}
 	goal := goals.TargetCharacters * section.share / 100
 	input += fmt.Sprintf("\n\n本节标题：%s\n本节目标字数：%d\n本节写作要点：%s", section.title, goal, section.focus)
 	markdown, err := streamTaskMarkdownWithBudget(ctx, model, stage.prompt, input, 2*goal+512)
