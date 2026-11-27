@@ -3,14 +3,17 @@ package workbench
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
@@ -344,5 +347,377 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	}
 	if latest, err := restored.workspaceFile(ctx, project, published.Path); err != nil || latest != edited.WorkspaceFile {
 		t.Fatalf("restore changed the current workspace version: %+v (%v)", latest, err)
+	}
+}
+
+func TestRemoteComparisonLongJobReconnectAndStopRecovery(t *testing.T) {
+	ctx := t.Context()
+	const token = "long-job-fixture"
+	worker, err := OpenComputeWorker(t.TempDir(), "长作业节点替身", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+
+	var (
+		mu             sync.Mutex
+		executions     = make(map[string]int)
+		putCounts      = make(map[string]int)
+		getJobCounts   = make(map[string]int)
+		cancelCounts   = make(map[string]int)
+		resultCounts   = make(map[string]int)
+		scatterCounts  = make(map[string]int)
+		disconnected   atomic.Bool
+		dropFirstStop  atomic.Bool
+		tamperScatter  atomic.Bool
+		tamperResult   atomic.Bool
+		lateResultMode atomic.Bool
+	)
+	dropFirstStop.Store(true)
+	tamperScatter.Store(true)
+	tamperResult.Store(true)
+
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	worker.runJob = func(runCtx context.Context, job computeJob, source string) (computeJob, string, string) {
+		mu.Lock()
+		executions[job.JobID]++
+		mu.Unlock()
+		started <- job.JobID
+		if lateResultMode.Load() {
+			<-runCtx.Done()
+			// Simulate a late valid calculation finishing right after cancellation.
+			return runComputeJob(context.Background(), job, source)
+		}
+		select {
+		case <-release:
+		case <-runCtx.Done():
+			job.Status = taskFailed
+			job.FinishedAt = time.Now().UTC().Format(createdAtLayout)
+			return job, "", ""
+		}
+		return runComputeJob(runCtx, job, source)
+	}
+
+	workerHandler := worker.Handler()
+	hijackDrop := func(w http.ResponseWriter) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack connection: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if disconnected.Load() {
+			hijackDrop(w)
+			return
+		}
+		trimmed := strings.TrimPrefix(r.URL.Path, computeJobsPath)
+		jobID, rest, _ := strings.Cut(trimmed, "/")
+		switch {
+		case r.Method == http.MethodPut && rest == "":
+			mu.Lock()
+			putCounts[jobID]++
+			mu.Unlock()
+		case r.Method == http.MethodGet && rest == "":
+			mu.Lock()
+			getJobCounts[jobID]++
+			mu.Unlock()
+		case r.Method == http.MethodPost && rest == "cancel":
+			mu.Lock()
+			cancelCounts[jobID]++
+			mu.Unlock()
+			if dropFirstStop.CompareAndSwap(true, false) {
+				saved := httptest.NewRecorder()
+				workerHandler.ServeHTTP(saved, r)
+				if saved.Code != http.StatusOK {
+					t.Errorf("cancel on node returned %d: %s", saved.Code, saved.Body)
+				}
+				hijackDrop(w)
+				return
+			}
+		case r.Method == http.MethodGet && rest == "artifacts/scatter.svg":
+			mu.Lock()
+			scatterCounts[jobID]++
+			mu.Unlock()
+			if tamperScatter.CompareAndSwap(true, false) {
+				saved := httptest.NewRecorder()
+				workerHandler.ServeHTTP(saved, r)
+				body := append([]byte(nil), saved.Body.Bytes()...)
+				if saved.Code != http.StatusOK || len(body) == 0 {
+					t.Errorf("scatter missing before tamper: %d", saved.Code)
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				body[0] = ' '
+				w.Header().Set("Content-Type", saved.Header().Get("Content-Type"))
+				w.Header().Set("X-Result-SHA256", saved.Header().Get("X-Result-SHA256"))
+				_, _ = w.Write(body)
+				return
+			}
+		case r.Method == http.MethodGet && rest == "result":
+			mu.Lock()
+			resultCounts[jobID]++
+			mu.Unlock()
+			if tamperResult.CompareAndSwap(true, false) {
+				saved := httptest.NewRecorder()
+				workerHandler.ServeHTTP(saved, r)
+				w.Header().Set("Content-Type", saved.Header().Get("Content-Type"))
+				w.Header().Set("X-Result-SHA256", saved.Header().Get("X-Result-SHA256"))
+				_, _ = w.Write(append(saved.Body.Bytes(), ' '))
+				return
+			}
+		}
+		workerHandler.ServeHTTP(w, r)
+	}))
+	defer upstream.Close()
+
+	node, err := NewComputeNode(upstream.URL, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	project, _, err := store.createProject(ctx, createProjectInput{RequestID: "long-job", Title: "长作业重连", TemplateID: "freeform"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const csvSource = "baseline,variant\n2,8\n4,10\n6,12\n"
+	source, err := store.saveWorkspaceDocument(ctx, project.ProjectID, "data/long.csv", "", csvSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeComparison := func(requestID string) string {
+		t.Helper()
+		task, _, err := store.applyTaskRequest(ctx, taskRequest{
+			ProjectID: project.ProjectID, RequestID: requestID, Action: proposeTask,
+			Kind: experimentComparisonTask, Instruction: "长作业配对验证", InputVersionIDs: []string{source.VersionID},
+		}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := store.applyTaskRequest(ctx, taskRequest{
+			ProjectID: project.ProjectID, TaskID: task.TaskID, RequestID: "confirm-" + requestID,
+			Action: confirmTask, ExpectedRevision: task.Revision,
+		}, false); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := store.claimQueuedTask(ctx, project.ProjectID, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		calculated, err := store.runExperimentComparison(ctx, project.ProjectID, claim.Inputs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.finishTask(ctx, project.ProjectID, claim, taskSucceeded, "", calculated); err != nil {
+			t.Fatal(err)
+		}
+		return task.TaskID
+	}
+	taskID := completeComparison("long-run")
+	stopTaskID := completeComparison("long-stop")
+	handler := NewHandler(store, nil, HandlerConfig{ComputeNode: node})
+
+	call := func(method, route string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequestWithContext(ctx, method, "http://127.0.0.1"+route, strings.NewReader("{}"))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: got %d, want %d: %s", method, route, w.Code, want, w.Body)
+		}
+		return w
+	}
+	type remoteSnapshot struct {
+		Configured      bool
+		Job             *computeJob
+		ReportRetrieved bool
+		Scatter         *remoteScatter
+	}
+	readSnap := func(method, route string) remoteSnapshot {
+		t.Helper()
+		var snap remoteSnapshot
+		if err := json.Unmarshal(call(method, route, http.StatusOK).Body.Bytes(), &snap); err != nil {
+			t.Fatal(err)
+		}
+		return snap
+	}
+
+	base := projectsPath + "/" + project.ProjectID + "/tasks/"
+	path := base + taskID + "/remote-comparison"
+	stopPath := base + stopTaskID + "/remote-comparison"
+
+	// 1. Submit long-running job: node accepts asynchronously and stays RUNNING.
+	accepted := readSnap(http.MethodPost, path+"/submit")
+	if accepted.Job == nil || accepted.Job.Status != taskRunning || accepted.Job.InputSHA256 != source.SHA256 {
+		t.Fatalf("expected accepted RUNNING receipt, got %+v", accepted)
+	}
+	jobID := accepted.Job.JobID
+	select {
+	case gotID := <-started:
+		if gotID != jobID {
+			t.Fatalf("started job %s, want %s", gotID, jobID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for job execution to start")
+	}
+
+	// Verify idempotent PUT replay while the job is still actively RUNNING returns 200 OK without re-executing,
+	// while a different job ID receives 429 NODE_BUSY.
+	replayReq, err := http.NewRequestWithContext(ctx, http.MethodPut, upstream.URL+computeJobsPath+jobID, strings.NewReader(csvSource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayReq.Header.Set("Authorization", "Bearer "+token)
+	replayReq.Header.Set("Content-Type", "text/csv")
+	replayReq.Header.Set("X-Input-SHA256", source.SHA256)
+	replayRes, err := http.DefaultClient.Do(replayReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replayed computeJob
+	if err := json.NewDecoder(replayRes.Body).Decode(&replayed); err != nil || replayRes.StatusCode != http.StatusOK ||
+		replayed.JobID != jobID || replayed.Status != taskRunning {
+		_ = replayRes.Body.Close()
+		t.Fatalf("running PUT replay: status=%d job=%+v err=%v", replayRes.StatusCode, replayed, err)
+	}
+	_ = replayRes.Body.Close()
+
+	busyReq, err := http.NewRequestWithContext(ctx, http.MethodPut, upstream.URL+computeJobsPath+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", strings.NewReader(csvSource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	busyReq.Header.Set("Authorization", "Bearer "+token)
+	busyReq.Header.Set("Content-Type", "text/csv")
+	busyReq.Header.Set("X-Input-SHA256", source.SHA256)
+	busyRes, err := http.DefaultClient.Do(busyReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = busyRes.Body.Close()
+	if busyRes.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("different job while busy: got %d, want 429", busyRes.StatusCode)
+	}
+
+	// 2. Drop connection during the running window; refresh fails, local snapshot preserves jobId + RUNNING.
+	disconnected.Store(true)
+	call(http.MethodPost, path+"/refresh", http.StatusBadGateway)
+	offlineSnap := readSnap(http.MethodGet, path)
+	if offlineSnap.Job == nil || offlineSnap.Job.JobID != jobID || offlineSnap.Job.Status != taskRunning {
+		t.Fatalf("disconnect lost local receipt: %+v", offlineSnap)
+	}
+
+	// 3. Let the node finish while disconnected, then reconnect and query the SAME job ID.
+	close(release)
+	worker.active.Wait()
+	disconnected.Store(false)
+
+	recovered := readSnap(http.MethodPost, path+"/refresh")
+	if recovered.Job == nil || recovered.Job.JobID != jobID || recovered.Job.Status != taskSucceeded ||
+		!validObjectDigest(recovered.Job.ResultSHA256) || recovered.ReportRetrieved || recovered.Scatter != nil {
+		t.Fatalf("unexpected recovered terminal receipt: %+v", recovered)
+	}
+	mu.Lock()
+	execCount, getCount, resCount, scatCount := executions[jobID], getJobCounts[jobID], resultCounts[jobID], scatterCounts[jobID]
+	mu.Unlock()
+	if execCount != 1 || getCount != 1 || resCount != 0 || scatCount != 0 {
+		t.Fatalf("unexpected counts after reconnect: executions=%d getJob=%d results=%d scatters=%d", execCount, getCount, resCount, scatCount)
+	}
+
+	// 4. List artifacts, reject tampered scatter, retrieve ONLY scatter while keeping report pending.
+	listed := readSnap(http.MethodPost, path+"/artifacts")
+	if listed.Scatter == nil || listed.Scatter.Retrieved || listed.ReportRetrieved {
+		t.Fatalf("unexpected artifact manifest snapshot: %+v", listed)
+	}
+	call(http.MethodPost, path+"/retrieve-scatter", http.StatusBadGateway)
+	call(http.MethodGet, path+"/scatter", http.StatusNotFound)
+
+	scatterOnly := readSnap(http.MethodPost, path+"/retrieve-scatter")
+	if scatterOnly.Scatter == nil || !scatterOnly.Scatter.Retrieved || scatterOnly.ReportRetrieved {
+		t.Fatalf("expected scatter retrieved while report stays pending: %+v", scatterOnly)
+	}
+	call(http.MethodGet, path+"/result", http.StatusNotFound)
+
+	// Confirm scatter is downloadable offline while report is still unretrieved.
+	disconnected.Store(true)
+	offlinePlot := call(http.MethodGet, path+"/scatter", http.StatusOK)
+	if computeDigest(offlinePlot.Body.Bytes()) != scatterOnly.Scatter.SHA256 {
+		t.Fatal("offline scatter digest mismatch")
+	}
+	disconnected.Store(false)
+
+	// 5. Reject tampered report, then retrieve report and verify offline download.
+	call(http.MethodPost, path+"/retrieve", http.StatusBadGateway)
+	call(http.MethodGet, path+"/result", http.StatusNotFound)
+	bothDone := readSnap(http.MethodPost, path+"/retrieve")
+	if !bothDone.ReportRetrieved || bothDone.Scatter == nil || !bothDone.Scatter.Retrieved {
+		t.Fatalf("expected both artifacts retrieved: %+v", bothDone)
+	}
+	offlineReport := call(http.MethodGet, path+"/result", http.StatusOK)
+	if computeDigest(offlineReport.Body.Bytes()) != bothDone.Job.ResultSHA256 {
+		t.Fatal("retrieved report digest mismatch")
+	}
+
+	// 6. Stop request response loss + late result rejected by node; reconnect recovers CANCELLED.
+	lateResultMode.Store(true)
+	stopAccepted := readSnap(http.MethodPost, stopPath+"/submit")
+	if stopAccepted.Job == nil || stopAccepted.Job.Status != taskRunning {
+		t.Fatalf("expected stop job RUNNING, got %+v", stopAccepted)
+	}
+	stopJobID := stopAccepted.Job.JobID
+	select {
+	case gotID := <-started:
+		if gotID != stopJobID {
+			t.Fatalf("started stop job %s, want %s", gotID, stopJobID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for stop job to start")
+	}
+
+	// Node accepts /cancel and cancels runCtx, then proxy drops the response.
+	cancelling := readSnap(http.MethodPost, stopPath+"/cancel")
+	if cancelling.Job == nil || cancelling.Job.JobID != stopJobID || cancelling.Job.Status != taskCancelling {
+		t.Fatalf("expected CANCELLING receipt after dropped stop response, got %+v", cancelling)
+	}
+	// Wait for the late result goroutine to finish and hit finishJob.
+	worker.active.Wait()
+
+	// Brief disconnect while CANCELLING preserves local receipt.
+	disconnected.Store(true)
+	call(http.MethodPost, stopPath+"/refresh", http.StatusBadGateway)
+	stillCancelling := readSnap(http.MethodGet, stopPath)
+	if stillCancelling.Job == nil || stillCancelling.Job.JobID != stopJobID || stillCancelling.Job.Status != taskCancelling {
+		t.Fatalf("disconnect lost CANCELLING receipt: %+v", stillCancelling)
+	}
+	disconnected.Store(false)
+
+	// Reconnect recovers CANCELLED terminal state with no result artifacts.
+	cancelled := readSnap(http.MethodPost, stopPath+"/refresh")
+	if cancelled.Job == nil || cancelled.Job.JobID != stopJobID || cancelled.Job.Status != taskCancelled ||
+		cancelled.Job.ResultSHA256 != "" || cancelled.ReportRetrieved || cancelled.Scatter != nil {
+		t.Fatalf("expected CANCELLED without results, got %+v", cancelled)
+	}
+	call(http.MethodPost, stopPath+"/retrieve", http.StatusConflict)
+	call(http.MethodPost, stopPath+"/artifacts", http.StatusConflict)
+	call(http.MethodGet, stopPath+"/result", http.StatusNotFound)
+	call(http.MethodGet, stopPath+"/scatter", http.StatusNotFound)
+
+	// Re-submitting cancelled job does not re-execute on node.
+	replayStopped := readSnap(http.MethodPost, stopPath+"/submit")
+	if replayStopped.Job == nil || *replayStopped.Job != *cancelled.Job {
+		t.Fatalf("re-submitting cancelled job altered receipt: %+v", replayStopped)
+	}
+	mu.Lock()
+	stopExecs, stopPuts, stopCancels := executions[stopJobID], putCounts[stopJobID], cancelCounts[stopJobID]
+	mu.Unlock()
+	if stopExecs != 1 || stopPuts != 1 || stopCancels != 1 {
+		t.Fatalf("unexpected stop job counts: executions=%d puts=%d cancels=%d", stopExecs, stopPuts, stopCancels)
 	}
 }
