@@ -22,6 +22,7 @@ func (s *Store) registerMaterials(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+path+"/{materialId}/download", s.handleDownloadMaterial)
 	mux.HandleFunc("GET "+path+"/{materialId}/preview", s.handlePreviewMaterial)
 	mux.HandleFunc("GET "+path+"/{materialId}/table-preview", s.handlePreviewMaterialTable)
+	mux.HandleFunc("GET "+path+"/{materialId}/structured-preview", s.handleStructuredPreviewMaterial)
 	mux.HandleFunc("GET "+path+"/{materialId}/image-preview", s.handleMaterialImagePreview)
 	mux.HandleFunc("DELETE "+path+"/{materialId}", s.handleDeleteMaterial)
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
@@ -29,6 +30,7 @@ func (s *Store) registerMaterials(mux *http.ServeMux) {
 	mux.HandleFunc(path+"/{materialId}/download", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{materialId}/preview", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{materialId}/table-preview", methodNotAllowed("GET, HEAD"))
+	mux.HandleFunc(path+"/{materialId}/structured-preview", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{materialId}/image-preview", methodNotAllowed("GET, HEAD"))
 }
 

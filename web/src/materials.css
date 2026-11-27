@@ -142,3 +142,33 @@
   background: var(--surface);
   font-weight: 600;
 }
+
+.material-code-preview {
+  max-block-size: 18rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--background);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.material-code-line {
+  display: grid;
+  grid-template-columns: 3.25rem minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+}
+
+.material-code-lineno {
+  color: var(--muted);
+  text-align: end;
+  user-select: none;
+  border-inline-end: 1px solid var(--line);
+  padding-inline-end: 0.5rem;
+}
+
+.material-code-text {
+  white-space: pre;
+}

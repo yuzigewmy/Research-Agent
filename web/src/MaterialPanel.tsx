@@ -5,10 +5,11 @@ import { MaterialImageGeneration } from './MaterialImageGeneration'
 import { MaterialImagePreview } from './MaterialImagePreview'
 import { MaterialImageReview } from './MaterialImageReview'
 import {
-  archiveFormatLabel, deleteMaterial, getMaterialPreview, getMaterialTablePreview, isTableMaterialName,
+  archiveFormatLabel, deleteMaterial, getMaterialPreview, getMaterialStructuredPreview, getMaterialTablePreview,
+  isStructuredPreviewMaterialName, isTableMaterialName,
   listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial,
 } from './materials'
-import type { Material, MaterialPreview, MaterialTablePreview } from './materials'
+import type { Material, MaterialPreview, MaterialStructuredPreview, MaterialTablePreview } from './materials'
 import { PdfPreview } from './PdfPreview'
 import { WordPreview } from './WordPreviewQuote'
 import { WorkspaceBundleAdd } from './WorkspaceBundle'
@@ -26,6 +27,7 @@ type ReadStatus = { kind: 'loading' } | { kind: 'error'; message: string }
 type ListStatus = ReadStatus | { kind: 'ready' }
 type PreviewStatus = ReadStatus | { kind: 'ready'; preview: MaterialPreview }
 type TablePreviewStatus = ReadStatus | { kind: 'ready'; preview: MaterialTablePreview }
+type StructuredPreviewStatus = ReadStatus | { kind: 'ready'; preview: MaterialStructuredPreview }
 type UploadFailure = { name: string; message: string; file?: File }
 
 function formatSize(size: number) {
@@ -148,6 +150,96 @@ function MaterialTablePreviewContent({ projectId, material }: { projectId: strin
   )
 }
 
+function MaterialStructuredPreviewContent({ projectId, material }: { projectId: string; material: Material }) {
+  const [status, setStatus] = useState<StructuredPreviewStatus>({ kind: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(readTimeout)])
+    void getMaterialStructuredPreview(projectId, material.materialId, signal).then((preview) => {
+      if (!controller.signal.aborted) setStatus({ kind: 'ready', preview })
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setStatus({ kind: 'error', message: errorMessage(error) })
+    })
+    return () => controller.abort()
+  }, [projectId, material.materialId, attempt])
+
+  if (status.kind === 'loading') return <p className="material-note" role="status">正在加载结构化预览…</p>
+  if (status.kind === 'error') return (
+    <div className="request-error">
+      <p role="alert">{status.message}</p>
+      <button className="button outline" type="button" onClick={() => {
+        setStatus({ kind: 'loading' })
+        setAttempt((value) => value + 1)
+      }}>重试</button>
+    </div>
+  )
+
+  const { preview } = status
+  if (preview.kind === 'archive') {
+    const entries = preview.entries ?? []
+    const unsafeCount = preview.unsafeCount ?? 0
+    return (
+      <div className="material-table-preview" aria-label={`压缩包结构化预览：${material.name}`}>
+        <p className="material-note" role="status">
+          压缩包格式：{preview.format?.toUpperCase() ?? 'ARCHIVE'} · 共 {preview.totalEntries ?? entries.length} 项
+          {preview.truncated ? '（仅显示前 100 项）' : ''} ·{' '}
+          {unsafeCount > 0 ? `拦截 ${unsafeCount} 个异常/路径穿越条目` : '未发现路径穿越或异常条目'}
+        </p>
+        {entries.length === 0 ? (
+          <p className="material-note">压缩包内没有条目。</p>
+        ) : (
+          <div className="material-table-scroll" tabIndex={0}>
+            <table className="material-table">
+              <thead>
+                <tr>
+                  <th scope="col">成员相对路径</th>
+                  <th scope="col">未压缩大小</th>
+                  <th scope="col">安全检查</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry, idx) => (
+                  <tr key={idx}>
+                    <td><code dir="auto">{entry.path}</code></td>
+                    <td>{entry.isDir ? '目录' : formatSize(entry.size)}</td>
+                    <td className={entry.blocked ? 'form-error' : undefined}>
+                      {entry.blocked ? (entry.warning ?? '已拦截异常条目') : '正常'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const lines = preview.lines ?? []
+  return (
+    <div className="material-table-preview" aria-label={`代码结构化预览：${material.name}`}>
+      <p className="material-note" role="status">
+        语言：{preview.language} · 共 {preview.totalLines ?? lines.length} 行
+        {preview.truncated ? '（仅显示前 200 行或前 64 KiB）' : ''}
+      </p>
+      {lines.length === 0 ? (
+        <p className="material-note">文件为空。</p>
+      ) : (
+        <div className="material-code-preview" tabIndex={0}>
+          {lines.map((line) => (
+            <div key={line.number} className="material-code-line">
+              <span className="material-code-lineno">{line.number}</span>
+              <code className="material-code-text" dir="auto">{line.text || ' '}</code>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface MaterialPanelProps {
   projectId: string
   onReference?: (material: Material) => void
@@ -173,6 +265,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
   const [pageRequest, setPageRequest] = useState<{ q: string; cursor?: string }>({ q: '' })
   const [previewId, setPreviewId] = useState<string>()
   const [tablePreviewId, setTablePreviewId] = useState<string>()
+  const [structuredPreviewId, setStructuredPreviewId] = useState<string>()
   const [confirmRemoveId, setConfirmRemoveId] = useState<string>()
   const [removingId, setRemovingId] = useState<string>()
   const [removeError, setRemoveError] = useState<string>()
@@ -312,6 +405,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
       setItems((current) => current.filter((item) => item.materialId !== material.materialId))
       if (previewId === material.materialId) setPreviewId(undefined)
       if (tablePreviewId === material.materialId) setTablePreviewId(undefined)
+      if (structuredPreviewId === material.materialId) setStructuredPreviewId(undefined)
       if (imageReviewId === material.materialId) setImageReviewId(undefined)
       setConfirmRemoveId(undefined)
     } catch (error) {
@@ -397,6 +491,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
           const isTable = isTableMaterialName(material.name)
           const isTableOpen = tablePreviewId === material.materialId
           const tableRegion = `${headingId}-table-${material.materialId}`
+          const isStructured = isStructuredPreviewMaterialName(material.name)
+          const isStructuredOpen = structuredPreviewId === material.materialId
+          const structuredRegion = `${headingId}-structured-${material.materialId}`
           const isConfirmingRemove = confirmRemoveId === material.materialId
           const hasText = !isPdf && !isArchive && (material.kind === 'text' || isWord)
           const imageType = material.kind === 'file' && /\.(png|jpe?g)$/i.test(material.name)
@@ -431,6 +528,12 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
                   aria-expanded={isTableOpen} aria-controls={tableRegion}
                   onClick={() => setTablePreviewId(isTableOpen ? undefined : material.materialId)}>
                   {isTableOpen ? '收起表格预览' : '预览表格（已脱敏）'}
+                </button>}
+                {isStructured && <button className="button outline" type="button"
+                  aria-label={`${isStructuredOpen ? '收起结构化预览' : '结构化预览'}：${material.name}`}
+                  aria-expanded={isStructuredOpen} aria-controls={structuredRegion}
+                  onClick={() => setStructuredPreviewId(isStructuredOpen ? undefined : material.materialId)}>
+                  {isStructuredOpen ? '收起结构化预览' : '结构化预览'}
                 </button>}
                 {canPreview && <button className="button outline" type="button"
                   aria-label={`${previewLabel}：${material.name}`} aria-expanded={isOpen} aria-controls={previewRegion}
@@ -479,6 +582,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
               )}
               {isTable && <div className="material-preview" id={tableRegion} hidden={!isTableOpen}>
                 {isTableOpen && <MaterialTablePreviewContent projectId={projectId} material={material} />}
+              </div>}
+              {isStructured && <div className="material-preview" id={structuredRegion} hidden={!isStructuredOpen}>
+                {isStructuredOpen && <MaterialStructuredPreviewContent projectId={projectId} material={material} />}
               </div>}
               {canViewImage && <div className="material-preview" id={reviewRegion} hidden={!reviewOpen}>
                 {reviewOpen && <MaterialImageReview projectId={projectId} material={material} />}

@@ -30,8 +30,39 @@ export interface MaterialTablePreview {
   maskedCellCount: number
 }
 
+export interface ArchivePreviewEntry {
+  path: string
+  size: number
+  isDir?: boolean
+  blocked?: boolean
+  warning?: string
+}
+
+export interface CodePreviewLine {
+  number: number
+  text: string
+}
+
+export interface MaterialStructuredPreview {
+  kind: 'archive' | 'code'
+  format?: string
+  language?: string
+  totalEntries?: number
+  unsafeCount?: number
+  entries?: ArchivePreviewEntry[]
+  totalLines?: number
+  lines?: CodePreviewLine[]
+  truncated: boolean
+}
+
 export function isTableMaterialName(name: string) {
   return /\.(csv|tsv)$/i.test(name)
+}
+
+export function isStructuredPreviewMaterialName(name: string) {
+  const lower = name.toLowerCase()
+  return lower.endsWith('.zip') || lower.endsWith('.tar.gz') || lower.endsWith('.tgz')
+    || /\.(tex|bib|py|go|ts|tsx|js|json|ya?ml)$/i.test(lower)
 }
 
 export const materialSizeLimit = 64 * 1024 * 1024
@@ -118,6 +149,22 @@ function isMaterialTablePreview(value: unknown): value is MaterialTablePreview {
 
 export function getMaterialTablePreview(projectId: string, materialId: string, signal: AbortSignal) {
   return request(`${materialPath(projectId, materialId)}/table-preview`, isMaterialTablePreview, { signal })
+}
+
+function isMaterialStructuredPreview(value: unknown): value is MaterialStructuredPreview {
+  const preview = value as Partial<MaterialStructuredPreview> | null
+  if (!preview || typeof preview.truncated !== 'boolean') return false
+  if (preview.kind === 'archive') {
+    return Array.isArray(preview.entries)
+  }
+  if (preview.kind === 'code') {
+    return typeof preview.language === 'string' && Array.isArray(preview.lines)
+  }
+  return false
+}
+
+export function getMaterialStructuredPreview(projectId: string, materialId: string, signal: AbortSignal) {
+  return request(`${materialPath(projectId, materialId)}/structured-preview`, isMaterialStructuredPreview, { signal })
 }
 
 function isDeleteMaterialReceipt(value: unknown): value is { deleted: boolean; materialId: string } {

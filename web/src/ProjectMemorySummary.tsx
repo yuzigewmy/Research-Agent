@@ -88,6 +88,14 @@ export function ProjectMemorySummary({ projectId }: { projectId: string }) {
                     : '暂无运行记录'}
                 </dd>
               </div>
+              <div>
+                <dt>受影响论点</dt>
+                <dd>{data.affectedClaims.length} 处</dd>
+              </div>
+              <div>
+                <dt>缺证据稿件</dt>
+                <dd>{data.missingEvidenceFiles.length} 份</dd>
+              </div>
             </dl>
             {(data.project.goal || data.project.deliverables) && (
               <div className="project-memory-section">
@@ -141,6 +149,50 @@ export function ProjectMemorySummary({ projectId }: { projectId: string }) {
                         <p className="project-management-help">关联文献：{item.citationTitle}</p>
                       )}
                       <p className="project-management-help">稿件节选：<q dir="auto">{item.selectedText}</q></p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="project-memory-section" aria-label="来源换版受影响论点">
+              <h5>来源换版受影响论点（{data.affectedClaims.length} 处）</h5>
+              {data.affectedClaims.length === 0 ? (
+                <p className="project-management-help">当前已绑定的数据表与 PDF 来源均未发生换版。</p>
+              ) : (
+                <ul className="project-memory-chain" role="list">
+                  {data.affectedClaims.map((claim) => (
+                    <li key={`affected-${claim.kind}-${claim.linkId}`} className="project-memory-chain-item">
+                      <div className="project-memory-chain-head">
+                        <span className="project-memory-warn">来源已换版 · 请按范围复验</span>
+                        <code>{claim.manuscriptPath}</code>
+                        <span className="project-management-help">
+                          版本 <code>{claim.manuscriptVersionId.slice(0, 8)}</code>
+                        </span>
+                      </div>
+                      <p className="project-memory-chain-source">{claim.impactReason}</p>
+                      <p className="project-management-help">受影响论点：<q dir="auto">{claim.selectedText}</q></p>
+                      <p className="project-management-help">{claim.suggestedAction}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="project-memory-section" aria-label="缺证据提醒">
+              <h5>缺证据提醒（{data.missingEvidenceFiles.length} 份）</h5>
+              {data.missingEvidenceFiles.length === 0 ? (
+                <p className="project-management-help">已保存 Markdown 稿件均已关联证据来源或已核验文献。</p>
+              ) : (
+                <ul className="project-memory-chain" role="list">
+                  {data.missingEvidenceFiles.map((file) => (
+                    <li key={file.path} className="project-memory-chain-item" data-missing-evidence-path={file.path}>
+                      <div className="project-memory-chain-head">
+                        <span className="project-memory-warn">缺证据提醒</span>
+                        <code>{file.path}</code>
+                        <span className="project-management-help">
+                          版本 <code>{file.versionId.slice(0, 8)}</code> · SHA-256 <code>{file.sha256.slice(0, 8)}</code>
+                        </span>
+                      </div>
+                      <p className="project-management-help">{file.reason}</p>
                     </li>
                   ))}
                 </ul>
