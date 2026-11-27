@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { materialDownloadPath } from './materials'
+import { PdfPreview } from './PdfPreview'
 import { errorMessage, ProjectApiError, request } from './projects'
 import { isPdfQuotes, manuscriptSelectionByteLimit } from './turns'
 import type { ManuscriptSelection, TurnReference } from './turns'
@@ -57,6 +58,8 @@ function PDFExcerpt({ page, quote }: Pick<PDFEvidenceReference, 'page' | 'quote'
 }
 
 function EvidenceList({ items, projectId }: { items: Link[]; projectId: string }) {
+  const [openLinkId, setOpenLinkId] = useState<string>()
+  const previewId = useId()
   return <ul className="manuscript-evidence-list manuscript-pdf-evidence-list" role="list" aria-label="本稿件版本的 PDF 证据">
     {items.map(({ linkId, materialId, name, sha256, page, quote, text, sourceChanged }) => (
       <li key={linkId} data-link-id={linkId}>
@@ -68,8 +71,18 @@ function EvidenceList({ items, projectId }: { items: Link[]; projectId: string }
         {sourceChanged && <p className="workspace-note manuscript-pdf-evidence-source-changed">
           同名 PDF 已有新版。此关联仍指向下方的原 PDF。
         </p>}
-        <p><a className="manuscript-pdf-evidence-download" href={materialDownloadPath(projectId, materialId)}
-          aria-label={`下载原 PDF：${name}`} download>下载原 PDF</a></p>
+        <div className="workspace-actions">
+          <button className="button outline" type="button" aria-expanded={openLinkId === linkId}
+            aria-controls={openLinkId === linkId ? previewId : undefined}
+            onClick={() => setOpenLinkId(openLinkId === linkId ? undefined : linkId)}>
+            {openLinkId === linkId ? '收起原文' : `查看原文第 ${page} 页`}
+          </button>
+          <a className="manuscript-pdf-evidence-download" href={materialDownloadPath(projectId, materialId)}
+            aria-label={`下载原 PDF：${name}`} download>下载原 PDF</a>
+        </div>
+        {openLinkId === linkId && <div id={previewId} className="manuscript-pdf-evidence-preview">
+          <PdfPreview url={materialDownloadPath(projectId, materialId)} initialPage={page} />
+        </div>}
       </li>
     ))}
   </ul>

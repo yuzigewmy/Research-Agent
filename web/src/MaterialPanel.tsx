@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { MaterialImageGeneration } from './MaterialImageGeneration'
 import { MaterialImagePreview } from './MaterialImagePreview'
 import { MaterialImageReview } from './MaterialImageReview'
 import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
+import { PdfPreview } from './PdfPreview'
 import { errorMessage } from './projects'
 import { turnReferenceLimit } from './turns'
 import './materials.css'
@@ -12,9 +13,6 @@ import './materials.css'
 const materialDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const sizeFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 })
 const readTimeout = 10_000
-const PdfPreview = lazy(() => import('./PdfMaterialPreview').catch(() => ({
-  default: () => <p className="form-error" role="alert">无法加载 PDF 查看器，请刷新页面或下载原件。</p>,
-})))
 
 type ReadStatus = { kind: 'loading' } | { kind: 'error'; message: string }
 type ListStatus = ReadStatus | { kind: 'ready' }
@@ -294,10 +292,8 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
               </div>}
               {canPreview && <div className="material-preview" id={previewRegion} hidden={!isOpen}>
                 {isOpen && (isPdf ? (
-                  <Suspense fallback={<p className="material-note" role="status">正在加载 PDF 查看器…</p>}>
-                    <PdfPreview key={downloadPath} url={downloadPath} quoteBlocked={atLimit}
-                      onQuote={onPdfQuote && ((page, text) => onPdfQuote(material, page, text))} />
-                  </Suspense>
+                  <PdfPreview url={downloadPath} quoteBlocked={atLimit}
+                    onQuote={onPdfQuote && ((page, text) => onPdfQuote(material, page, text))} />
                 ) : canViewImage ? <MaterialImagePreview key={material.materialId} name={material.name}
                   url={materialImagePreviewPath(projectId, material.materialId)} />
                   : <MaterialPreviewContent material={material} projectId={projectId} />)}

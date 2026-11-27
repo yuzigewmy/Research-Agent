@@ -133,9 +133,10 @@ type PdfQuoteProps = {
   onQuote?: (page: number, text: string) => void
 }
 
-function PdfDocumentView({ pdf, onQuote, quoteBlocked }: PdfQuoteProps & { pdf: PDFDocumentProxy }) {
+function PdfDocumentView({ pdf, onQuote, quoteBlocked, initialPage }: PdfQuoteProps & { pdf: PDFDocumentProxy; initialPage: number }) {
+  const unavailablePage = initialPage > pdf.numPages
   const viewport = useRef<HTMLDivElement>(null)
-  const [pageNumber, setPageNumber] = useState(1)
+  const [pageNumber, setPageNumber] = useState(unavailablePage ? 1 : initialPage)
   const [zoom, setZoom] = useState(100)
   const [width, setWidth] = useState(0)
   const [quoteMessage, setQuoteMessage] = useState('')
@@ -183,6 +184,9 @@ function PdfDocumentView({ pdf, onQuote, quoteBlocked }: PdfQuoteProps & { pdf: 
   }
 
   return <div className="pdf-preview">
+    {unavailablePage && <p className="material-note" role="status">
+      关联记录的第 {initialPage} 页超出原件页数。已从第 1 页打开原件。
+    </p>}
     <div className="pdf-toolbar">
       <div className="pdf-controls">
         <button className="button outline" type="button" disabled={pageNumber <= 1}
@@ -219,7 +223,7 @@ function PdfDocumentView({ pdf, onQuote, quoteBlocked }: PdfQuoteProps & { pdf: 
   </div>
 }
 
-export default function PdfMaterialPreview({ url, onQuote, quoteBlocked }: PdfQuoteProps & { url: string }) {
+export default function PdfMaterialPreview({ url, onQuote, quoteBlocked, initialPage = 1 }: PdfQuoteProps & { url: string; initialPage?: number }) {
   const [result, setResult] = useState<ReadState<PDFDocumentProxy>>()
 
   useEffect(() => {
@@ -256,5 +260,5 @@ export default function PdfMaterialPreview({ url, onQuote, quoteBlocked }: PdfQu
 
   if (result?.error) return <p className="form-error" role="alert">{result.error}</p>
   if (!result?.value) return <p className="material-note" role="status">正在打开 PDF…</p>
-  return <PdfDocumentView pdf={result.value} onQuote={onQuote} quoteBlocked={quoteBlocked} />
+  return <PdfDocumentView pdf={result.value} initialPage={initialPage} onQuote={onQuote} quoteBlocked={quoteBlocked} />
 }
