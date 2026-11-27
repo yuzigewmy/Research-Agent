@@ -67,9 +67,16 @@ function requestSignal(controller: AbortController) {
 function WorkflowRunContext({ run }: { run: WorkflowRun }) {
   return <>
     {run.projectTitle && <p className="workflow-note">本轮研究题目 <bdi>{run.projectTitle}</bdi></p>}
+    {run.contest && <p className="workflow-note">
+      竞赛规格 <bdi>{run.contest.name}</bdi>（{run.contest.language === 'en' ? '英文' : '中文'} · 规则校验 {run.contest.verifiedAt}）
+    </p>}
     {(run.model || run.reasoningEffort) && <p className="workflow-note">
       {run.model && <>本轮模型 <bdi>{run.model}</bdi> · </>}
       推理档 <bdi>{run.reasoningEffort || '默认'}</bdi>
+    </p>}
+    {run.maxStepRetries !== undefined && <p className="workflow-note">
+      单步重试上限 {run.maxStepRetries} 次
+      {run.skippedSteps?.length ? ` · 启动时跳过步骤：${run.skippedSteps.join('、')}` : ''}
     </p>}
   </>
 }
@@ -208,13 +215,15 @@ function ManuscriptHandoff({ projectId, runId, artifactId, onSaved }: {
   </div>
 }
 
-export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, workflowRunLink,
-  acceptanceDraft, onClearAcceptanceDraft, bundleSelection }: {
+export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refreshVersion = 0, autoStart = false,
+  initialContestId, workflowRunLink, acceptanceDraft, onClearAcceptanceDraft, bundleSelection }: {
   projectId: string
   templateId: Exclude<TemplateId, 'freeform' | 'automatic_review' | 'interactive_survey' | 'engineering_project'>
   bundleSelection: BundleSelection
   onManuscriptSaved: (path: string) => void
   refreshVersion?: number
+  autoStart?: boolean
+  initialContestId?: string
   workflowRunLink?: WorkflowRunLink
   acceptanceDraft?: { file: FileRecord; openId: number }
   onClearAcceptanceDraft: (openId: number) => void
@@ -226,6 +235,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const isProposal = templateId === 'proposal'
   const isSoftware = templateId === 'software_registration'
   const isPatent = templateId === 'patent_disclosure'
+  const isMathModeling = templateId === 'math_modeling'
   const defaultCheckpoints = isSoftware || isPatent
   const title = {
     experiment: '实验工作流',
@@ -237,6 +247,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     course_report: '课程报告工作流',
     software_registration: '软件著作权材料工作流',
     patent_disclosure: '专利技术交底工作流',
+    full_research: '科研全流程工作流',
+    chinese_paper: '中文论文工作流',
+    humanities_paper: '人文社科论文工作流',
+    thesis: '学位论文工作流',
+    existing_materials: '已有材料成稿工作流',
+    market_research: '市场调查工作流',
+    math_modeling: '数学建模竞赛工作流',
+    big_data_contest: '大数据竞赛工作流',
   }[templateId]
   const checkpointLabel = {
     experiment: '生成实验计划后，等待我确认再继续',
@@ -248,6 +266,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     course_report: '完成课程写作规划后由我确认',
     software_registration: '操作手册草稿完成后由我确认',
     patent_disclosure: '技术方案草案完成后由我确认',
+    full_research: '完成选题与研究契约后由我确认',
+    chinese_paper: '完成中文大纲后由我确认',
+    humanities_paper: '完成论证大纲后由我确认',
+    thesis: '完成目录与文献规划后由我确认',
+    existing_materials: '完成成稿规划后由我确认',
+    market_research: '完成问卷与编码设计后由我确认',
+    math_modeling: '完成问题拆解与假设后由我确认',
+    big_data_contest: '完成特征与基线方案后由我确认',
   }[templateId]
   const checkpointHint = {
     experiment: '确认实验计划后生成验收清单。',
@@ -259,6 +285,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
     course_report: '确认课程写作规划后开始分节撰写。',
     software_registration: '核对操作手册草稿后，确认继续整理程序材料。',
     patent_disclosure: '核对技术方案草案后，确认继续编写技术交底稿。',
+    full_research: '确认选题与研究契约后推进实验与论文撰写。',
+    chinese_paper: '确认中文大纲后开始正文撰写。',
+    humanities_paper: '确认论证大纲后开始章节写作。',
+    thesis: '确认目录与文献规划后开始主体章节撰写。',
+    existing_materials: '确认成稿规划后开始整合撰写。',
+    market_research: '确认问卷与编码设计后继续数据清洗与统计解读。',
+    math_modeling: '确认问题拆解与假设后进入模型构建与求解验证。',
+    big_data_contest: '确认特征与基线方案后进入模型迭代与消融验证。',
   }[templateId]
   const headingId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
@@ -276,7 +310,11 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const [courseDraft, setCourseDraft] = useState(() => initialCourseDraft(courseTemplate))
   const [softwareDraft, setSoftwareDraft] = useState(initialSoftwareDraft)
   const [patentDraft, setPatentDraft] = useState(initialPatentDraft)
+  const [preferredContestId, setPreferredContestId] = useState(initialContestId ?? '')
+  const [skippedSteps, setSkippedSteps] = useState<string[]>([])
+  const [maxStepRetriesText, setMaxStepRetriesText] = useState('2')
   const [throughStep, setThroughStep] = useState('')
+  const autoStartedRef = useRef(false)
   const [refreshing, setRefreshing] = useState(true)
   const [reload, setReload] = useState(0)
   const [readError, setReadError] = useState('')
@@ -357,7 +395,14 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const course = courseTemplate ? prepareCourse(courseTemplate, courseDraft) : undefined
   const software = isSoftware ? prepareSoftware(softwareDraft) : undefined
   const patent = isPatent ? preparePatent(patentDraft) : undefined
-  const invalidStart = !validTarget || invalidRequirements || proposal?.valid === false
+  const contests = snapshot?.contests ?? []
+  const selectedContest = isMathModeling
+    ? (contests.find((item) => item.id === preferredContestId) ?? contests[0])
+    : undefined
+  const optionalSteps = canStart ? steps.filter((step) => step.optional) : []
+  const parsedRetries = Number(maxStepRetriesText)
+  const invalidRetries = !Number.isInteger(parsedRetries) || parsedRetries < 1 || parsedRetries > 5
+  const invalidStart = !validTarget || invalidRequirements || invalidRetries || proposal?.valid === false
     || course?.valid === false || software?.valid === false || !!patent?.descriptionError
   let modelInputNotice: string | undefined
   if (isPatent) {
@@ -403,6 +448,20 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   }, [projectId, reload, refreshVersion])
 
   useEffect(() => () => submission.current?.abort(), [])
+
+  const triggerAutoStart = useEffectEvent(() => {
+    void submit('start')
+  })
+
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current || refreshing || !snapshot || snapshot.run !== null || pending !== null) return
+    autoStartedRef.current = true
+    if (!snapshot.modelConfigured) {
+      setFeedback('项目已创建。请先配置研究模型后再启动工作流。')
+      return
+    }
+    triggerAutoStart()
+  }, [autoStart, refreshing, snapshot, pending])
 
   function refresh() {
     setRefreshing(true)
@@ -484,6 +543,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             const modelId = stepModelChoices.get(key)
             if (modelId) stepModelIds[key] = modelId
           }
+          const activeSkipped = optionalSteps.map((step) => step.key).filter((key) => skippedSteps.includes(key))
           attempt = { kind, input: {
             requestId, checkpoints, modelId: startModel?.id,
             stepModelIds: Object.keys(stepModelIds).length ? stepModelIds : undefined,
@@ -494,6 +554,9 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             course: course?.options,
             software: software?.options,
             patent: patent?.options,
+            contestId: selectedContest?.id,
+            skippedSteps: activeSkipped.length ? activeSkipped : undefined,
+            maxStepRetries: parsedRetries !== 2 ? parsedRetries : undefined,
             throughStep: endStep || undefined,
           } }
         } else if (kind === 'rerun') {
@@ -536,6 +599,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
         setPreferredModelId(undefined)
         setStepModelChoices(new Map())
         setCheckpoints(defaultCheckpoints)
+        setSkippedSteps([])
+        setMaxStepRetriesText('2')
         if (courseTemplate) setCourseDraft(initialCourseDraft(courseTemplate))
         if (isSoftware) setSoftwareDraft(initialSoftwareDraft())
         if (isPatent) setPatentDraft(initialPatentDraft())
@@ -712,6 +777,59 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
             descriptionError={patent.descriptionError} disabled={actionDisabled || retryStart !== null} onChange={setPatentDraft} />}
           {canStart && proposal && <WorkflowProposalOptions draft={proposalDraft} errors={proposal.errors}
             disabled={actionDisabled || retryStart !== null} onChange={setProposalDraft} />}
+          {canStart && isMathModeling && contests.length > 0 && selectedContest && (
+            <div className="field">
+              <label htmlFor={`${headingId}-contest`}>数学建模竞赛规格</label>
+              <select id={`${headingId}-contest`} value={selectedContest.id} disabled={actionDisabled || retryStart !== null}
+                aria-describedby={`${headingId}-contest-help`}
+                onChange={(event) => {
+                  setPreferredContestId(event.currentTarget.value)
+                  if (retry?.kind === 'start') setRetry(null)
+                  setActionError('')
+                }}>
+                {contests.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}（{item.language === 'en' ? '英文' : '中文'} · {item.ruleYear}）
+                  </option>
+                ))}
+              </select>
+              <p className="workflow-note" id={`${headingId}-contest-help`}>
+                默认语言：{selectedContest.language === 'en' ? '英文' : '中文'} · 规则校验：{selectedContest.verifiedAt} · 交付提醒：{selectedContest.reminders.join('；')}
+              </p>
+            </div>
+          )}
+          {canStart && optionalSteps.length > 0 && (
+            <div className="field">
+              <span>可选跳过步骤（启动前自定义）</span>
+              {optionalSteps.map((step) => (
+                <label className="workflow-checkpoint" key={step.key}>
+                  <input type="checkbox" checked={skippedSteps.includes(step.key)}
+                    disabled={actionDisabled || retryStart !== null}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked
+                      setSkippedSteps((current) => checked
+                        ? (current.includes(step.key) ? current : [...current, step.key])
+                        : current.filter((item) => item !== step.key))
+                      if (retry?.kind === 'start') setRetry(null)
+                    }} />
+                  <span>本轮跳过「{step.title}」</span>
+                </label>
+              ))}
+            </div>
+          )}
+          {canStart && (
+            <div className="field">
+              <label htmlFor={`${headingId}-max-retries`}>单步失败重试上限（1–5 次，默认 2）</label>
+              <input id={`${headingId}-max-retries`} type="number" min={1} max={5} step={1}
+                value={maxStepRetriesText} disabled={actionDisabled || retryStart !== null}
+                aria-invalid={invalidRetries ? true : undefined}
+                onChange={(event) => {
+                  setMaxStepRetriesText(event.currentTarget.value)
+                  if (retry?.kind === 'start') setRetry(null)
+                }} />
+              {invalidRetries && <p className="form-error" role="alert">单步失败重试上限须为 1 至 5 的整数。</p>}
+            </div>
+          )}
           {canStart && isTopic && <div className="field workflow-topic-requirements">
             <label htmlFor={`${headingId}-topic-requirements`}>选题要求</label>
             <textarea id={`${headingId}-topic-requirements`} rows={3} value={topicRequirements}

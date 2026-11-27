@@ -132,6 +132,7 @@ function ManuscriptQuotes({ selections, onRemove }: {
 interface ConversationProps {
   projectId: string
   defaultTurnMode?: TurnMode
+  autoFocus?: boolean
   references: TurnReference[]
   onClearReferences: (matches: (reference: TurnReference) => boolean) => void
   manuscriptSelections: readonly ManuscriptSelection[]
@@ -140,7 +141,7 @@ interface ConversationProps {
   taskSync?: TaskPanelSync
 }
 
-export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, onClearReferences, manuscriptSelections,
+export function Conversation({ projectId, defaultTurnMode = 'CHAT', autoFocus = false, references, onClearReferences, manuscriptSelections,
   onClearManuscriptSelections, onWorkflowConfirmed, taskSync }: ConversationProps) {
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
@@ -148,6 +149,9 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
   const submission = useRef<AbortController | null>(null)
   const earlierRequest = useRef<AbortController | null>(null)
   const stopRequests = useRef(new Map<string, AbortController>())
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const autoFocused = useRef(false)
   const [turns, setTurns] = useState<Turn[]>([])
   const [cursor, setCursor] = useState<string>()
   const [configured, setConfigured] = useState(false)
@@ -393,9 +397,17 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
 
   const visibleTurnIds = new Set(turns.map(({ turnId }) => turnId))
 
+  useEffect(() => {
+    if (!autoFocus || loading || autoFocused.current) return
+    autoFocused.current = true
+    const target = configured ? inputRef.current : headingRef.current
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    target?.focus()
+  }, [autoFocus, loading, configured])
+
   return (
     <section className="conversation" aria-labelledby="conversation-title">
-      <h4 id="conversation-title" tabIndex={-1}>项目对话</h4>
+      <h4 id="conversation-title" ref={headingRef} tabIndex={-1}>项目对话</h4>
       {loading && <p role="status">正在读取会话…</p>}
       {cursor && <button className="button outline" type="button" disabled={loadingEarlier} onClick={() => void earlier()}>
         {loadingEarlier ? '正在读取…' : '更早的对话'}
@@ -504,7 +516,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', references, 
           </div>
           <div className="field">
             <label htmlFor="turn-message">消息</label>
-            <textarea id="turn-message" rows={3} maxLength={16_384} value={draft} readOnly={sending}
+            <textarea id="turn-message" ref={inputRef} rows={3} maxLength={16_384} value={draft} readOnly={sending}
               aria-describedby="turn-task-results-hint" onChange={(event) => updateDraft(event.currentTarget.value)} />
             <p className="turn-status" id="turn-task-results-hint">
               发送消息时，本项目已完成且尚未同步的关联任务成果节选（最多 4 项）会随本轮发送给研究模型。

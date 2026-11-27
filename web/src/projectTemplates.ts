@@ -1,7 +1,7 @@
 import { isTemplateId, request } from './projects'
 import type { TemplateId } from './projects'
-import { isCourseProfile, isSoftwareVersion } from './workflow'
-import type { CourseProfile } from './workflow'
+import { isCourseProfile, isMathModelingContest, isSoftwareVersion } from './workflow'
+import type { CourseProfile, MathModelingContest } from './workflow'
 
 interface TemplateStep {
   key: string
@@ -26,6 +26,9 @@ export interface TemplateDefaults {
   software?: { version: string }
   maxRounds?: number
   targetScore?: number
+  maxStepRetries?: number
+  contestId?: string
+  contests?: MathModelingContest[]
 }
 
 export interface ProjectTemplate {
@@ -71,6 +74,9 @@ function isDefaults(value: unknown): value is TemplateDefaults {
     && (value.software === undefined || (isRecord(value.software) && isSoftwareVersion(value.software.version)))
     && (value.maxRounds === undefined || isNumber(value.maxRounds))
     && (value.targetScore === undefined || isNumber(value.targetScore))
+    && (value.maxStepRetries === undefined || isNumber(value.maxStepRetries))
+    && (value.contestId === undefined || typeof value.contestId === 'string')
+    && (value.contests === undefined || (Array.isArray(value.contests) && value.contests.every(isMathModelingContest)))
 }
 
 function isTemplate(value: unknown): value is ProjectTemplate {

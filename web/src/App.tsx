@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from 'rea
 import type { MouseEvent } from 'react'
 import { ComputeNode } from './ComputeNode'
 import { CreateProjectForm } from './CreateProjectForm'
+import type { CreateProjectLaunchOptions } from './CreateProjectForm'
 import { ModelConnection } from './ModelConnection'
 import { readReviewLink } from './notificationApi'
 import type { ReviewLink } from './notificationApi'
@@ -84,6 +85,7 @@ export function App() {
 function Workbench() {
   const [selection, setSelection] = useState(selectedFromUrl)
   const { projectId: selectedId, target } = selection
+  const [projectLaunch, setProjectLaunch] = useState<(CreateProjectLaunchOptions & { projectId: string }) | undefined>()
   const [catalog, setCatalog] = useState<Catalog>({ kind: 'loading' })
   const list = useProjectList()
   const preferences = useWorkbenchPreferences()
@@ -142,8 +144,9 @@ function Workbench() {
     navigate(projectId, target)
   }
 
-  function handleCreated(project: Project) {
+  function handleCreated(project: Project, options?: CreateProjectLaunchOptions) {
     list.refresh()
+    setProjectLaunch(options ? { projectId: project.projectId, ...options } : undefined)
     if (selectedFromUrl().projectId === null) navigate(project.projectId)
   }
 
@@ -180,6 +183,7 @@ function Workbench() {
             <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
           </div>
           {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId}
+            launch={projectLaunch?.projectId === selectedId ? projectLaunch : undefined}
             taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
             reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh} />}
         </section>

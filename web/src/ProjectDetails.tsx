@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Conversation } from './Conversation'
+import type { CreateProjectLaunchOptions } from './CreateProjectForm'
 import { DiagramPanel } from './DiagramPanel'
 import { EngineeringPreview } from './EngineeringPreview'
 import { LiteraturePanel } from './LiteraturePanel'
@@ -75,8 +76,9 @@ function readManuscriptSelections(key: string): ManuscriptSelection[] {
   }
 }
 
-export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLink, onUpdated }: {
+export function ProjectDetails({ projectId, launch, taskLink, workflowRunLink, reviewLink, onUpdated }: {
   projectId: string
+  launch?: CreateProjectLaunchOptions
   taskLink?: TaskLink
   workflowRunLink?: WorkflowRunLink
   reviewLink?: ReviewLink
@@ -240,9 +242,13 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
       <SurveyPanel projectId={project.projectId} />
       {(project.templateId === 'literature_review' || project.templateId === 'paper'
         || project.templateId === 'topic' || project.templateId === 'proposal'
-        || project.templateId === 'course_paper' || project.templateId === 'course_report') && <LiteraturePanel projectId={project.projectId} />}
+        || project.templateId === 'course_paper' || project.templateId === 'course_report'
+        || project.templateId === 'full_research' || project.templateId === 'chinese_paper'
+        || project.templateId === 'humanities_paper' || project.templateId === 'thesis'
+        || project.templateId === 'existing_materials') && <LiteraturePanel projectId={project.projectId} />}
       {hasWorkflow &&
         <WorkflowPanel projectId={project.projectId} templateId={templateId} refreshVersion={workflowRefresh}
+          autoStart={launch?.startMode === 'start_workflow'} initialContestId={launch?.contestId}
           workflowRunLink={workflowRunLink} acceptanceDraft={acceptanceDraft} onClearAcceptanceDraft={(openId) => setAcceptanceDraft((current) =>
             current?.openId === openId ? undefined : current)}
           onManuscriptSaved={addWorkspacePath} bundleSelection={bundleSelection} />}
@@ -257,7 +263,8 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
           archived={project.status === 'ARCHIVED'} />
       )}
       <DiagramPanel projectId={project.projectId} />
-      <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode} references={references}
+      <Conversation projectId={project.projectId} defaultTurnMode={project.defaultTurnMode}
+        autoFocus={launch?.startMode === 'collaborate'} references={references}
         onClearReferences={clearReferences} manuscriptSelections={manuscriptSelections}
         onClearManuscriptSelections={clearManuscriptSelections} onWorkflowConfirmed={refreshWorkflow} taskSync={taskSync} />
     </div>
