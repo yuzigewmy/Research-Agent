@@ -263,7 +263,7 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 				regression.add(record)
 			}
 			for i := range accumulators {
-				accumulators[i].add(record)
+				accumulators[i].add(record, weight)
 			}
 		case StatusInvalid:
 			report.Invalid++

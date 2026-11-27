@@ -120,6 +120,7 @@ export interface SurveySummary {
   min?: number
   max?: number
   frequencies: Frequency[]
+  weighted?: { included: number; totalWeight: string; mean: number }
 }
 
 export interface SurveyReport extends SurveyCounts {
@@ -219,10 +220,13 @@ function isFrequency(value: unknown): value is Frequency {
 
 function isSummary(value: unknown): value is SurveySummary {
   const summary = value as Partial<SurveySummary> | null
+  const weighted = summary?.weighted
   return !!summary && typeof summary.column === 'string' && isCount(summary.answered)
     && isCount(summary.missing) && isCount(summary.numeric)
     && [summary.mean, summary.min, summary.max].every((value) => value === undefined || Number.isFinite(value))
     && Array.isArray(summary.frequencies) && summary.frequencies.every(isFrequency)
+    && (weighted === undefined || (!!weighted && isCount(weighted.included) && weighted.included > 0
+      && weighted.included <= summary.numeric && isWeight(weighted.totalWeight) && Number.isFinite(weighted.mean)))
 }
 
 function isCrossTabLabels(value: unknown): value is string[] {

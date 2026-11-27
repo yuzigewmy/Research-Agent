@@ -2,6 +2,7 @@ package survey
 
 import (
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,14 +19,22 @@ const (
 // Frequencies includes up to 20 values of at most 128 bytes, most frequent first,
 // with ties sorted by value. Longer answers still count in the other statistics.
 type Summary struct {
-	Column      string      `json:"column"`
-	Answered    int         `json:"answered"`
-	Missing     int         `json:"missing"`
-	Numeric     int         `json:"numeric"`
-	Mean        *float64    `json:"mean,omitempty"`
-	Min         *float64    `json:"min,omitempty"`
-	Max         *float64    `json:"max,omitempty"`
-	Frequencies []Frequency `json:"frequencies"`
+	Column      string           `json:"column"`
+	Answered    int              `json:"answered"`
+	Missing     int              `json:"missing"`
+	Numeric     int              `json:"numeric"`
+	Mean        *float64         `json:"mean,omitempty"`
+	Min         *float64         `json:"min,omitempty"`
+	Max         *float64         `json:"max,omitempty"`
+	Frequencies []Frequency      `json:"frequencies"`
+	Weighted    *WeightedSummary `json:"weighted,omitempty"`
+}
+
+// WeightedSummary describes the numeric responses with a valid weight.
+type WeightedSummary struct {
+	Included    int     `json:"included"`
+	TotalWeight string  `json:"totalWeight"`
+	Mean        float64 `json:"mean"`
 }
 
 // Frequency is the count for one distinct trimmed answer.
@@ -39,9 +48,12 @@ type columnSummary struct {
 	index           int
 	mean, low, high float64
 	counts          map[string]int
+	weightedCount   int
+	weightUnits     uint64
+	weightedSum     big.Rat
 }
 
-func (s *columnSummary) add(record []string) {
+func (s *columnSummary) add(record []string, weight uint64) {
 	value := fieldAt(record, s.index)
 	if value == "" {
 		return
@@ -56,6 +68,16 @@ func (s *columnSummary) add(record []string) {
 	number, ok := parseFiniteNumber(value)
 	if !ok {
 		return
+	}
+	if weight != 0 {
+		// Accumulate the parsed values exactly so opposite large answers can cancel.
+		var term, factor big.Rat
+		term.SetFloat64(number)
+		factor.SetUint64(weight)
+		term.Mul(&term, &factor)
+		s.weightedSum.Add(&s.weightedSum, &term)
+		s.weightUnits += weight
+		s.weightedCount++
 	}
 	s.Numeric++
 	if s.Numeric == 1 {
@@ -83,6 +105,12 @@ func (s *columnSummary) finish(valid int) Summary {
 	s.Missing = valid - s.Answered
 	if s.Numeric > 0 {
 		s.Mean, s.Min, s.Max = &s.mean, &s.low, &s.high
+	}
+	if s.weightedCount > 0 {
+		var denominator big.Rat
+		denominator.SetUint64(s.weightUnits)
+		mean, _ := s.weightedSum.Quo(&s.weightedSum, &denominator).Float64()
+		s.Weighted = &WeightedSummary{Included: s.weightedCount, TotalWeight: formatWeight(s.weightUnits), Mean: mean}
 	}
 	frequencies := make([]Frequency, 0, len(s.counts))
 	for value, count := range s.counts {

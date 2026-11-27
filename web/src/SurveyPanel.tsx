@@ -133,6 +133,7 @@ function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid
       {summary.mean !== undefined && summary.min !== undefined && summary.max !== undefined && (
         <p>均值 {numberFormat.format(summary.mean)}，范围 {numberFormat.format(summary.min)} 至 {numberFormat.format(summary.max)}。</p>
       )}
+      {summary.weighted && <p>加权均值 {numberFormat.format(summary.weighted.mean)}，纳入 {summary.weighted.included} 份数值答卷，权重合计 {summary.weighted.totalWeight}。</p>}
       {summary.frequencies.length > 0 && <dl className="survey-frequencies" aria-label="常见回答及次数">
         {summary.frequencies.map(({ value, count }) => <div key={value}>
           <dt dir="auto">{value}</dt><dd>{count} 次</dd>

@@ -8,6 +8,21 @@ import (
 	"testing"
 )
 
+func TestAnalyzeWeightedMeanUsesNumericResponsesAndValidWeights(t *testing.T) {
+	csv := "Score,Weight,_quality_status\n1e308,0.1,\n1,0.1,\n-1e308,0.1,\n,2,\nNaN,3,\n99,0,\n99,1,held\n"
+	report, err := Analyze(strings.NewReader(csv), Options{WeightColumn: "Weight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mean := report.Summaries[0].Weighted
+	if mean == nil || *mean != (WeightedSummary{Included: 3, TotalWeight: "0.3", Mean: 1.0 / 3}) {
+		t.Fatalf("weighted summary: %+v", mean)
+	}
+	if report.Summaries[0].Numeric != 4 || report.Weighting.TotalWeight != "5.3" {
+		t.Fatalf("incorrect sample counts: %+v", report)
+	}
+}
+
 func TestAnalyze(t *testing.T) {
 	csv := "\ufeff\"Score\",Choice,Hours,Scale,Notes,FullName,e-mail,Respondent ID,手机号码,_quality_status,__synthetic__\r\n" +
 		"10,Beta,1,4,\"two\nlines\",Example A,a@example.test,1,123,,true\n" +
