@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, ComponentProps, FormEvent } from 'react'
+import { LatexExportPanel } from './LatexExportPanel'
+import { ManuscriptCheckPanel } from './ManuscriptCheckPanel'
 import { ManuscriptEvidence } from './ManuscriptEvidence'
 import { ManuscriptPDFEvidence } from './ManuscriptPDFEvidence'
 import type { PDFEvidenceReference } from './ManuscriptPDFEvidence'
@@ -35,6 +37,32 @@ const fileKindPatterns: Record<WorkspaceFileKind, RegExp> = {
 }
 
 const manuscriptSizeLimit = 64 * 1024
+const editorFontSizeKey = 'research-agent.editor.font-size'
+type EditorFontSize = 'sm' | 'md' | 'lg' | 'xl'
+const editorFontSizes: ReadonlyArray<readonly [EditorFontSize, string]> = [
+  ['sm', '小'],
+  ['md', '标准'],
+  ['lg', '大'],
+  ['xl', '特大'],
+]
+
+function storedEditorFontSize(): EditorFontSize {
+  try {
+    const value = localStorage.getItem(editorFontSizeKey)
+    if (value === 'sm' || value === 'md' || value === 'lg' || value === 'xl') return value
+  } catch {
+    // 忽略本地存储读取异常，使用标准字号。
+  }
+  return 'md'
+}
+
+function rememberEditorFontSize(size: EditorFontSize) {
+  try {
+    localStorage.setItem(editorFontSizeKey, size)
+  } catch {
+    // 保留当前页面所选字号。
+  }
+}
 
 async function readManuscript(file: File) {
   let content: string
@@ -265,6 +293,8 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const [busy, setBusy] = useState<Operation>()
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
+  const [editorFontSize, setEditorFontSize] = useState<EditorFontSize>(storedEditorFontSize)
+  const [jumpedLine, setJumpedLine] = useState<number>()
   const operation = useRef<AbortController | null>(null)
   const editor = useRef<HTMLTextAreaElement>(null)
   const searchField = useRef<HTMLInputElement>(null)
@@ -317,6 +347,32 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     setDraft(next.content)
     setSelection(undefined)
     setConflict(false)
+    setJumpedLine(undefined)
+  }
+
+  function changeEditorFontSize(next: EditorFontSize) {
+    setEditorFontSize(next)
+    rememberEditorFontSize(next)
+  }
+
+  function jumpToLine(lineNumber: number) {
+    const control = editor.current
+    if (!control) return
+    const text = control.value
+    const lines = text.split('\n')
+    const targetLine = Math.max(1, Math.min(lines.length, Math.trunc(lineNumber)))
+    let start = 0
+    for (let i = 0; i < targetLine - 1; i++) {
+      start += lines[i].length + 1
+    }
+    const end = start + (lines[targetLine - 1]?.length ?? 0)
+    control.focus()
+    control.setSelectionRange(start, end)
+    const ratio = lines.length > 1 ? (targetLine - 1) / (lines.length - 1) : 0
+    control.scrollTop = Math.max(0, Math.round(ratio * Math.max(0, control.scrollHeight - control.clientHeight)))
+    control.scrollIntoView({ block: 'nearest' })
+    setJumpedLine(targetLine)
+    selectText(control)
   }
 
   function reviewActionsFor(reviewVersionId: string, baseVersionId: string): RevisionActions {
@@ -559,9 +615,23 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     {document && <div className="workspace-editor">
       <div className="workspace-heading">
         <label htmlFor={`${id}-text`}>文件内容 <bdi>{document.path}</bdi></label>
-        <span className="workspace-note" role="status">{dirty ? '有未保存的修改' : '已保存'}</span>
+        <div className="workspace-actions">
+          <div className="workspace-zoom-group" role="group" aria-label="编辑器字号">
+            {editorFontSizes.map(([sizeKey, label]) => (
+              <button key={sizeKey} className="button outline workspace-zoom-btn" type="button"
+                aria-pressed={editorFontSize === sizeKey}
+                onClick={() => changeEditorFontSize(sizeKey)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="workspace-note" role="status">
+            {dirty ? '有未保存的修改' : '已保存'}
+            {jumpedLine !== undefined && ` · 已定位至第 ${jumpedLine} 行`}
+          </span>
+        </div>
       </div>
-      <textarea className="workspace-text" id={`${id}-text`} ref={editor} rows={9} dir="auto" spellCheck={false}
+      <textarea className="workspace-text" data-font-size={editorFontSize} id={`${id}-text`} ref={editor} rows={9} dir="auto" spellCheck={false}
         value={draft} readOnly={locked} onSelect={(event) => selectText(event.currentTarget)} onChange={(event) => {
           setDraft(event.currentTarget.value)
           setSelection(undefined)
@@ -605,6 +675,11 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
           references={pdfReferences} selection={selectedQuote} blockReason={restoreBlocked} />
       </>}
       {isMarkdown && document.content.trim() && <>
+        <ManuscriptCheckPanel key={`check:${document.path}`} projectId={projectId} file={document} dirty={dirty}
+          onJumpToLine={jumpToLine} />
+        <LatexExportPanel key={`latex:${document.path}`} projectId={projectId} file={document} dirty={dirty}
+          onSavedTex={(savedPath) => setCreatedPaths((prev) => prev.includes(savedPath) ? prev : [savedPath, ...prev])}
+          onJumpToLine={jumpToLine} />
         <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
           disabled={locked || dirty || conflict} onApplying={setApplying} onApplied={loadDocument} />
         <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} dirty={dirty} />
