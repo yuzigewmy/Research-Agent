@@ -96,6 +96,7 @@ func (node *ComputeNode) jobRequest(ctx context.Context, method, id, suffix, dig
 	req.Header.Set("Accept", "application/json")
 	if input != nil {
 		req.Header.Set("Content-Type", "text/csv")
+		req.Header.Set("Prefer", "respond-async")
 	}
 	if method != http.MethodGet {
 		req.Header.Set("X-Input-SHA256", digest)
@@ -108,7 +109,7 @@ func (node *ComputeNode) jobRequest(ctx context.Context, method, id, suffix, dig
 	if res.StatusCode == http.StatusNotFound && method == http.MethodGet {
 		return nil, nil, errRemoteMissing
 	}
-	if res.StatusCode != http.StatusOK && (method != http.MethodPut || res.StatusCode != http.StatusCreated) {
+	if res.StatusCode != http.StatusOK && (method != http.MethodPut || (res.StatusCode != http.StatusCreated && res.StatusCode != http.StatusAccepted)) {
 		return nil, nil, errRemoteResponse
 	}
 	const maxResponse = 8 << 10

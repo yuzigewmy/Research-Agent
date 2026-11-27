@@ -28,12 +28,14 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 			// The node commits the receipt before the connection drops.
 			saved := httptest.NewRecorder()
 			workerHandler.ServeHTTP(saved, r)
-			want := http.StatusCreated
-			if r.Method == http.MethodPost {
-				want = http.StatusOK
-			}
-			if saved.Code != want {
-				t.Errorf("worker response: %d, want %d", saved.Code, want)
+			if r.Method == http.MethodPut {
+				var accepted computeJob
+				if err := json.Unmarshal(saved.Body.Bytes(), &accepted); err != nil || saved.Code != http.StatusAccepted ||
+					accepted.Status != taskRunning || accepted.ResultSHA256 != "" || saved.Header().Get("Preference-Applied") != "respond-async" {
+					t.Errorf("expected an immediate running receipt, got %d: %+v (%v)", saved.Code, accepted, err)
+				}
+			} else if saved.Code != http.StatusOK {
+				t.Errorf("stop response: %d, want %d", saved.Code, http.StatusOK)
 			}
 			connection, _, err := http.NewResponseController(w).Hijack()
 			if err != nil {
@@ -142,6 +144,8 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	if !validComputeJobID(pending.JobID) || pending.Status != remotePending || pending.InputSHA256 != source.SHA256 {
 		t.Fatalf("wrong pending receipt: %+v", pending)
 	}
+	// The workbench can lose the accepted response while the node finishes independently.
+	worker.active.Wait()
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}

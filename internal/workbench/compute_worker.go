@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -55,6 +56,8 @@ type ComputeWorker struct {
 	credential [32]byte
 	slot       chan struct{}
 	mu         sync.Mutex
+	closing    bool
+	active     sync.WaitGroup
 	activeID   string
 	cancel     context.CancelFunc
 }
@@ -130,7 +133,33 @@ func initializeComputeWorker(db *sql.DB) error {
 	return tx.Commit()
 }
 
-func (worker *ComputeWorker) Close() error { return worker.db.Close() }
+func (worker *ComputeWorker) Close() error {
+	worker.mu.Lock()
+	worker.closing = true
+	worker.mu.Unlock()
+	worker.active.Wait()
+	return worker.db.Close()
+}
+
+func (worker *ComputeWorker) acquire() bool {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing {
+		return false
+	}
+	select {
+	case worker.slot <- struct{}{}:
+		worker.active.Add(1)
+		return true
+	default:
+		return false
+	}
+}
+
+func (worker *ComputeWorker) release() {
+	<-worker.slot
+	worker.active.Done()
+}
 
 func (worker *ComputeWorker) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -175,14 +204,17 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的作业编号、CSV 和输入摘要。")
 		return
 	}
-	select {
-	case worker.slot <- struct{}{}:
-		defer func() { <-worker.slot }()
-	default:
+	if !worker.acquire() {
 		w.Header().Set("Retry-After", "1")
 		writeError(w, http.StatusTooManyRequests, "NODE_BUSY", "计算节点正在处理作业，请按原编号查询或稍后重试。")
 		return
 	}
+	background := false
+	defer func() {
+		if !background {
+			worker.release()
+		}
+	}()
 	source, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWorkspaceText))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -201,11 +233,16 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 	worker.mu.Lock()
 	worker.activeID, worker.cancel = id, cancel
 	worker.mu.Unlock()
-	defer func() {
+	clearActive := func() {
 		cancel()
 		worker.mu.Lock()
 		worker.activeID, worker.cancel = "", nil
 		worker.mu.Unlock()
+	}
+	defer func() {
+		if !background {
+			clearActive()
+		}
 	}()
 	job := computeJob{JobID: id, InputSHA256: digest, Status: taskRunning, StartedAt: time.Now().UTC().Format(createdAtLayout)}
 	if err := worker.db.QueryRowContext(r.Context(), `INSERT INTO jobs (job_id, input_sha256, status, started_at)
@@ -218,17 +255,35 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Once the receipt is saved, a lost connection leaves the calculation free to finish.
-	job, result := runComputeJob(runCtx, job, string(source))
-	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
-	defer stop()
-	job, err = worker.finishJob(saveCtx, job, result)
+	// A saved job can finish even if the submission connection drops.
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Prefer")), "respond-async") {
+		background = true
+		go func() {
+			defer worker.release()
+			defer clearActive()
+			if _, err := worker.executeJob(runCtx, job, string(source)); err != nil {
+				slog.Error("save background compute job", "job_id", job.JobID, "error", err)
+			}
+		}()
+		w.Header().Set("Location", computeJobsPath+job.JobID)
+		w.Header().Set("Preference-Applied", "respond-async")
+		writeJSON(w, http.StatusAccepted, job)
+		return
+	}
+	finished, err := worker.executeJob(runCtx, job, string(source))
 	if err != nil {
 		writeStoreError(w, "save compute job", err)
 		return
 	}
 	w.Header().Set("Location", computeJobsPath+job.JobID)
-	writeJSON(w, http.StatusCreated, job)
+	writeJSON(w, http.StatusCreated, finished)
+}
+
+func (worker *ComputeWorker) executeJob(ctx context.Context, job computeJob, source string) (computeJob, error) {
+	job, result := runComputeJob(ctx, job, source)
+	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
+	defer stop()
+	return worker.finishJob(saveCtx, job, result)
 }
 
 func (worker *ComputeWorker) replyJob(w http.ResponseWriter, ctx context.Context, id, digest string) {
