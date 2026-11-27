@@ -55,6 +55,7 @@ type ComputeWorker struct {
 	name       string
 	credential [32]byte
 	slot       chan struct{}
+	runJob     func(context.Context, computeJob, string) (computeJob, string, string)
 	mu         sync.Mutex
 	closing    bool
 	active     sync.WaitGroup
@@ -214,8 +215,24 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !worker.acquire() {
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "NODE_BUSY", "计算节点正在处理作业，请按原编号查询或稍后重试。")
+		existing, _, err := worker.lookupJob(r.Context(), id)
+		if errors.Is(err, sql.ErrNoRows) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, "NODE_BUSY", "计算节点正在处理作业，请按原编号查询或稍后重试。")
+			return
+		}
+		if err != nil {
+			writeStoreError(w, "read compute receipt", err)
+			return
+		}
+		if !readVerifiedComputeSource(w, r, digest) {
+			return
+		}
+		if existing.InputSHA256 != digest {
+			writeError(w, http.StatusConflict, "JOB_ID_CONFLICT", "该作业编号已绑定其他输入。")
+			return
+		}
+		writeJSON(w, http.StatusOK, existing)
 		return
 	}
 	background := false
@@ -224,18 +241,8 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 			worker.release()
 		}
 	}()
-	source, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWorkspaceText))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "INPUT_TOO_LARGE", "CSV 超过 512 KiB。")
-		} else {
-			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "无法读取 CSV 输入。")
-		}
-		return
-	}
-	if computeDigest(source) != digest {
-		writeError(w, http.StatusUnprocessableEntity, "INPUT_DIGEST_MISMATCH", "CSV 输入摘要不一致。")
+	source, ok := readComputeSource(w, r, digest)
+	if !ok {
 		return
 	}
 	runCtx, cancel := context.WithTimeout(context.Background(), comparisonTimeout)
@@ -288,8 +295,35 @@ func (worker *ComputeWorker) submit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, finished)
 }
 
+func readComputeSource(w http.ResponseWriter, r *http.Request, digest string) ([]byte, bool) {
+	source, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWorkspaceText))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "INPUT_TOO_LARGE", "CSV 超过 512 KiB。")
+		} else {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "无法读取 CSV 输入。")
+		}
+		return nil, false
+	}
+	if computeDigest(source) != digest {
+		writeError(w, http.StatusUnprocessableEntity, "INPUT_DIGEST_MISMATCH", "CSV 输入摘要不一致。")
+		return nil, false
+	}
+	return source, true
+}
+
+func readVerifiedComputeSource(w http.ResponseWriter, r *http.Request, digest string) bool {
+	_, ok := readComputeSource(w, r, digest)
+	return ok
+}
+
 func (worker *ComputeWorker) executeJob(ctx context.Context, job computeJob, source string) (computeJob, error) {
-	job, result, scatter := runComputeJob(ctx, job, source)
+	run := worker.runJob
+	if run == nil {
+		run = runComputeJob
+	}
+	job, result, scatter := run(ctx, job, source)
 	saveCtx, stop := context.WithTimeout(context.Background(), taskDBLimit)
 	defer stop()
 	return worker.finishJob(saveCtx, job, result, scatter)

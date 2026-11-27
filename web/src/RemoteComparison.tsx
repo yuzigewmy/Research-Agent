@@ -201,9 +201,11 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
     }
     schedule()
     document.addEventListener('visibilitychange', changeVisibility)
+    window.addEventListener('online', changeVisibility)
     return () => {
       reset()
       document.removeEventListener('visibilitychange', changeVisibility)
+      window.removeEventListener('online', changeVisibility)
     }
   }, [open, path, watchStatus])
 
@@ -246,6 +248,14 @@ export function RemoteComparison({ projectId, taskId, onReportSaved }: {
         const label = actionLabels[action]
         const message = signal.aborted ? `${label}超时，请重试。` : `${label}失败。${errorMessage(cause)}`
         setError({ action, message })
+        if (action === 'submit') {
+          try {
+            const latest = await readSnapshot(path, 'snapshot', AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]))
+            if (!controller.signal.aborted) setSnapshot(latest)
+          } catch {
+            // Keep the submit error if the local snapshot cannot be read.
+          }
+        }
       }
     } finally {
       active.current = null
