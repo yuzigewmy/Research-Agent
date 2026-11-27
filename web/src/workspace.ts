@@ -116,6 +116,10 @@ export function diagramPdfPath(projectId: string, versionId: string) {
   return `${versionPath(projectId, versionId)}/diagram.pdf`
 }
 
+export function workspaceHTMLPath(projectId: string, versionId: string, action: 'preview' | 'download') {
+  return `${versionPath(projectId, versionId)}/html/${action}`
+}
+
 export async function readText(projectId: string, path: string, signal: AbortSignal) {
   return request(`${filesPath(projectId)}/text?${new URLSearchParams({ path })}`, isDocument, { signal })
 }

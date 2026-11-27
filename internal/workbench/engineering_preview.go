@@ -7,9 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path"
 	"strconv"
-	"strings"
 )
 
 const engineeringTemplate = "engineering_project"
@@ -75,8 +73,7 @@ func (s *Store) startEngineeringPreview(ctx context.Context, projectID, versionI
 	if err != nil {
 		return engineeringPreview{}, false, err
 	}
-	extension := strings.ToLower(path.Ext(file.Path))
-	if extension != ".html" && extension != ".htm" {
+	if !htmlWorkspacePath(file.Path) {
 		return engineeringPreview{}, false, errEngineeringPreviewFormat
 	}
 

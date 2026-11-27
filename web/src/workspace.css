@@ -69,6 +69,10 @@
 .workspace-editor { min-inline-size: 0; }
 .workspace-history { padding-block-start: 0.25rem; }
 
+.workspace-html-preview { min-inline-size: 0; }
+.workspace-html-preview > summary { color: var(--green); font-weight: 650; cursor: pointer; }
+.workspace-html-preview > .workspace-preview { margin-block-start: 0.5rem; }
+
 .engineering-preview-frame {
   inline-size: 100%;
   min-block-size: 22rem;

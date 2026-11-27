@@ -24,6 +24,8 @@ func (s *Store) registerWorkspace(mux *http.ServeMux, pdfFont string) {
 	mux.HandleFunc("GET "+path+"/versions/{versionId}", s.handleWorkspaceVersion)
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.svg", s.handleDiagramSVG)
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.pdf", s.handleDiagramPDF(pdfFont))
+	mux.HandleFunc("GET "+path+"/versions/{versionId}/html/preview", s.handleWorkspaceHTML(false))
+	mux.HandleFunc("GET "+path+"/versions/{versionId}/html/download", s.handleWorkspaceHTML(true))
 	mux.HandleFunc("POST "+path+"/versions/{versionId}/restore", s.handleRestoreWorkspace)
 	evidence := path + "/versions/{versionId}/comparison-links"
 	mux.HandleFunc("GET "+evidence, s.handleListManuscriptEvidence)

@@ -6,6 +6,7 @@ import { MarkdownPreview } from './MarkdownPreview'
 import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
+import { WorkspaceHTMLPreview } from './WorkspaceHTMLPreview'
 import { errorMessage, ProjectApiError } from './projects'
 import { researchBriefPath, researchDocumentTemplates } from './researchDocuments'
 import type { ResearchDocumentTemplate } from './researchDocuments'
@@ -18,6 +19,7 @@ import './workspace.css'
 const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
 const encoder = new TextEncoder()
 const markdownExtension = /\.(md|markdown)$/i
+const htmlExtension = /\.html?$/i
 const manuscriptSizeLimit = 64 * 1024
 
 async function readManuscript(file: File) {
@@ -139,6 +141,7 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
     {document.content
       ? <pre className="workspace-text" tabIndex={0} aria-label="版本内容" dir="auto">{document.content}</pre>
       : <p className="workspace-note">此版本为空文件。</p>}
+    {htmlExtension.test(document.path) && <WorkspaceHTMLPreview projectId={projectId} file={document} />}
     {markdownExtension.test(document.path) && <>
       <MarkdownPreview file={document} />
       <ManuscriptEvidence projectId={projectId} versionId={document.versionId} readOnly />
@@ -554,6 +557,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
             : quoteLimitReached ? <>已引用 {manuscriptSelectionLimit} 份稿件，请先在<a href="#conversation-title">项目对话</a>中移除一份。</>
               : <>选取非空白文字，最多 {manuscriptSelectionByteLimit} 个 UTF-8 字节。{currentQuote && '再次引用会替换此稿件的选区。'}</>}
       </p>}
+      {htmlExtension.test(document.path) && <WorkspaceHTMLPreview key={document.versionId} projectId={projectId} file={document} />}
       {isMarkdown && <>
         <MarkdownPreview key={document.versionId} file={document} />
         <ManuscriptEvidence projectId={projectId} versionId={document.versionId}
