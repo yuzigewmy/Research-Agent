@@ -144,11 +144,29 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	}
 	store = open()
 	handler = NewHandler(store, nil, HandlerConfig{ComputeNode: node})
-	request(http.MethodPost, path+"/refresh", http.StatusBadGateway)
+	request(http.MethodPost, path+"/retrieve", http.StatusConflict)
+	var snapshot struct {
+		Job             computeJob
+		ReportRetrieved bool
+	}
+	if err := json.Unmarshal(request(http.MethodPost, path+"/refresh", http.StatusOK).Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	job := snapshot.Job
+	if job.JobID != pending.JobID || job.Status != taskSucceeded || job.InputSHA256 != source.SHA256 || submissions.Load() != 1 ||
+		snapshot.ReportRetrieved || results.Load() != 0 {
+		t.Fatalf("wrong recovered receipt or unexpected transfer: %+v, submissions %d, transfers %d", snapshot, submissions.Load(), results.Load())
+	}
 	request(http.MethodGet, path+"/result", http.StatusNotFound)
-	job := read(http.MethodPost, path+"/refresh")
-	if job.JobID != pending.JobID || job.Status != taskSucceeded || job.InputSHA256 != source.SHA256 || submissions.Load() != 1 {
-		t.Fatalf("wrong recovered receipt: %+v, submissions %d", job, submissions.Load())
+	request(http.MethodPost, path+"/retrieve", http.StatusBadGateway)
+	request(http.MethodGet, path+"/result", http.StatusNotFound)
+	if err := json.Unmarshal(request(http.MethodPost, path+"/retrieve", http.StatusOK).Body.Bytes(), &snapshot); err != nil ||
+		!snapshot.ReportRetrieved || snapshot.Job != job || results.Load() != 2 {
+		t.Fatalf("wrong report retrieval receipt: %+v (%v)", snapshot, err)
+	}
+	request(http.MethodPost, path+"/retrieve", http.StatusOK)
+	if results.Load() != 2 {
+		t.Fatal("retrieval replay transferred an already saved report")
 	}
 	request(http.MethodPost, stopPath+"/submit", http.StatusBadGateway)
 	reserved := read(http.MethodGet, stopPath)

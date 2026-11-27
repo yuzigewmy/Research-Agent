@@ -8,7 +8,7 @@ const statusLabels = {
 } as const
 const actionLabels = {
   snapshot: '读取本机记录', submit: '提交远程复算', refresh: '刷新远程状态',
-  cancel: '请求停止远程复算', result: '下载远程结果',
+  cancel: '请求停止远程复算', retrieve: '取回报告', result: '下载远程结果',
 } as const
 const sha256Pattern = /^[a-f0-9]{64}$/i
 const resultFileName = 'paired-comparison.json'
@@ -21,7 +21,7 @@ type RemoteJob = {
   finishedAt?: string
   resultSha256?: string
 }
-type Snapshot = { configured: boolean; job?: RemoteJob }
+type Snapshot = { configured: boolean; job?: RemoteJob; reportRetrieved: boolean }
 type Action = keyof typeof actionLabels
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -37,7 +37,7 @@ function isOptionalDate(value: unknown) {
 }
 
 function isSnapshot(value: unknown): value is Snapshot {
-  if (!isRecord(value) || typeof value.configured !== 'boolean') return false
+  if (!isRecord(value) || typeof value.configured !== 'boolean' || typeof value.reportRetrieved !== 'boolean') return false
   const { job } = value
   return job === undefined || (isRecord(job)
     && typeof job.jobId === 'string' && job.jobId.trim().length > 0
@@ -87,12 +87,13 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState<Action>()
   const [error, setError] = useState<{ action: Action; message: string }>()
-  const { configured, job } = snapshot ?? {}
+  const { configured, job, reportRetrieved } = snapshot ?? {}
   const canSubmit = configured === true && (!job || job.status === 'PENDING')
   const canCancel = configured === true
     && (job?.status === 'PENDING' || job?.status === 'RUNNING' || job?.status === 'CANCELLING')
   const canRefresh = configured === true && (!!job || error?.action === 'submit' || error?.action === 'refresh')
-  const resultDigest = job?.status === 'SUCCEEDED' ? job.resultSha256 : undefined
+  const canRetrieve = configured === true && job?.status === 'SUCCEEDED' && !reportRetrieved
+  const resultDigest = job?.status === 'SUCCEEDED' && reportRetrieved ? job.resultSha256 : undefined
 
   useEffect(() => () => active.current?.abort(), [])
 
@@ -101,6 +102,7 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
     if (action === 'submit' && (!confirmed || !canSubmit)) return
     if (action === 'refresh' && !canRefresh) return
     if (action === 'cancel' && !canCancel) return
+    if (action === 'retrieve' && !canRetrieve) return
     const controller = new AbortController()
     const timeout = action === 'snapshot' || action === 'result' ? 10_000 : 30_000
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)])
@@ -154,7 +156,7 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
           {job.startedAt && job.finishedAt && ' · '}
           {job.finishedAt && <>结束 <ProjectDate value={job.finishedAt} withTime /></>}
         </p>}
-        {job.resultSha256 && <p className="task-note">结果 SHA-256 <code>{job.resultSha256}</code></p>}
+        {job.resultSha256 && <p className="task-note">报告{snapshot?.reportRetrieved ? '已取回' : '待取回'} · SHA-256 <code>{job.resultSha256}</code></p>}
       </div>}
       {canSubmit && <>
         {job?.status === 'PENDING' && <p className="task-note">再次提交会沿用当前作业编号。</p>}
@@ -178,6 +180,8 @@ export function RemoteComparison({ projectId, taskId }: { projectId: string; tas
         </button>}
         {canRefresh && <button className="button outline" type="button" data-remote-comparison-refresh
           disabled={!!busy} onClick={() => void run('refresh')}>刷新状态</button>}
+        {canRetrieve && <button className="button primary" type="button" data-remote-comparison-retrieve
+          disabled={!!busy} onClick={() => void run('retrieve')}>取回报告</button>}
         {resultDigest && <a className="button outline" href={resultPath} download={resultFileName}
           data-remote-comparison-result aria-disabled={!!busy} onClick={(event) => {
             event.preventDefault()

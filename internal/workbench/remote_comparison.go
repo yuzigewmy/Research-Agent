@@ -119,58 +119,59 @@ func (node *ComputeNode) jobRequest(ctx context.Context, method, id, suffix, dig
 	return body, res.Header, nil
 }
 
-func (node *ComputeNode) reconcileJob(ctx context.Context, old remoteComparison, method, source string, expected experimentMetrics) (computeJob, string, error) {
+func (node *ComputeNode) reconcileJob(ctx context.Context, old remoteComparison, method, source string) (computeJob, error) {
 	suffix := ""
 	if method == http.MethodPost {
 		suffix = "cancel"
 	}
 	body, _, err := node.jobRequest(ctx, method, old.JobID, suffix, old.InputSHA256, source)
 	if err != nil {
-		return computeJob{}, "", err
+		return computeJob{}, err
 	}
 	var job computeJob
 	if json.Unmarshal(body, &job) != nil || job.JobID != old.JobID || job.InputSHA256 != old.InputSHA256 {
-		return computeJob{}, "", errRemoteResponse
+		return computeJob{}, errRemoteResponse
 	}
 	if job.Status != taskCancelled || job.StartedAt != "" {
 		if _, err := time.Parse(time.RFC3339Nano, job.StartedAt); err != nil {
-			return computeJob{}, "", errRemoteResponse
+			return computeJob{}, errRemoteResponse
 		}
 	}
-	job.Message = ""
 	switch job.Status {
 	case taskRunning, taskCancelling:
 		if job.FinishedAt != "" || job.ResultSHA256 != "" {
-			return computeJob{}, "", errRemoteResponse
+			return computeJob{}, errRemoteResponse
 		}
-		return job, "", nil
 	case taskSucceeded, taskFailed, taskInterrupted, taskCancelled:
 		if _, err := time.Parse(time.RFC3339Nano, job.FinishedAt); err != nil {
-			return computeJob{}, "", errRemoteResponse
+			return computeJob{}, errRemoteResponse
+		}
+		if job.Status == taskSucceeded {
+			if !validObjectDigest(job.ResultSHA256) {
+				return computeJob{}, errRemoteResponse
+			}
+		} else if job.ResultSHA256 != "" {
+			return computeJob{}, errRemoteResponse
 		}
 	default:
-		return computeJob{}, "", errRemoteResponse
+		return computeJob{}, errRemoteResponse
 	}
-	if job.Status != taskSucceeded {
-		if job.ResultSHA256 != "" {
-			return computeJob{}, "", errRemoteResponse
-		}
-		return job, "", nil
-	}
-	if !validObjectDigest(job.ResultSHA256) {
-		return computeJob{}, "", errRemoteResponse
-	}
+	job.Message = ""
+	return job, nil
+}
+
+func (node *ComputeNode) fetchComparisonReport(ctx context.Context, job computeJob, expected experimentMetrics) (string, error) {
 	result, headers, err := node.jobRequest(ctx, http.MethodGet, job.JobID, "result", "", "")
 	if err != nil {
-		return computeJob{}, "", errRemoteResponse
+		return "", err
 	}
 	var report computeJobResult
 	if headers.Get("X-Result-SHA256") != job.ResultSHA256 || computeDigest(result) != job.ResultSHA256 ||
 		json.Unmarshal(result, &report) != nil || report.Method != experimentComparisonMethod || report.InputSHA256 != job.InputSHA256 ||
 		report.Metrics != expected {
-		return computeJob{}, "", errRemoteResponse
+		return "", errRemoteResponse
 	}
-	return job, string(result), nil
+	return string(result), nil
 }
 
 func registerRemoteComparison(mux *http.ServeMux, store *Store, node *ComputeNode) {
@@ -180,6 +181,7 @@ func registerRemoteComparison(mux *http.ServeMux, store *Store, node *ComputeNod
 	mux.HandleFunc("POST "+path+"/submit", store.remoteComparisonHandler(node, "submit"))
 	mux.HandleFunc("POST "+path+"/refresh", store.remoteComparisonHandler(node, "refresh"))
 	mux.HandleFunc("POST "+path+"/cancel", store.remoteComparisonHandler(node, "cancel"))
+	mux.HandleFunc("POST "+path+"/retrieve", store.remoteComparisonHandler(node, "retrieve"))
 }
 
 func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.HandlerFunc {
@@ -219,7 +221,16 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提交空 JSON 对象。")
 			return
 		}
-		if job.JobID != "" && !remoteJobActive(job.Status) {
+		if action == "retrieve" {
+			if job.Status != taskSucceeded {
+				writeError(w, http.StatusConflict, "RESULT_NOT_READY", "请先查询并确认远程作业已完成。")
+				return
+			}
+			if job.result != "" {
+				writeRemoteComparison(w, node, job)
+				return
+			}
+		} else if job.JobID != "" && !remoteJobActive(job.Status) {
 			writeRemoteComparison(w, node, job)
 			return
 		}
@@ -250,6 +261,10 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			writeError(w, http.StatusConflict, "COMPUTE_NODE_CHANGED", "请恢复提交时的计算节点配置，再查询原作业。")
 			return
 		}
+		if action == "retrieve" {
+			s.retrieveRemoteComparison(w, r, node, job, report.Metrics)
+			return
+		}
 		method, source := http.MethodGet, ""
 		if action == "cancel" {
 			if _, err := s.db.ExecContext(ctx, `UPDATE remote_comparisons SET status = 'CANCELLING'
@@ -268,7 +283,7 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 		}
 		nodeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		updated, result, err := node.reconcileJob(nodeCtx, job, method, source, report.Metrics)
+		updated, err := node.reconcileJob(nodeCtx, job, method, source)
 		if (err != nil && action == "cancel") || (errors.Is(err, errRemoteMissing) && (job.Status == remotePending || job.Status == taskCancelling)) {
 			current, err := readRemoteComparison(ctx, s.db, projectID, taskID)
 			if err != nil {
@@ -279,15 +294,15 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 			return
 		}
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "COMPUTE_JOB_UNCONFIRMED", "暂时无法核对节点回执或结果，请刷新原作业状态。")
+			writeError(w, http.StatusBadGateway, "COMPUTE_JOB_UNCONFIRMED", "暂时无法核对节点回执，请刷新原作业状态。")
 			return
 		}
 		saveCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), taskDBLimit)
 		defer stop()
-		if _, err := s.db.ExecContext(saveCtx, `UPDATE remote_comparisons SET status = ?, started_at = ?, finished_at = ?, result_sha256 = ?, result_json = ?
+		if _, err := s.db.ExecContext(saveCtx, `UPDATE remote_comparisons SET status = ?, started_at = ?, finished_at = ?, result_sha256 = ?
 			WHERE project_id = ? AND task_id = ? AND job_id = ? AND status IN ('PENDING', 'RUNNING', 'CANCELLING')
 			AND (status <> 'CANCELLING' OR ? <> 'RUNNING')`, updated.Status, updated.StartedAt,
-			updated.FinishedAt, updated.ResultSHA256, result, projectID, taskID, job.JobID, updated.Status); err != nil {
+			updated.FinishedAt, updated.ResultSHA256, projectID, taskID, job.JobID, updated.Status); err != nil {
 			writeStoreError(w, "save remote comparison", err)
 			return
 		}
@@ -300,13 +315,32 @@ func (s *Store) remoteComparisonHandler(node *ComputeNode, action string) http.H
 	}
 }
 
+func (s *Store) retrieveRemoteComparison(w http.ResponseWriter, r *http.Request, node *ComputeNode, job remoteComparison, expected experimentMetrics) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	result, err := node.fetchComparisonReport(ctx, job.computeJob, expected)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "COMPUTE_RESULT_UNVERIFIED", "暂时无法取回或校验报告。可重试取回。")
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE remote_comparisons SET result_json = ?
+		WHERE project_id = ? AND task_id = ? AND job_id = ? AND result_sha256 = ? AND status = 'SUCCEEDED'`,
+		result, r.PathValue("id"), r.PathValue("taskId"), job.JobID, job.ResultSHA256); err != nil {
+		writeStoreError(w, "save remote comparison report", err)
+		return
+	}
+	job.result = result
+	writeRemoteComparison(w, node, job)
+}
+
 func writeRemoteComparison(w http.ResponseWriter, node *ComputeNode, job remoteComparison) {
 	var receipt *computeJob
 	if job.JobID != "" {
 		receipt = &job.computeJob
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Configured bool        `json:"configured"`
-		Job        *computeJob `json:"job,omitempty"`
-	}{node != nil, receipt})
+		Configured      bool        `json:"configured"`
+		Job             *computeJob `json:"job,omitempty"`
+		ReportRetrieved bool        `json:"reportRetrieved"`
+	}{node != nil, receipt, job.result != ""})
 }
