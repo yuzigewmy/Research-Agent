@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { connectionModelLabels, readModelConnection, testModelConnection } from './modelConnectionApi'
 import type { ConnectionModelId, ModelCapabilityCatalog, ModelConnectionStatus } from './modelConnectionApi'
 import { errorMessage } from './projects'
@@ -8,16 +9,18 @@ type ConfigState = { kind: 'loading' } | { kind: 'ready'; status: ModelConnectio
 type TestState = { kind: 'testing' | 'success' } | { kind: 'error'; message: string }
 
 export function ModelConnection() {
+  const locale = useLocale()
   const [open, setOpen] = useState(false)
   return <details className="model-connection" onToggle={(event) => {
     if (event.target === event.currentTarget) setOpen(event.currentTarget.open)
   }}>
-    <summary>模型连接</summary>
+    <summary>{t(locale, 'section.modelConnection')}</summary>
     {open && <ConnectionDetails />}
   </details>
 }
 
 function ConnectionDetails() {
+  const locale = useLocale()
   const id = useId()
   const testErrorId = `${id}-error`
   const [config, setConfig] = useState<ConfigState>({ kind: 'loading' })
@@ -102,12 +105,12 @@ function ConnectionDetails() {
         : vision ? '测试会发送内置方块图，核对模型读取的数量。'
           : '测试会发送一条固定消息，验证所选模型的文本流式回复。'}</p>
       <button className="button outline" type="button" disabled={result?.kind === 'testing'}
-        aria-describedby={result?.kind === 'error' ? testErrorId : undefined} onClick={() => void test()}>测试连接</button>
+        aria-describedby={result?.kind === 'error' ? testErrorId : undefined} onClick={() => void test()}>{t(locale, 'section.modelTest')}</button>
       {result?.kind === 'testing' && <p className="model-connection-note" role="status">正在测试连接…</p>}
       {result?.kind === 'success' && <p role="status">{generation ? '测试通过，已收到合格的 PNG。'
         : vision ? '测试通过，模型已读出图中方块的数量。' : '模型连接正常。'}</p>}
       {result?.kind === 'error' && <p className="form-error" id={testErrorId} role="alert">{result.message}</p>}
-    </> : <p className="model-connection-note" role="status">模型未配置。</p>)}
+    </> : <p className="model-connection-note" role="status">{t(locale, 'section.modelUnconfigured')}</p>)}
     {config.kind === 'ready' && config.status.catalog && <CapabilityCatalog catalog={config.status.catalog} />}
   </div>
 }
@@ -147,8 +150,9 @@ const limitUnits = { seconds: '秒', bytes: '字节', count: '次', pixels: '像
 const catalogNumber = new Intl.NumberFormat('zh-CN')
 
 function CapabilityCatalog({ catalog }: { catalog: ModelCapabilityCatalog }) {
+  const locale = useLocale()
   return <details className="model-capability-catalog">
-    <summary>模型能力目录</summary>
+    <summary>{t(locale, 'section.modelCapabilityCatalog')}</summary>
     <div className="model-catalog-body">
       <p className="model-connection-note">目录显示服务端配置与技术上限。连通性以「测试连接」结果为准。</p>
       <h2>模型角色</h2>

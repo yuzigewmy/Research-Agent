@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { ProjectDate } from './ProjectDetails'
 import { errorMessage } from './projects'
 import {
@@ -32,6 +33,7 @@ export function RestrictedScriptPanel({ projectId, onArtifactPublished }: {
   projectId: string
   onArtifactPublished?: (path: string) => void
 }) {
+  const locale = useLocale()
   const id = useId()
   const [open, setOpen] = useState(false)
   const [configured, setConfigured] = useState(false)
@@ -196,7 +198,7 @@ export function RestrictedScriptPanel({ projectId, onArtifactPublished }: {
   return (
     <section className="workspace-panel" aria-labelledby={`${id}-heading`}>
       <details className="task-input-disclosure" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-        <summary id={`${id}-heading`}>受限本机脚本</summary>
+        <summary id={`${id}-heading`}>{t(locale, 'panel.restrictedScripts')}</summary>
         <div className="task-input-body">
           <div className="workspace-actions">
             <button className="button outline" type="button" disabled={loading} onClick={refresh}>

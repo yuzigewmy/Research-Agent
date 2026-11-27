@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage } from './projects'
 import { bibliographyPath, doiUrl, listCitations, saveCitation, searchLiterature } from './literature'
 import type { Citation, Work } from './literature'
@@ -70,6 +71,7 @@ export function LiteraturePanel({ projectId }: { projectId: string }) {
 }
 
 function ProjectLiterature({ projectId }: { projectId: string }) {
+  const locale = useLocale()
   const id = useId()
   const [query, setQuery] = useState('')
   const [doi, setDoi] = useState('')
@@ -156,7 +158,7 @@ function ProjectLiterature({ projectId }: { projectId: string }) {
   }
 
   return <section className="literature-panel" aria-labelledby={id}>
-    <h4 id={id}>项目文献库</h4>
+    <h4 id={id}>{t(locale, 'panel.literature')}</h4>
     <p className="literature-note" id={`${id}-verify-note`}>核验仅确认 Crossref 中的 DOI 登记元数据。</p>
     <form className="field" onSubmit={(event) => {
       event.preventDefault()

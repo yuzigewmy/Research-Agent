@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import {
   deleteProject, errorMessage, getProject, getProjectDeletePreview, isTurnMode, ProjectApiError,
   projectArchiveExportPath, turnModeHelp, turnModeLabels, updateProject,
@@ -33,6 +34,7 @@ const successMessages: Record<Operation, string> = {
 }
 
 export function ProjectAdministration({ project, onUpdated, onDeleted }: ProjectAdministrationProps) {
+  const locale = useLocale()
   const id = useId()
   const [draft, setDraft] = useState<string>()
   const [titleDraft, setTitleDraft] = useState<string>()
@@ -188,7 +190,7 @@ export function ProjectAdministration({ project, onUpdated, onDeleted }: Project
 
   return (
     <section className="project-administration" aria-labelledby={`${id}-heading`}>
-      <h4 id={`${id}-heading`}>项目管理</h4>
+      <h4 id={`${id}-heading`}>{t(locale, 'panel.administration')}</h4>
       <form className="field" onSubmit={(event) => {
         event.preventDefault()
         if (!writesBlocked && dirty) void run('save', { displayName: name.trim() })

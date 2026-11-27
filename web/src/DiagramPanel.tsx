@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { DiagramCanvas } from './DiagramCanvas'
 import { DiagramDownload } from './DiagramDownload'
 import { WorkspaceHTMLPreview } from './WorkspaceHTMLPreview'
@@ -696,18 +697,19 @@ function DiagramWorkspace({ projectId }: { projectId: string }) {
 }
 
 export function DiagramPanel({ projectId }: { projectId: string }) {
+  const locale = useLocale()
   const [visited, setVisited] = useState(false)
   const [mode, setMode] = useState<'flow' | 'html'>('flow')
   return <details className="diagram-panel" id="project-diagrams" onToggle={(event) => {
     if (event.target === event.currentTarget && event.currentTarget.open) setVisited(true)
   }}>
-    <summary>图表工作区</summary>
+    <summary>{t(locale, 'panel.diagramWorkspace')}</summary>
     {visited && <div className="diagram-panel-body">
       <div className="workspace-actions" role="group" aria-label="图表编辑模式">
         <button className="button outline" type="button" aria-pressed={mode === 'flow'}
-          onClick={() => setMode('flow')}>流程图画布</button>
+          onClick={() => setMode('flow')}>{t(locale, 'panel.diagramFlowMode')}</button>
         <button className="button outline" type="button" aria-pressed={mode === 'html'}
-          onClick={() => setMode('html')}>HTML 可编辑图</button>
+          onClick={() => setMode('html')}>{t(locale, 'panel.diagramHtmlMode')}</button>
       </div>
       {mode === 'flow'
         ? <DiagramWorkspace key={`flow:${projectId}`} projectId={projectId} />

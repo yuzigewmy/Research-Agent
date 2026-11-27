@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage, getProjectMemorySummary, templates } from './projects'
 import type { ProjectMemorySummary as MemorySummaryData } from './projects'
 
@@ -20,6 +21,7 @@ const workflowStatusLabels: Record<string, string> = {
 }
 
 export function ProjectMemorySummary({ projectId }: { projectId: string }) {
+  const locale = useLocale()
   const headingId = useId()
   const [open, setOpen] = useState(false)
   const [attempt, setAttempt] = useState(0)
@@ -52,7 +54,7 @@ export function ProjectMemorySummary({ projectId }: { projectId: string }) {
       aria-labelledby={headingId}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary id={headingId}>研究记忆与来源链</summary>
+      <summary id={headingId}>{t(locale, 'panel.memorySummary')}</summary>
       <div className="project-memory-body">
         <div className="project-management-actions">
           <button

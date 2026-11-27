@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage, request } from './projects'
 import { WorkspaceRestore } from './WorkspaceRestore'
 import './workspace-backup.css'
@@ -160,13 +161,14 @@ function WorkspaceStorageUsage() {
 }
 
 export function WorkspaceBackup() {
+  const locale = useLocale()
   const [open, setOpen] = useState(false)
   return <details className="workspace-backup" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>工作区备份</summary>
+    <summary>{t(locale, 'section.workspaceBackup')}</summary>
     {open && <WorkspaceStorageUsage />}
     <p>下载包含项目、答卷、对话和资料各版本的 ZIP。备份包括整个工作区，请妥善保存。</p>
     <form action="/api/v1/workspace-backup" method="post" target="_blank" rel="noopener">
-      <button className="button outline" type="submit">下载工作区备份</button>
+      <button className="button outline" type="submit">{t(locale, 'section.workspaceBackupDownload')}</button>
     </form>
     <WorkspaceRestore />
     <p>使用启动程序的 <code>--restore</code> 选项可恢复更大的备份。</p>

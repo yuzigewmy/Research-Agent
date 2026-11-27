@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage, request } from './projects'
 import './model-connection.css'
 
@@ -36,6 +37,7 @@ function isCheckResponse(value: unknown): value is CheckResponse {
 }
 
 export function ComputeNode() {
+  const locale = useLocale()
   const [open, setOpen] = useState(false)
   const [config, setConfig] = useState<ConfigState>({ kind: 'loading' })
   const [loadAttempt, setLoadAttempt] = useState(0)
@@ -96,7 +98,7 @@ export function ComputeNode() {
     if (expanded) loadConfig()
     setOpen(expanded)
   }}>
-    <summary>计算节点</summary>
+    <summary>{t(locale, 'section.computeNode')}</summary>
     <div className="model-connection-body">
       <p className="model-connection-note">检查只读取节点状态和能力。</p>
       {config.kind === 'loading' && <p className="model-connection-note" role="status">正在读取计算节点配置…</p>}
@@ -106,9 +108,9 @@ export function ComputeNode() {
           onClick={loadConfig}>重试读取配置</button>
       </>}
       {config.kind === 'ready' && (config.configured ? <>
-        <p className="model-connection-note">计算节点已配置。</p>
+        <p className="model-connection-note">{t(locale, 'section.computeNodeConfigured')}</p>
         <button className="button outline" type="button" data-compute-node-check disabled={checking}
-          onClick={() => void check()}>检查节点</button>
+          onClick={() => void check()}>{t(locale, 'section.computeNodeCheck')}</button>
       </> : <p className="model-connection-note" role="status" data-compute-node-unconfigured>
         计算节点未配置。请在服务端设置 <code>RESEARCH_COMPUTE_NODE_URL</code> 和 <code>RESEARCH_COMPUTE_NODE_TOKEN</code>，然后重启服务。
       </p>)}

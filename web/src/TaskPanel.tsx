@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { ExperimentAttempts } from './ExperimentAttempts'
 import { ExperimentEvidence } from './ExperimentEvidence'
 import { ExperimentReportHandoff } from './ExperimentReportHandoff'
@@ -317,6 +318,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
   sync?: TaskPanelSync
   onReportSaved?: (path: string) => void
 }) {
+  const locale = useLocale()
   const panelId = useId()
   const [localTasks, setTasks] = useState<Task[]>([])
   const [cursor, setCursor] = useState<string>()
@@ -619,7 +621,7 @@ export function TaskPanel({ projectId, sourceTurnId, initialInstruction = '', pr
 
   return (
     <section className="task-panel" aria-labelledby={`${panelId}-heading`}>
-      <h4 id={`${panelId}-heading`}>{sourceTurnId ? '此对话的任务' : '研究计划'}</h4>
+      <h4 id={`${panelId}-heading`}>{sourceTurnId ? t(locale, 'panel.turnTasks') : t(locale, 'panel.researchPlan')}</h4>
       {configured === false && <p className="task-note" role="status">研究计划需要配置模型。只读稿件检查和配对指标对比可在本机运行。</p>}
       {!proposedTaskId && proposalForm}
       {taskLink && !linkedTask && <p className="task-note" role="status">正在打开链接的任务…</p>}

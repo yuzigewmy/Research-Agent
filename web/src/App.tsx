@@ -21,6 +21,7 @@ import { WorkspaceBackup } from './WorkspaceBackup'
 import { WorkspaceComponents } from './WorkspaceComponents'
 import { WorkbenchAssistant } from './WorkbenchAssistant'
 import { useWorkbenchPreferences, WorkbenchPreferences } from './WorkbenchPreferences'
+import { LocaleProvider, t } from './i18n'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
@@ -152,53 +153,55 @@ function Workbench() {
     if (selectedFromUrl().projectId === null) navigate(project.projectId)
   }
 
-  const en = preferences.language === 'en'
+  const locale = preferences.language
 
   return (
-    <main className="workbench">
-      <header className="masthead workbench-masthead">
-        <h1>{en ? 'Research Workbench' : '研究工作台'}</h1>
-        <Notifications hrefFor={projectUrl} onOpen={followProjectLink} onNavigate={navigate} language={preferences.language} />
-      </header>
-      <WorkbenchPreferences {...preferences} />
-      <ModelConnection />
-      <ComputeNode />
-      <WorkspaceBackup />
-      <WorkspaceComponents />
-      <div className="workbench-grid" data-sidebar-hidden={preferences.sidebarHidden}>
-        <section className="project-panel" aria-labelledby="workspace-title">
-          <header className="panel-heading">
-            <h2 id="workspace-title" ref={heading} tabIndex={-1}>
-              {selectedId === null ? (en ? 'New Project' : '新建项目') : (en ? 'Project Details' : '项目详情')}
-            </h2>
-            {selectedId !== null && (
-              <a className="button outline" href={projectUrl(null)} onClick={(event) => followProjectLink(event, null)}>
-                <span aria-hidden="true">+</span> {en ? 'New Project' : '新建项目'}
-              </a>
-            )}
-          </header>
-          <div hidden={!creating}>
-            {catalog.kind === 'loading' && <p className="workspace-note" role="status">正在读取模板目录…</p>}
-            {catalog.kind === 'error' && <div className="request-error">
-              <p role="alert">读取模板目录失败。{catalog.message}</p>
-              <button className="button outline" type="button" onClick={() => setCatalog({ kind: 'loading' })}>重试读取模板</button>
-            </div>}
-            <CreateProjectForm templateItems={templateItems} onCreated={handleCreated} />
-            <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
-            <ProjectArchiveImport onImported={handleCreated} />
-          </div>
-          {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId}
-            launch={projectLaunch?.projectId === selectedId ? projectLaunch : undefined}
-            taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
-            reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh}
-            onDeleted={() => {
-              list.refresh()
-              navigate(null)
-            }} />}
-        </section>
-        <ProjectList list={list} hidden={preferences.sidebarHidden} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
-      </div>
-      <WorkbenchAssistant projectId={selectedId} language={preferences.language} />
-    </main>
+    <LocaleProvider value={locale}>
+      <main className="workbench">
+        <header className="masthead workbench-masthead">
+          <h1>{t(locale, 'app.title')}</h1>
+          <Notifications hrefFor={projectUrl} onOpen={followProjectLink} onNavigate={navigate} language={locale} />
+        </header>
+        <WorkbenchPreferences {...preferences} />
+        <ModelConnection />
+        <ComputeNode />
+        <WorkspaceBackup />
+        <WorkspaceComponents />
+        <div className="workbench-grid" data-sidebar-hidden={preferences.sidebarHidden}>
+          <section className="project-panel" aria-labelledby="workspace-title">
+            <header className="panel-heading">
+              <h2 id="workspace-title" ref={heading} tabIndex={-1}>
+                {selectedId === null ? t(locale, 'app.newProject') : t(locale, 'app.projectDetails')}
+              </h2>
+              {selectedId !== null && (
+                <a className="button outline" href={projectUrl(null)} onClick={(event) => followProjectLink(event, null)}>
+                  <span aria-hidden="true">+</span> {t(locale, 'app.newProject')}
+                </a>
+              )}
+            </header>
+            <div hidden={!creating}>
+              {catalog.kind === 'loading' && <p className="workspace-note" role="status">{t(locale, 'app.loadingCatalog')}</p>}
+              {catalog.kind === 'error' && <div className="request-error">
+                <p role="alert">{t(locale, 'app.catalogErrorPrefix')}{catalog.message}</p>
+                <button className="button outline" type="button" onClick={() => setCatalog({ kind: 'loading' })}>{t(locale, 'app.retryCatalog')}</button>
+              </div>}
+              <CreateProjectForm templateItems={templateItems} onCreated={handleCreated} />
+              <ProjectDraftPanel templateItems={templateItems} onCreated={handleCreated} />
+              <ProjectArchiveImport onImported={handleCreated} />
+            </div>
+            {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId}
+              launch={projectLaunch?.projectId === selectedId ? projectLaunch : undefined}
+              taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
+              reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh}
+              onDeleted={() => {
+                list.refresh()
+                navigate(null)
+              }} />}
+          </section>
+          <ProjectList list={list} hidden={preferences.sidebarHidden} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
+        </div>
+        <WorkbenchAssistant projectId={selectedId} language={locale} />
+      </main>
+    </LocaleProvider>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { LoadingState, ProjectDate, RequestError } from './ProjectDetails'
 import { errorMessage, listProjects, templates } from './projects'
 import type { Project, ProjectFilters, ProjectStatus } from './projects'
@@ -110,38 +111,39 @@ interface ProjectListProps {
 }
 
 export function ProjectList({ list, hidden, selectedId, hrefFor, onOpen }: ProjectListProps) {
+  const locale = useLocale()
   const { items, status, nextCursor, retry, loadMore, filters, filter } = list
   const [query, setQuery] = useState(filters.q)
   const queryId = useId()
   const queryInput = useRef<HTMLInputElement>(null)
   return (
     <section className="project-index" id="project-index" hidden={hidden} aria-labelledby="project-index-title">
-      <header className="panel-heading"><h2 id="project-index-title">项目列表</h2></header>
+      <header className="panel-heading"><h2 id="project-index-title">{t(locale, 'projects.title')}</h2></header>
       <div className="project-filters">
-        <div role="group" aria-label="项目范围" className="project-scope">
-          {projectScopes.map(([value, label]) => (
+        <div role="group" aria-label={t(locale, 'projects.scopeGroup')} className="project-scope">
+          {projectScopes.map(([value]) => (
             <button key={value} className="button outline" type="button"
               aria-pressed={filters.status === value} onClick={() => filter({ status: value })}>
-              {label}
+              {t(locale, value === 'ARCHIVED' ? 'projects.scope.ARCHIVED' : 'projects.scope.READY')}
             </button>
           ))}
         </div>
-        <form className="field" role="search" aria-label="项目检索" onSubmit={(event) => {
+        <form className="field" role="search" aria-label={t(locale, 'projects.searchGroup')} onSubmit={(event) => {
           event.preventDefault()
           const q = query.trim()
           setQuery(q)
           filter({ q })
         }}>
-          <label htmlFor={queryId}>搜索显示名或研究题目</label>
+          <label htmlFor={queryId}>{t(locale, 'projects.searchLabel')}</label>
           <div className="project-search-controls">
             <input id={queryId} ref={queryInput} type="search" value={query} autoComplete="off"
               onChange={(event) => setQuery(event.currentTarget.value)} />
-            <button className="button outline" type="submit">搜索</button>
+            <button className="button outline" type="submit">{t(locale, 'projects.searchSubmit')}</button>
             {filters.q && <button className="button outline" type="button" onClick={() => {
               setQuery('')
               filter({ q: '' })
               queryInput.current?.focus()
-            }}>清除</button>}
+            }}>{t(locale, 'projects.searchClear')}</button>}
           </div>
         </form>
       </div>
@@ -169,18 +171,18 @@ export function ProjectList({ list, hidden, selectedId, hrefFor, onOpen }: Proje
           ))}
         </ul>
       )}
-      {status.kind === 'loading' && <LoadingState message="正在加载项目…" />}
+      {status.kind === 'loading' && <LoadingState message={t(locale, 'projects.loading')} />}
       {status.kind === 'error' && <RequestError message={status.message} onRetry={retry} />}
       {status.kind === 'ready' && items.length === 0 && (
         <div className="empty-state" role="status">
-          <p><strong>{filters.q ? '没有匹配的项目' : filters.status === 'ARCHIVED' ? '暂无归档项目' : '暂无当前项目'}</strong></p>
-          {filters.q && <p>可以换个关键词或切换项目范围。</p>}
-          {!filters.q && filters.status === 'READY' && <p>新建的项目会显示在这里。</p>}
+          <p><strong>{filters.q ? t(locale, 'projects.emptySearch') : filters.status === 'ARCHIVED' ? t(locale, 'projects.emptyArchived') : t(locale, 'projects.emptyReady')}</strong></p>
+          {filters.q && <p>{t(locale, 'projects.emptySearchHint')}</p>}
+          {!filters.q && filters.status === 'READY' && <p>{t(locale, 'projects.emptyReadyHint')}</p>}
         </div>
       )}
       {nextCursor && status.kind === 'ready' && (
         <div className="pagination">
-          <button type="button" className="button outline" onClick={loadMore}>加载更多</button>
+          <button type="button" className="button outline" onClick={loadMore}>{t(locale, 'projects.loadMore')}</button>
         </div>
       )}
     </section>

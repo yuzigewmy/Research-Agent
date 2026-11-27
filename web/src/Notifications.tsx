@@ -5,7 +5,8 @@ import { listNotifications, markNotificationRead, readReviewLink } from './notif
 import type { NotificationPage, TaskNotification } from './notificationApi'
 import { ProjectDate } from './ProjectDetails'
 import { taskStatusLabels } from './tasks'
-import type { WorkbenchLanguage } from './WorkbenchPreferences'
+import { t, unreadCountLabel, useLocale } from './i18n'
+import type { WorkbenchLanguage } from './i18n'
 import './notifications.css'
 
 const pollInterval = 5_000
@@ -43,10 +44,12 @@ function notificationTarget(item: TaskNotification): ProjectTarget {
   return item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
 }
 
-export function Notifications({ hrefFor, onOpen, onNavigate, language = 'zh-CN' }: NotificationLinks & {
+export function Notifications({ hrefFor, onOpen, onNavigate, language }: NotificationLinks & {
   onNavigate: (projectId: string, target: ProjectTarget) => void
   language?: WorkbenchLanguage
 }) {
+  const contextLocale = useLocale()
+  const locale = language ?? contextLocale
   const [open, setOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [refresh, setRefresh] = useState(0)
@@ -195,24 +198,24 @@ export function Notifications({ hrefFor, onOpen, onNavigate, language = 'zh-CN' 
       trigger.current?.focus()
     }}>
     <summary className="button outline" ref={trigger}>
-      {language === 'en' ? 'Notifications' : '通知'}{' '}
+      {t(locale, 'notifications.title')}{' '}
       <span aria-live="polite">
-        {unreadCount > 0 ? (language === 'en' ? `${unreadCount} unread` : `${unreadCount} 条未读`) : ''}
+        {unreadCountLabel(locale, unreadCount)}
       </span>
     </summary>
-    {open && <NotificationHistory hrefFor={hrefFor} onOpen={(event, projectId, target) => {
+    {open && <NotificationHistory locale={locale} hrefFor={hrefFor} onOpen={(event, projectId, target) => {
       if (event.defaultPrevented) return
       onOpen(event, projectId, target)
       if (event.defaultPrevented) close()
     }} history={history} setHistory={setHistory} headFailed={headFailed} refreshHead={refreshHead} desktopControls={
       <div className="notification-desktop">
         <p className="notification-meta" role="status">
-          {!supported ? '当前浏览器环境可使用站内通知。'
-            : permission === 'denied' ? '浏览器已禁止桌面通知。可在站点设置中修改权限，站内通知仍可使用。'
-              : desktopEnabled ? '当前标签页已开启桌面通知。' : '开启后，当前标签页可接收新的桌面通知。'}
+          {!supported ? t(locale, 'notifications.desktopUnsupported')
+            : permission === 'denied' ? t(locale, 'notifications.desktopDenied')
+              : desktopEnabled ? t(locale, 'notifications.desktopEnabled') : t(locale, 'notifications.desktopPrompt')}
         </p>
         {supported && <button className="button outline" type="button" disabled={askingPermission} onClick={() => void toggleDesktop()}>
-          {desktopEnabled ? '关闭桌面通知' : permission === 'denied' ? '检查通知权限' : '开启桌面通知'}
+          {desktopEnabled ? t(locale, 'notifications.disableDesktop') : permission === 'denied' ? t(locale, 'notifications.checkPermission') : t(locale, 'notifications.enableDesktop')}
         </button>}
         {desktopError && <p className="form-error" role="alert">{desktopError}</p>}
       </div>
@@ -220,7 +223,8 @@ export function Notifications({ hrefFor, onOpen, onNavigate, language = 'zh-CN' 
   </details>
 }
 
-function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed, refreshHead, desktopControls }: NotificationLinks & {
+function NotificationHistory({ locale, hrefFor, onOpen, history, setHistory, headFailed, refreshHead, desktopControls }: NotificationLinks & {
+  locale: WorkbenchLanguage
   desktopControls: ReactNode
   history?: History
   setHistory: Dispatch<SetStateAction<History | undefined>>
@@ -299,42 +303,42 @@ function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed,
 
   return <div className="notification-history">
     {desktopControls}
-    {!!history?.items.length && <ol className="notification-list" aria-label="站内通知" role="list">
+    {!!history?.items.length && <ol className="notification-list" aria-label={t(locale, 'notifications.listLabel')} role="list">
       {history.items.map((item) => {
         const target = notificationTarget(item)
         return <li key={item.notificationId}>
           <p className="notification-meta">
             <bdi>{item.projectName}</bdi> · {taskStatusLabels[item.status]} · <ProjectDate value={item.createdAt} withTime />
-            {' · '}<span className="notification-read-state" aria-live="polite">{item.read ? '已读' : '未读'}</span>
+            {' · '}<span className="notification-read-state" aria-live="polite">{t(locale, item.read ? 'notifications.read' : 'notifications.unread')}</span>
           </p>
           <p className="notification-instruction" dir="auto">{item.instruction}</p>
           <div className="notification-actions">
             <a className="button outline" id={`${listId}-${item.notificationId}`} href={hrefFor(item.projectId, target)}
               onClick={(event) => onOpen(event, item.projectId, target)}>
-              {target.reviewId ? '打开评审' : target.workflowRunId ? '打开工作流' : '打开任务'}
+              {target.reviewId ? t(locale, 'notifications.openReview') : target.workflowRunId ? t(locale, 'notifications.openWorkflow') : t(locale, 'notifications.openTask')}
             </a>
             {!item.read && <button className="button outline" type="button" aria-disabled={pendingRead !== undefined}
               onClick={(event) => void markRead(item.notificationId, event.currentTarget)}>
-              {pendingRead === item.notificationId ? '正在标记…' : '标为已读'}
+              {pendingRead === item.notificationId ? t(locale, 'notifications.markingRead') : t(locale, 'notifications.markRead')}
             </button>}
           </div>
-          {failedRead === item.notificationId && <p className="form-error" role="alert">标记失败，请重试。</p>}
+          {failedRead === item.notificationId && <p className="form-error" role="alert">{t(locale, 'notifications.markFailed')}</p>}
         </li>
       })}
     </ol>}
-    {history && history.items.length === 0 && <p className="notification-meta" role="status">暂无通知。</p>}
-    {!history && !headFailed && <p className="notification-meta" role="status">正在读取通知…</p>}
+    {history && history.items.length === 0 && <p className="notification-meta" role="status">{t(locale, 'notifications.empty')}</p>}
+    {!history && !headFailed && <p className="notification-meta" role="status">{t(locale, 'notifications.loading')}</p>}
     {headFailed && <div className="notification-actions">
-      <p className="form-error" role="alert">读取通知失败，请重试。</p>
-      <button className="button outline" type="button" onClick={refreshHead}>重试读取通知</button>
+      <p className="form-error" role="alert">{t(locale, 'notifications.loadFailed')}</p>
+      <button className="button outline" type="button" onClick={refreshHead}>{t(locale, 'notifications.retryLoad')}</button>
     </div>}
-    {loadFailed && <p className="form-error" role="alert">读取较早通知失败，请重试。</p>}
+    {loadFailed && <p className="form-error" role="alert">{t(locale, 'notifications.loadOlderFailed')}</p>}
     {history?.nextCursor && <div className="notification-actions">
       <button className="button outline" type="button" aria-disabled={loading}
         onClick={(event) => {
           if (history.nextCursor) void loadOlder(history.nextCursor, event.currentTarget)
         }}>
-        {loading ? '正在读取…' : loadFailed ? '重试加载更多' : '加载更多'}
+        {loading ? t(locale, 'notifications.loadingMore') : loadFailed ? t(locale, 'notifications.retryLoadMore') : t(locale, 'notifications.loadMore')}
       </button>
     </div>}
   </div>

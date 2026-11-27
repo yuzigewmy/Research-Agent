@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { LocalDirectory } from './LocalDirectory'
 import { MaterialImageGeneration } from './MaterialImageGeneration'
 import { MaterialImagePreview } from './MaterialImagePreview'
@@ -164,6 +165,7 @@ function matchesMaterialQuery(name: string, q: string) {
 
 export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote, references = [],
   allowSoftwareFolder, bundleSelection }: MaterialPanelProps) {
+  const locale = useLocale()
   const headingId = useId()
   const queryId = useId()
   const [items, setItems] = useState<Material[]>([])
@@ -324,12 +326,12 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, onWordQuote,
   return (
     <section className="material-panel" aria-labelledby={headingId}>
       <div className="material-heading">
-        <h4 id={headingId}>项目资料</h4>
+        <h4 id={headingId}>{t(locale, 'panel.materials')}</h4>
         <div className="material-actions">
           <input ref={fileInput} type="file" multiple hidden onChange={(event) => void uploadFiles(event, 'files')} />
           <button className="button primary" type="button" aria-disabled={!!uploading}
             onClick={() => { if (!uploadRequest.current) fileInput.current?.click() }}>
-            {uploading === 'files' ? '正在上传…' : '上传文件'}
+            {uploading === 'files' ? t(locale, 'panel.uploading') : t(locale, 'panel.uploadFiles')}
           </button>
           {allowSoftwareFolder && <>
             <input ref={folderInput} type="file" {...{ webkitdirectory: '' }} hidden

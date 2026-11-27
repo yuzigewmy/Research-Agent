@@ -1,16 +1,15 @@
 import { useId, useLayoutEffect, useState } from 'react'
+import { t } from './i18n'
+import type { WorkbenchLanguage } from './i18n'
 
 const themeKey = 'research-agent.appearance.theme'
 const sidebarKey = 'research-agent.appearance.sidebar'
 const languageKey = 'research-agent.appearance.language'
 
-export type WorkbenchLanguage = 'zh-CN' | 'en'
+export type { WorkbenchLanguage }
 
-const themeLabels: Record<WorkbenchLanguage, Record<'system' | 'light' | 'dark', string>> = {
-  'zh-CN': { system: '跟随系统', light: '浅色', dark: '深色' },
-  en: { system: 'System', light: 'Light', dark: 'Dark' },
-}
 type Theme = 'system' | 'light' | 'dark'
+const themeOptions: readonly Theme[] = ['system', 'light', 'dark']
 
 const languageLabels: Record<WorkbenchLanguage, string> = {
   'zh-CN': '简体中文',
@@ -84,26 +83,22 @@ export function useWorkbenchPreferences() {
 export function WorkbenchPreferences({ theme, chooseTheme, sidebarHidden, toggleSidebar, language, chooseLanguage }: ReturnType<typeof useWorkbenchPreferences>) {
   const themeId = useId()
   const langId = useId()
-  const themes = themeLabels[language]
-  const en = language === 'en'
 
   return <div className="workbench-preferences">
     <div className="workbench-theme field">
-      <label htmlFor={themeId}>{en ? 'Theme' : '主题'}</label>
+      <label htmlFor={themeId}>{t(language, 'prefs.theme')}</label>
       <select id={themeId} value={theme} onChange={event => chooseTheme(event.currentTarget.value as Theme)}>
-        {Object.entries(themes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        {themeOptions.map((value) => <option key={value} value={value}>{t(language, `prefs.theme.${value}`)}</option>)}
       </select>
     </div>
     <div className="workbench-theme field">
-      <label htmlFor={langId}>{en ? 'Language' : '界面语言'}</label>
+      <label htmlFor={langId}>{t(language, 'prefs.language')}</label>
       <select id={langId} value={language} onChange={event => chooseLanguage(event.currentTarget.value as WorkbenchLanguage)}>
         {Object.entries(languageLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
     </div>
     <button className="button outline" type="button" aria-expanded={!sidebarHidden} aria-controls="project-index" onClick={toggleSidebar}>
-      {en
-        ? (sidebarHidden ? 'Show Projects' : 'Hide Projects')
-        : (sidebarHidden ? '展开项目列表' : '收起项目列表')}
+      {t(language, sidebarHidden ? 'prefs.showProjects' : 'prefs.hideProjects')}
     </button>
   </div>
 }
