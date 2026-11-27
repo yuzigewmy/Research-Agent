@@ -55,6 +55,7 @@ func MapSettings(source Options, sourceColumns, targetColumns []string, fields [
 
 	result := Options{
 		RequiredColumns: translateList(source.RequiredColumns), DuplicateColumns: translateList(source.DuplicateColumns), Sheet: sheet,
+		PlanID: source.PlanID,
 	}
 	if source.WeightColumn != "" {
 		result.WeightColumn = translate(source.WeightColumn)

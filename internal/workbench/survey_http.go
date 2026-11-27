@@ -23,6 +23,7 @@ type surveyCreateInput struct {
 		WeightColumn     string                     `json:"weightColumn"`
 		CategoryMappings []survey.CategoryMapping   `json:"categoryMappings"`
 		SettingsSource   *survey.SettingsSource     `json:"settingsSource"`
+		PlanID           string                     `json:"planId"`
 		Reviews          []struct {
 			Row    int    `json:"row"`
 			Accept *bool  `json:"accept"`
@@ -44,6 +45,10 @@ func (s *Store) registerSurveys(mux *http.ServeMux) {
 	sheetsPath := projectsPath + "/{id}/materials/{materialId}/survey-sheets"
 	mux.HandleFunc("GET "+sheetsPath, s.handleSurveySheets)
 	mux.HandleFunc(sheetsPath, methodNotAllowed("GET, HEAD"))
+	plansPath := projectsPath + "/{id}/survey-plans"
+	mux.HandleFunc("GET "+plansPath, s.handleListSurveyPlans)
+	mux.HandleFunc("POST "+plansPath, s.handleCreateSurveyPlan)
+	mux.HandleFunc(plansPath, methodNotAllowed("GET, HEAD, POST"))
 }
 
 func (s *Store) handleSurveySheets(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +76,10 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的请求编号和资料编号。")
 		return
 	}
+	if input.Options.PlanID != "" && !validRequestID(input.Options.PlanID) {
+		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请提供有效的分析计划编号。")
+		return
+	}
 	options := survey.Options{
 		RequiredColumns: input.Options.RequiredColumns, DuplicateColumns: input.Options.DuplicateColumns,
 		Reviews:          make([]survey.Review, 0, len(input.Options.Reviews)),
@@ -80,6 +89,7 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 		Sheet:            input.Options.Sheet,
 		WeightColumn:     input.Options.WeightColumn,
 		CategoryMappings: input.Options.CategoryMappings,
+		PlanID:           input.Options.PlanID,
 	}
 	for _, review := range input.Options.Reviews {
 		if review.Accept == nil {

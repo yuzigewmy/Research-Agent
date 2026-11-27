@@ -39,6 +39,7 @@ type Options struct {
 	WeightColumn     string              `json:"weightColumn,omitempty"`
 	CategoryMappings []CategoryMapping   `json:"categoryMappings,omitempty"`
 	SettingsSource   *SettingsSource     `json:"settingsSource,omitempty"`
+	PlanID           string              `json:"planId,omitempty"`
 }
 
 // SettingsSource records the historical report and confirmed column pairs used to transfer settings.
@@ -72,9 +73,10 @@ type Report struct {
 	Summaries   []Summary    `json:"summaries"`
 	CrossTab    *CrossTab    `json:"crossTab,omitempty"`
 	Reliability *Reliability `json:"reliability,omitempty"`
-	Regression  *Regression  `json:"regression,omitempty"`
-	Weighting   *Weighting   `json:"weighting,omitempty"`
-	Demo        bool         `json:"demo"`
+	Regression  *Regression         `json:"regression,omitempty"`
+	Weighting   *Weighting          `json:"weighting,omitempty"`
+	PlanSource  *AnalysisPlanSource `json:"planSource,omitempty"`
+	Demo        bool                `json:"demo"`
 }
 
 // Row gives one response's quality status and reasons in evaluation order.
