@@ -105,7 +105,7 @@ export function EngineeringPreview({ projectId, archived }: { projectId: string;
 
   return <section className="workspace-panel" aria-labelledby={`${id}-heading`}>
     <h4 id={`${id}-heading`}>工程预览</h4>
-    <p className="workspace-note" id={`${id}-help`}>将脚本和样式内联到单个 HTML 文件中，保存后选择 .html 或 .htm 文件预览。</p>
+    <p className="workspace-note" id={`${id}-help`}>支持单文件 HTML 与多文件静态工程：选择已保存的 .html 或 .htm 入口文件启动预览，同目录及子目录下的 .css、.js、.svg、.json、.txt 静态资源将按当前版本一并冻结挂载。</p>
     <div className="field">
       <label htmlFor={`${id}-file`}>HTML 文件</label>
       <select id={`${id}-file`} value={selectedFile?.path ?? ''} aria-describedby={`${id}-help`}
@@ -137,9 +137,18 @@ export function EngineeringPreview({ projectId, archived }: { projectId: string;
     {previewLoading && <p className="workspace-note" role="status">正在读取预览状态…</p>}
     {archived && <p className="workspace-note">恢复项目后可启动预览。</p>}
     {!archived && preview && <>
-      <p className="workspace-note" role="status">
-        固定版本 <bdi>{preview.file.path}</bdi> · <bdi>{preview.file.versionId}</bdi> · SHA-256 <code title={preview.file.sha256}>{preview.file.sha256.slice(0, 12)}</code>
+      <p className="workspace-note" role="status" data-engineering-preview-entry>
+        固定入口 <bdi>{preview.file.path}</bdi> · <bdi>{preview.file.versionId}</bdi> · SHA-256 <code title={preview.file.sha256}>{preview.file.sha256.slice(0, 12)}</code>
+        {' · '}已挂载关联资源 {preview.assets?.length ?? 0} 份
       </p>
+      {preview.assets && preview.assets.length > 0 && <details className="workspace-details" data-engineering-preview-assets>
+        <summary>已冻结的关联静态资源（{preview.assets.length} 份）</summary>
+        <ul className="workspace-version-list" role="list">
+          {preview.assets.map((asset) => <li key={asset.relativePath}>
+            <bdi>{asset.relativePath}</bdi> · SHA-256 <code title={asset.sha256}>{asset.sha256.slice(0, 12)}</code>
+          </li>)}
+        </ul>
+      </details>}
       <iframe key={preview.previewId} title="工程预览" src={engineeringPreviewDocumentPath(projectId, preview.previewId)}
         sandbox="allow-scripts" referrerPolicy="no-referrer" className="engineering-preview-frame" />
     </>}
