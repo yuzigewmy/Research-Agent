@@ -3,13 +3,14 @@ import type { ReactNode } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
 import { ReportCoding } from './SurveyCoding'
+import { SurveyAnalysisPlanSection } from './SurveyAnalysisPlan'
 import { SurveyFieldMapping } from './SurveyFieldMapping'
 import { ReportRegression } from './SurveyRegression'
 import {
-  analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, mapSurveySettings,
+  analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveyPlans, listSurveySheets, listSurveys, mapSurveySettings,
   readSurvey, reliabilityItemLimit, surveyDownloadPath,
 } from './surveys'
-import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyFieldPair, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary, SurveyWeighting } from './surveys'
+import type { SurveyAnalysisPlan, SurveyCrossTab, SurveyCrossTabOptions, SurveyFieldPair, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary, SurveyWeighting } from './surveys'
 import './survey.css'
 
 const reportDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
@@ -473,6 +474,27 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, settingsMapping, 
     </div>
     {options.sheet && <p className="survey-note">工作表 <bdi>{options.sheet}</bdi></p>}
     <p className="survey-note">原资料 SHA-256 <code>{run.materialSha256}</code></p>
+    {report.planSource && <details className="survey-details" open data-survey-plan-source>
+      <summary>关联的分析计划（第 {report.planSource.version} 版 · {report.planSource.title}）</summary>
+      <div className="survey-section">
+        <p className="survey-note">
+          计划编号 <code>{report.planSource.planId}</code> · 保存于{' '}
+          <time dateTime={report.planSource.createdAt}>{reportDate.format(new Date(report.planSource.createdAt))}</time>
+        </p>
+        <p className="survey-note">研究目标：<bdi>{report.planSource.objective}</bdi></p>
+        <p className="survey-note">计划统计方法：{report.planSource.plannedMethods.join('、')}</p>
+        <dl className="survey-counts">
+          <div><dt>计划版本</dt><dd>第 {report.planSource.version} 版</dd></div>
+          <div><dt>置信水平</dt><dd>{report.planSource.confidenceLevel}%</dd></div>
+          <div><dt>基础样本量</dt><dd>{report.planSource.unadjustedSampleSize}</dd></div>
+          <div><dt>校正样本量</dt><dd>{report.planSource.finitePopulationAdjusted}</dd></div>
+          <div><dt>计划发放量</dt><dd>{report.planSource.plannedInvitations}</dd></div>
+        </dl>
+        <p className="survey-note">
+          计算口径 <code>{report.planSource.method}</code>：{report.planSource.formulaSummary}
+        </p>
+      </div>
+    </details>}
     {options.settingsSource && <details className="survey-details" data-survey-settings-source>
       <summary>设置来源与字段对应</summary>
       <div className="survey-section">
@@ -534,10 +556,13 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, settingsMapping, 
   </article>
 }
 
-function SurveyStartControls({ projectId, materialId, workbook, busy, refreshingMaterials, onAnalyze, onRefreshMaterials }: {
+function SurveyStartControls({ projectId, materialId, workbook, plans, selectedPlanId, onSelectPlan, busy, refreshingMaterials, onAnalyze, onRefreshMaterials }: {
   projectId: string
   materialId: string
   workbook: boolean
+  plans: SurveyAnalysisPlan[]
+  selectedPlanId: string
+  onSelectPlan: (planId: string) => void
   busy: boolean
   refreshingMaterials: boolean
   onAnalyze: (options: SurveyOptions) => void
@@ -561,6 +586,13 @@ function SurveyStartControls({ projectId, materialId, workbook, busy, refreshing
     return () => controller.abort()
   }, [projectId, materialId, workbook, reload])
 
+  function startOptions(): SurveyOptions {
+    const next: SurveyOptions = {}
+    if (workbook) next.sheet = sheet
+    if (selectedPlanId) next.planId = selectedPlanId
+    return next
+  }
+
   return <>
     {workbook && <>
       <div className="field">
@@ -579,9 +611,21 @@ function SurveyStartControls({ projectId, materialId, workbook, busy, refreshing
         }}>重试加载工作表</button>
       </div>}
     </>}
+    {plans.length > 0 && <div className="field">
+      <label htmlFor={`${id}-plan`}>关联样本量与分析计划（可选）</label>
+      <select id={`${id}-plan`} data-survey-start-plan value={selectedPlanId} disabled={busy}
+        onChange={(event) => onSelectPlan(event.currentTarget.value)}>
+        <option value="">不关联分析计划</option>
+        {plans.map((plan) => (
+          <option key={plan.planId} value={plan.planId}>
+            第 {plan.version} 版 · {plan.title}（计划发放 {plan.sampleSizeResult.plannedInvitations} 份）
+          </option>
+        ))}
+      </select>
+    </div>}
     <div className="survey-actions">
       <button className="button primary" type="button" disabled={!canStart}
-        onClick={() => onAnalyze(workbook ? { sheet } : {})}>开始分析</button>
+        onClick={() => onAnalyze(startOptions())}>开始分析</button>
       <button className="button outline" type="button" disabled={refreshingMaterials} onClick={onRefreshMaterials}>刷新文件列表</button>
     </div>
   </>
@@ -603,6 +647,12 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
   const reports = useSurveyList(loadReports, analysisIdOf)
   const surveyFiles = materials.items.filter(({ name }) => name.toLowerCase().endsWith('.csv') || isWorkbook(name))
   const [materialId, setMaterialId] = useState('')
+  const [planState, setPlanState] = useState<{ latestVersion: number; items: SurveyAnalysisPlan[]; loading: boolean; error: string }>({
+    latestVersion: 0, items: [], loading: true, error: '',
+  })
+  const [planReload, setPlanReload] = useState(0)
+  const [selectedPlanId, setSelectedPlanId] = useState('')
+  const planSelectionTouched = useRef(false)
   const [run, setRun] = useState<SurveyRun>()
   const [busy, setBusy] = useState<SurveyOperation>()
   const [failure, setFailure] = useState<{ kind: SurveyOperation; message: string }>()
@@ -617,6 +667,45 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
     && file.sha256 !== run.materialSha256
     && (originalIndex >= 0 ? index < originalIndex : file.createdAt > run.createdAt))
   useEffect(() => () => active.current?.abort(), [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void listSurveyPlans(projectId, controller.signal).then((result) => {
+      if (controller.signal.aborted) return
+      setPlanState({ latestVersion: result.latestVersion, items: result.items, loading: false, error: '' })
+      if (!planSelectionTouched.current && result.items.length > 0) {
+        setSelectedPlanId(result.items[0].planId)
+      }
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return
+      setPlanState((current) => ({ ...current, loading: false, error: errorMessage(cause) }))
+    })
+    return () => controller.abort()
+  }, [projectId, planReload])
+
+  function refreshPlans() {
+    setPlanState((current) => ({ ...current, loading: true, error: '' }))
+    setPlanReload((value) => value + 1)
+  }
+
+  function handleSelectPlan(planId: string) {
+    planSelectionTouched.current = true
+    setSelectedPlanId(planId)
+  }
+
+  function handlePlanCreated(plan: SurveyAnalysisPlan) {
+    planSelectionTouched.current = true
+    setSelectedPlanId(plan.planId)
+    setPlanState((current) => {
+      const rest = current.items.filter((item) => item.planId !== plan.planId)
+      return {
+        latestVersion: Math.max(current.latestVersion, plan.version),
+        items: [plan, ...rest].sort((a, b) => b.version - a.version),
+        loading: false,
+        error: '',
+      }
+    })
+  }
 
   async function open(kind: SurveyOperation, request: (signal: AbortSignal) => Promise<SurveyRun>) {
     if (active.current) return
@@ -671,8 +760,12 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
         ))}
       </select>
     </div>
+    <SurveyAnalysisPlanSection projectId={projectId} plans={planState.items} latestVersion={planState.latestVersion}
+      loading={planState.loading} loadError={planState.error} selectedPlanId={selectedPlanId} disabled={!!busy}
+      onRefresh={refreshPlans} onCreated={handlePlanCreated} onSelectPlan={handleSelectPlan} />
     <SurveyStartControls key={currentMaterialId} projectId={projectId} materialId={currentMaterialId}
-      workbook={!!currentMaterial && isWorkbook(currentMaterial.name)} busy={!!busy} refreshingMaterials={materials.loading}
+      workbook={!!currentMaterial && isWorkbook(currentMaterial.name)} plans={planState.items}
+      selectedPlanId={selectedPlanId} onSelectPlan={handleSelectPlan} busy={!!busy} refreshingMaterials={materials.loading}
       onAnalyze={(options) => analyze(currentMaterialId, options)} onRefreshMaterials={materials.refresh} />
     <ListControls list={materials} label="文件" />
     {!materials.loading && !materials.error && !surveyFiles.length && <p className="survey-note">
