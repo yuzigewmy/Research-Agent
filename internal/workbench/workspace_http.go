@@ -24,6 +24,10 @@ func (s *Store) registerWorkspace(mux *http.ServeMux, pdfFont string) {
 	mux.HandleFunc(path+"/bundle", methodNotAllowed("POST"))
 	mux.HandleFunc("GET "+path+"/versions", s.handleListWorkspace(true))
 	mux.HandleFunc("GET "+path+"/versions/{versionId}", s.handleWorkspaceVersion)
+	mux.HandleFunc("GET "+path+"/versions/{versionId}/download", s.handleDownloadWorkspaceVersion)
+	catalog := projectsPath + "/{id}/artifacts"
+	mux.HandleFunc("GET "+catalog, s.handleProjectArtifacts)
+	mux.HandleFunc(catalog, methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.svg", s.handleDiagramSVG)
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.pdf", s.handleDiagramPDF(pdfFont))
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/html/preview", s.handleWorkspaceHTML(false))

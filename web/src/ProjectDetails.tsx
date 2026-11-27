@@ -7,6 +7,7 @@ import { isPDFEvidenceReference } from './ManuscriptPDFEvidence'
 import { MaterialPanel } from './MaterialPanel'
 import type { ReviewLink } from './notificationApi'
 import { ProjectAdministration } from './ProjectAdministration'
+import { ProjectArtifacts } from './ProjectArtifacts'
 import { ProjectTaskQueue } from './ProjectTaskQueue'
 import { QuestionnairePanel } from './QuestionnairePanel'
 import { ReviewNoticeDetail } from './ReviewNoticeDetail'
@@ -240,6 +241,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
         onManuscriptSelection={addManuscriptSelection} pdfReferences={references.filter(isPDFEvidenceReference)}
         bundleSelection={bundleSelection} />
+      <ProjectArtifacts projectId={project.projectId} bundleSelection={bundleSelection} />
       {project.templateId === 'engineering_project' && (
         <EngineeringPreview key={`${project.projectId}:${project.status}`} projectId={project.projectId}
           archived={project.status === 'ARCHIVED'} />
