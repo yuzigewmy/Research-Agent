@@ -102,9 +102,9 @@ func run(address, dataDir, webDir string) error {
 		ImageModelName:              os.Getenv("RESEARCH_IMAGE_MODEL_NAME"),
 		ImageModelQuality:           os.Getenv("RESEARCH_IMAGE_MODEL_QUALITY"),
 		WordPython:                  os.Getenv("RESEARCH_WORD_PYTHON"),
+		ScriptPython:                os.Getenv("RESEARCH_SCRIPT_PYTHON"),
 		SoftwarePDFFont:             os.Getenv("RESEARCH_PDF_FONT"),
 		LatexBin:                    os.Getenv("RESEARCH_LATEX_BIN"),
-		ScriptPython:                os.Getenv("RESEARCH_SCRIPT_PYTHON"),
 	})
 	if err := store.ResumeQueuedTasks(context.Background(), model); err != nil {
 		return err

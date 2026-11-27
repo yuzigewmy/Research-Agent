@@ -18,7 +18,7 @@ import (
 
 const (
 	workspaceDatabase      = "projects.sqlite3"
-	workspaceSchemaVersion = 64
+	workspaceSchemaVersion = 65
 	projectColumns         = `project_id, title, display_name, template_id, status, revision, created_at, goal, deliverables, default_turn_mode`
 	// Fixed-width UTC timestamps sort chronologically in SQLite.
 	createdAtLayout = "2006-01-02T15:04:05.000000000Z"
@@ -56,6 +56,7 @@ type Store struct {
 	db               *sql.DB
 	tasks            taskWorkers
 	turns            turnWorkers
+	scripts          scriptWorkers
 	objectsDir       string
 	backupMu         sync.Mutex
 	softwarePDFCache softwarePDFCache
@@ -102,6 +103,7 @@ func workspaceSQLiteURI(filename, options string) string {
 func (s *Store) Close() error {
 	s.turns.close()
 	s.tasks.close()
+	s.scripts.close()
 	return s.db.Close()
 }
 
@@ -446,6 +448,11 @@ func migrate(db *sql.DB, target int) error {
 			return err
 		}
 	}
+	if version < 65 && target >= 65 {
+		if _, err := tx.Exec(scriptRunsSchema); err != nil {
+			return err
+		}
+	}
 	if err := recoverDraftPlans(tx); err != nil {
 		return err
 	}
@@ -457,6 +464,11 @@ func migrate(db *sql.DB, target int) error {
 	}
 	if target >= 60 {
 		if err := recoverExperimentAttempts(tx); err != nil {
+			return err
+		}
+	}
+	if target >= 65 {
+		if err := recoverInterruptedScriptRuns(tx); err != nil {
 			return err
 		}
 	}
