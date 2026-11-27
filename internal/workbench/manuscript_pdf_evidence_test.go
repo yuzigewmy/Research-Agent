@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"research-agent/internal/literature"
 )
 
 func TestManuscriptPDFEvidenceKeepsOriginalPageAfterRestore(t *testing.T) {
@@ -43,7 +46,7 @@ func TestManuscriptPDFEvidenceKeepsOriginalPageAfterRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := NewHandler(store, nil, HandlerConfig{})
-	request := func(method, route string, input *manuscriptPDFInput, want int) *httptest.ResponseRecorder {
+	request := func(method, route string, input any, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		var body bytes.Buffer
 		if input != nil {
@@ -89,13 +92,44 @@ func TestManuscriptPDFEvidenceKeepsOriginalPageAfterRestore(t *testing.T) {
 	if link.LinkID == "" || link.manuscriptPDFInput != input || link.Text != claim || link.Name != pdf.Name || link.SourceChanged {
 		t.Fatalf("unexpected link: %+v", link)
 	}
+	saveCitation := func(projectID, doi, title string) Citation {
+		t.Helper()
+		citation, _, err := store.saveCitation(ctx, projectID, literature.Work{DOI: doi, Title: title, Journal: "Hydrology Notes", Year: 2024, Authors: []string{"Test Author"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		citation.ordinal = 0 // The receipt omits the internal pagination ordinal.
+		return citation
+	}
+	firstCitation := saveCitation(project, "10.5555/first-study", "初始书目")
+	secondCitation := saveCitation(project, "10.5555/river-study", "河流观测书目")
+	foreignCitation := saveCitation(other, "10.5555/foreign-study", "其他项目书目")
+	bindingRoute := route + "/" + link.LinkID + "/citation"
+	bind := func(doi string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		return request(http.MethodPut, bindingRoute, map[string]string{"doi": doi}, status)
+	}
+	bind(foreignCitation.DOI, http.StatusNotFound)
+	request(http.MethodPut, linkRoute(other, paper.VersionID)+"/"+link.LinkID+"/citation", map[string]string{"doi": foreignCitation.DOI}, http.StatusNotFound)
+	link.Citation = &firstCitation
+	if bound := decodeLink(bind(firstCitation.DOI, http.StatusOK)); !reflect.DeepEqual(bound, link) {
+		t.Fatalf("binding changed the evidence fields: %+v", bound)
+	}
+	link.Citation = &secondCitation
+	if bound := decodeLink(bind("https://doi.org/10.5555/River-Study", http.StatusOK)); !reflect.DeepEqual(bound, link) {
+		t.Fatalf("replacement did not return saved literature: %+v", bound)
+	}
 	savePDF(project, "%PDF-1.7\nrevised observation\n%%EOF")
 	newer, err := store.saveWorkspaceDocument(ctx, project, path, paper.SHA256, heading+"后续观测。")
 	if err != nil {
 		t.Fatal(err)
 	}
 	link.SourceChanged = true
-	if replay := decodeLink(request(http.MethodPost, route, &input, http.StatusOK)); replay != link {
+	bind(firstCitation.DOI, http.StatusConflict)
+	if replay := decodeLink(bind(secondCitation.DOI, http.StatusOK)); !reflect.DeepEqual(replay, link) {
+		t.Fatalf("repeating the same DOI changed the existing association: %+v", replay)
+	}
+	if replay := decodeLink(request(http.MethodPost, route, &input, http.StatusOK)); !reflect.DeepEqual(replay, link) {
 		t.Fatalf("replay lost the original source: %+v", replay)
 	}
 	second := input
@@ -120,7 +154,7 @@ func TestManuscriptPDFEvidenceKeepsOriginalPageAfterRestore(t *testing.T) {
 	handler = NewHandler(restored, nil, HandlerConfig{})
 	var list struct{ Items []manuscriptPDFLink }
 	if err := json.Unmarshal(request(http.MethodGet, route, nil, http.StatusOK).Body.Bytes(), &list); err != nil ||
-		len(list.Items) != 1 || list.Items[0] != link {
+		len(list.Items) != 1 || !reflect.DeepEqual(list.Items[0], link) {
 		t.Fatalf("restore lost the saved link: %+v (%v)", list, err)
 	}
 	download := request(http.MethodGet, projectsPath+"/"+project+"/materials/"+pdf.MaterialID+"/download", nil, http.StatusOK)

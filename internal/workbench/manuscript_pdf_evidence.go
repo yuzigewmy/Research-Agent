@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
+
+	"research-agent/internal/literature"
 )
 
 const manuscriptPDFEvidenceSchema = `
@@ -26,14 +29,26 @@ const manuscriptPDFEvidenceSchema = `
 	PRAGMA user_version = 58;
 `
 
+const manuscriptPDFCitationSchema = `
+	CREATE TABLE manuscript_pdf_citations (
+		link_id TEXT PRIMARY KEY NOT NULL REFERENCES manuscript_pdf_links(link_id),
+		project_id TEXT NOT NULL,
+		doi TEXT NOT NULL,
+		FOREIGN KEY (project_id, doi) REFERENCES literature_citations(project_id, doi)
+	);
+	PRAGMA user_version = 59;
+`
+
 const maxManuscriptPDFLinks = 100
 
 const selectPDFEvidence = `SELECT l.link_id, l.material_id, l.page, l.quote, l.start_byte, l.end_byte,
 	l.selected_text, m.name, m.sha256, EXISTS (
 		SELECT 1 FROM materials newer WHERE newer.project_id = m.project_id AND newer.name = m.name AND newer.ordinal > m.ordinal
-	)
+	), c.metadata_json, c.verified_at
 	FROM manuscript_pdf_links l
 	JOIN materials m ON m.project_id = l.project_id AND m.material_id = l.material_id
+	LEFT JOIN manuscript_pdf_citations binding ON binding.link_id = l.link_id AND binding.project_id = l.project_id
+	LEFT JOIN literature_citations c ON c.project_id = binding.project_id AND c.doi = binding.doi
 	WHERE l.project_id = ? AND l.manuscript_version_id = ?`
 
 type manuscriptPDFInput struct {
@@ -47,17 +62,28 @@ type manuscriptPDFInput struct {
 
 type manuscriptPDFLink struct {
 	manuscriptPDFInput
-	LinkID        string `json:"linkId"`
-	Text          string `json:"text"`
-	Name          string `json:"name"`
-	SourceChanged bool   `json:"sourceChanged"`
+	LinkID        string    `json:"linkId"`
+	Text          string    `json:"text"`
+	Name          string    `json:"name"`
+	SourceChanged bool      `json:"sourceChanged"`
+	Citation      *Citation `json:"citation,omitempty"`
 }
 
 func scanPDFEvidence(row interface{ Scan(...any) error }) (manuscriptPDFLink, error) {
 	var link manuscriptPDFLink
-	err := row.Scan(&link.LinkID, &link.MaterialID, &link.Page, &link.Quote, &link.Start, &link.End,
-		&link.Text, &link.Name, &link.SHA256, &link.SourceChanged)
-	return link, err
+	var metadata []byte
+	var verifiedAt sql.NullString
+	if err := row.Scan(&link.LinkID, &link.MaterialID, &link.Page, &link.Quote, &link.Start, &link.End,
+		&link.Text, &link.Name, &link.SHA256, &link.SourceChanged, &metadata, &verifiedAt); err != nil {
+		return link, err
+	}
+	if verifiedAt.Valid {
+		link.Citation = &Citation{VerifiedAt: verifiedAt.String}
+		if err := json.Unmarshal(metadata, &link.Citation.Work); err != nil {
+			return link, err
+		}
+	}
+	return link, nil
 }
 
 func (s *Store) createPDFEvidence(ctx context.Context, projectID, versionID string, input manuscriptPDFInput) (manuscriptPDFLink, bool, error) {
@@ -138,6 +164,73 @@ func (s *Store) handleCreatePDFEvidence(w http.ResponseWriter, r *http.Request) 
 		writeWorkspaceError(w, "save PDF evidence", err)
 	case created:
 		writeJSON(w, http.StatusCreated, link)
+	default:
+		writeJSON(w, http.StatusOK, link)
+	}
+}
+
+func (s *Store) bindPDFEvidenceCitation(ctx context.Context, projectID, versionID, linkID, doi string) (manuscriptPDFLink, error) {
+	var empty manuscriptPDFLink
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return empty, err
+	}
+	defer tx.Rollback()
+
+	query := selectPDFEvidence + ` AND l.link_id = ?`
+	link, err := scanPDFEvidence(tx.QueryRowContext(ctx, query, projectID, versionID, linkID))
+	if err != nil {
+		return empty, err
+	}
+	if link.Citation != nil && link.Citation.DOI == doi {
+		return link, nil
+	}
+	file, err := lookupWorkspaceVersion(ctx, tx, projectID, versionID)
+	if err != nil {
+		return empty, err
+	}
+	latest, err := currentWorkspaceFile(ctx, tx, projectID, file.Path)
+	if err != nil {
+		return empty, err
+	}
+	if latest.VersionID != versionID {
+		return empty, errWorkspaceConflict
+	}
+	var savedDOI string
+	if err := tx.QueryRowContext(ctx, `SELECT doi FROM literature_citations WHERE project_id = ? AND doi = ?`, projectID, doi).Scan(&savedDOI); err != nil {
+		return empty, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO manuscript_pdf_citations (link_id, project_id, doi)
+		VALUES (?, ?, ?) ON CONFLICT (link_id) DO UPDATE SET doi = excluded.doi`, linkID, projectID, savedDOI); err != nil {
+		return empty, err
+	}
+	link, err = scanPDFEvidence(tx.QueryRowContext(ctx, query, projectID, versionID, linkID))
+	if err != nil {
+		return empty, err
+	}
+	return link, tx.Commit()
+}
+
+func (s *Store) handleBindPDFEvidenceCitation(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		DOI string `json:"doi"`
+	}
+	if !readJSON(w, r, &input, 4<<10) {
+		return
+	}
+	doi, err := literature.NormalizeDOI(input.DOI)
+	if err != nil {
+		writeLiteratureError(w, err)
+		return
+	}
+	link, err := s.bindPDFEvidenceCitation(r.Context(), r.PathValue("id"), r.PathValue("versionId"), r.PathValue("linkId"), doi)
+	switch {
+	case errors.Is(err, errWorkspaceConflict):
+		writeError(w, http.StatusConflict, "MANUSCRIPT_VERSION_CHANGED", "稿件已有新版本。请重新加载后关联文献。")
+	case errors.Is(err, sql.ErrNoRows):
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "找不到此稿件的 PDF 证据或本项目中的已核验文献。")
+	case err != nil:
+		writeStoreError(w, "bind PDF evidence citation", err)
 	default:
 		writeJSON(w, http.StatusOK, link)
 	}

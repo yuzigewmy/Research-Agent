@@ -1,5 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { isCitation } from './literature'
+import type { Citation } from './literature'
 import { materialDownloadPath } from './materials'
+import { PDFEvidenceCitation, PDFEvidenceCitationPicker } from './PDFEvidenceCitation'
 import { PdfPreview } from './PdfPreview'
 import { errorMessage, ProjectApiError, request } from './projects'
 import { isPdfQuotes, manuscriptSelectionByteLimit } from './turns'
@@ -9,7 +12,12 @@ export type PDFEvidenceReference = TurnReference & { page: number; quote: string
 
 type CreateLink = Pick<ManuscriptSelection, 'startByte' | 'endByte'>
   & Pick<PDFEvidenceReference, 'materialId' | 'sha256' | 'page' | 'quote'>
-type Link = CreateLink & Pick<PDFEvidenceReference, 'name'> & { linkId: string; text: string; sourceChanged: boolean }
+type Link = CreateLink & Pick<PDFEvidenceReference, 'name'> & {
+  linkId: string
+  text: string
+  sourceChanged: boolean
+  citation?: Citation
+}
 type LinkPage = { items: Link[] }
 type Props = { projectId: string; versionId: string } & (
   { readOnly: true } | {
@@ -36,6 +44,7 @@ function isLink(value: unknown): value is Link {
     && typeof link.startByte === 'number' && Number.isSafeInteger(link.startByte) && link.startByte >= 0
     && typeof link.endByte === 'number' && Number.isSafeInteger(link.endByte) && link.endByte > link.startByte
     && typeof link.text === 'string' && link.text.length > 0 && typeof link.sourceChanged === 'boolean'
+    && (link.citation === undefined || isCitation(link.citation))
     && isPDFEvidenceReference(link)
 }
 
@@ -57,11 +66,24 @@ function PDFExcerpt({ page, quote }: Pick<PDFEvidenceReference, 'page' | 'quote'
   </>
 }
 
-function EvidenceList({ items, projectId }: { items: Link[]; projectId: string }) {
+type CitationEditor = {
+  blockReason?: string
+  disabled: boolean
+  savingLinkId?: string
+  onSave: (linkId: string, doi: string) => Promise<boolean>
+}
+
+function EvidenceList({ items, projectId, citationEditor }: { items: Link[]; projectId: string; citationEditor?: CitationEditor }) {
   const [openLinkId, setOpenLinkId] = useState<string>()
+  const [openCitationId, setOpenCitationId] = useState<string>()
   const previewId = useId()
-  return <ul className="manuscript-evidence-list manuscript-pdf-evidence-list" role="list" aria-label="本稿件版本的 PDF 证据">
-    {items.map(({ linkId, materialId, name, sha256, page, quote, text, sourceChanged }) => (
+  const pickerId = useId()
+  const blockHintId = useId()
+  const { blockReason } = citationEditor ?? {}
+  return <>
+    {blockReason && <p id={blockHintId} className="workspace-note">文献关联暂不可编辑。{blockReason}</p>}
+    <ul className="manuscript-evidence-list manuscript-pdf-evidence-list" role="list" aria-label="本稿件版本的 PDF 证据">
+    {items.map(({ linkId, materialId, name, sha256, page, quote, text, sourceChanged, citation }) => (
       <li key={linkId} data-link-id={linkId}>
         <p><strong><bdi>{name}</bdi></strong></p>
         <PDFExcerpt page={page} quote={quote} />
@@ -83,9 +105,26 @@ function EvidenceList({ items, projectId }: { items: Link[]; projectId: string }
         {openLinkId === linkId && <div id={previewId} className="manuscript-pdf-evidence-preview">
           <PdfPreview url={materialDownloadPath(projectId, materialId)} initialPage={page} />
         </div>}
+        {citation && <PDFEvidenceCitation citation={citation} />}
+        {citationEditor && <>
+          <div className="workspace-actions">
+            <button type="button" className="button outline manuscript-pdf-evidence-citation-toggle"
+              aria-expanded={openCitationId === linkId} aria-controls={openCitationId === linkId ? pickerId : undefined}
+              aria-describedby={blockReason ? blockHintId : undefined}
+              disabled={citationEditor.disabled || (!!blockReason && openCitationId !== linkId)}
+              onClick={() => setOpenCitationId(openCitationId === linkId ? undefined : linkId)}>
+              {openCitationId === linkId ? '收起文献选择' : citation ? '更换关联文献' : '关联已核验文献'}
+            </button>
+          </div>
+          {openCitationId === linkId && <PDFEvidenceCitationPicker key={linkId} id={pickerId} projectId={projectId}
+            sourceName={name} sourcePage={page} currentDoi={citation?.doi} blockReason={blockReason}
+            disabled={citationEditor.disabled} saving={citationEditor.savingLinkId === linkId}
+            onSave={(selected) => citationEditor.onSave(linkId, selected)} />}
+        </>}
       </li>
     ))}
-  </ul>
+    </ul>
+  </>
 }
 
 function EvidenceControls({ references, selection, blockReason, loading, saving, onLink }: {
@@ -156,6 +195,7 @@ function VersionEvidence(props: Props & { route: string }) {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [savingCitationId, setSavingCitationId] = useState<string>()
   const mutation = useRef<AbortController>(null)
 
   useEffect(() => {
@@ -203,14 +243,39 @@ function VersionEvidence(props: Props & { route: string }) {
     }
   }
 
+  async function saveCitation(linkId: string, doi: string) {
+    if (readOnly || props.blockReason || loading || mutation.current) return false
+    const controller = new AbortController()
+    mutation.current = controller
+    setSavingCitationId(linkId)
+    try {
+      const record = await request(`${route}/${encodeURIComponent(linkId)}/citation`,
+        (value): value is Link => isLink(value) && value.linkId === linkId && value.citation?.doi === doi, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ doi }),
+          signal: requestSignal(controller),
+        })
+      if (controller.signal.aborted) return false
+      setLinks((current) => current.map((item) => item.linkId === linkId ? record : item))
+      return true
+    } catch (error) {
+      if (controller.signal.aborted) return false
+      throw error
+    } finally {
+      mutation.current = null
+      if (!controller.signal.aborted) setSavingCitationId(undefined)
+    }
+  }
+
+  const mutating = saving || savingCitationId !== undefined
+
   return <section className="manuscript-evidence manuscript-pdf-evidence" aria-labelledby={id} data-read-only={!!readOnly}>
     <h5 id={id}>{readOnly ? '稿件 PDF 证据（只读）' : '稿件 PDF 证据'}</h5>
     {!readOnly && <EvidenceControls references={props.references} selection={props.selection} blockReason={props.blockReason}
-      loading={loading} saving={saving} onLink={(input) => void saveLink(input)} />}
+      loading={loading || savingCitationId !== undefined} saving={saving} onLink={(input) => void saveLink(input)} />}
     {saveError && <p className="form-error manuscript-pdf-evidence-save-error" role="alert">{saveError}</p>}
     {saved && <p className="workspace-note" role="status">已关联 PDF 证据。</p>}
     <div className="workspace-actions">
-      <button className="button outline manuscript-pdf-evidence-refresh" type="button" disabled={loading || saving}
+      <button className="button outline manuscript-pdf-evidence-refresh" type="button" disabled={loading || mutating}
         onClick={() => {
           setLoadError('')
           setLoading(true)
@@ -219,7 +284,9 @@ function VersionEvidence(props: Props & { route: string }) {
     </div>
     {loading && <p className="workspace-note" role="status">正在读取 PDF 证据…</p>}
     {loadError && <p className="form-error" role="alert">读取 PDF 证据失败。{loadError}</p>}
-    {links.length > 0 && <EvidenceList items={links} projectId={projectId} />}
+    {links.length > 0 && <EvidenceList items={links} projectId={projectId} citationEditor={readOnly ? undefined : {
+      blockReason: props.blockReason, disabled: loading || mutating, savingLinkId: savingCitationId, onSave: saveCitation,
+    }} />}
     {!loading && !loadError && !links.length && <p className="workspace-note">此稿件版本尚未关联 PDF 证据。</p>}
   </section>
 }

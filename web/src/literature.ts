@@ -33,7 +33,7 @@ function isWork(value: unknown): value is Work {
     && (work.authors === undefined || (Array.isArray(work.authors) && work.authors.every((author) => typeof author === 'string')))
 }
 
-function isCitation(value: unknown): value is Citation {
+export function isCitation(value: unknown): value is Citation {
   const citation = value as Partial<Citation> | null
   return !!citation && typeof citation.verifiedAt === 'string' && Number.isFinite(Date.parse(citation.verifiedAt)) && isWork(citation)
 }

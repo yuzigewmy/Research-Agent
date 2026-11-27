@@ -37,6 +37,9 @@ func (s *Store) registerWorkspace(mux *http.ServeMux, pdfFont string) {
 	mux.HandleFunc("GET "+pdfEvidence, s.handleListPDFEvidence)
 	mux.HandleFunc("POST "+pdfEvidence, s.handleCreatePDFEvidence)
 	mux.HandleFunc(pdfEvidence, methodNotAllowed("GET, HEAD, POST"))
+	pdfCitation := pdfEvidence + "/{linkId}/citation"
+	mux.HandleFunc("PUT "+pdfCitation, s.handleBindPDFEvidenceCitation)
+	mux.HandleFunc(pdfCitation, methodNotAllowed("PUT"))
 }
 
 func validWorkspacePath(value string) bool {
