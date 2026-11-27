@@ -29,6 +29,14 @@ function fieldsUsedBy({ options, report }: SurveyRun) {
   if (options.crossTab) add('交叉统计', [options.crossTab.rowColumn, options.crossTab.columnColumn])
   add('量表信度', options.reliability?.columns)
   if (options.regression) add('线性回归', [options.regression.predictorColumn, options.regression.outcomeColumn])
+  if (options.multipleRegression) add('多元回归', [options.multipleRegression.outcomeColumn, ...options.multipleRegression.predictorColumns])
+  add('效度与因子分析', options.factorAnalysis?.columns)
+  if (options.kano) add('Kano 模型', [options.kano.functionalColumn, options.kano.dysfunctionalColumn])
+  if (options.psm) add('PSM 价格敏感度', [options.psm.tooCheapColumn, options.psm.cheapColumn, options.psm.expensiveColumn, options.psm.tooExpensiveColumn])
+  if (options.conjoint) add('联合分析', [options.conjoint.ratingColumn, ...options.conjoint.attributeColumns])
+  if (options.cfa) {
+    for (const construct of options.cfa.constructs) add(`CFA（${construct.name}）`, construct.columns)
+  }
   add('分类编码', options.categoryMappings?.map(({ column }) => column))
   return [...fields]
 }

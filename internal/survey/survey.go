@@ -29,16 +29,22 @@ const (
 // pending-row reviews. Empty required and duplicate column lists disable their
 // respective checks. Column names are matched case-insensitively after trimming.
 type Options struct {
-	RequiredColumns  []string            `json:"requiredColumns,omitempty"`
-	DuplicateColumns []string            `json:"duplicateColumns,omitempty"`
-	Reviews          []Review            `json:"reviews,omitempty"`
-	CrossTab         *CrossTabOptions    `json:"crossTab,omitempty"`
-	Reliability      *ReliabilityOptions `json:"reliability,omitempty"`
-	Regression       *RegressionOptions  `json:"regression,omitempty"`
-	Sheet            string              `json:"sheet,omitempty"`
-	WeightColumn     string              `json:"weightColumn,omitempty"`
-	CategoryMappings []CategoryMapping   `json:"categoryMappings,omitempty"`
-	SettingsSource   *SettingsSource     `json:"settingsSource,omitempty"`
+	RequiredColumns    []string                   `json:"requiredColumns,omitempty"`
+	DuplicateColumns   []string                   `json:"duplicateColumns,omitempty"`
+	Reviews            []Review                   `json:"reviews,omitempty"`
+	CrossTab           *CrossTabOptions           `json:"crossTab,omitempty"`
+	Reliability        *ReliabilityOptions        `json:"reliability,omitempty"`
+	Regression         *RegressionOptions         `json:"regression,omitempty"`
+	MultipleRegression *MultipleRegressionOptions `json:"multipleRegression,omitempty"`
+	FactorAnalysis     *FactorAnalysisOptions     `json:"factorAnalysis,omitempty"`
+	Kano               *KanoOptions               `json:"kano,omitempty"`
+	PSM                *PSMOptions                `json:"psm,omitempty"`
+	Conjoint           *ConjointOptions           `json:"conjoint,omitempty"`
+	CFA                *CFAOptions                `json:"cfa,omitempty"`
+	Sheet              string                     `json:"sheet,omitempty"`
+	WeightColumn       string                     `json:"weightColumn,omitempty"`
+	CategoryMappings   []CategoryMapping          `json:"categoryMappings,omitempty"`
+	SettingsSource     *SettingsSource            `json:"settingsSource,omitempty"`
 }
 
 // SettingsSource records the historical report and confirmed column pairs used to transfer settings.
@@ -63,18 +69,24 @@ type Review struct {
 // Report gives the final quality counts and requested statistics of valid rows.
 // Demo marks a CSV with a __synthetic__ column, regardless of its contents.
 type Report struct {
-	Columns     []string     `json:"columns"`
-	Total       int          `json:"total"`
-	Valid       int          `json:"valid"`
-	Invalid     int          `json:"invalid"`
-	Pending     int          `json:"pending"`
-	Rows        []Row        `json:"rows"`
-	Summaries   []Summary    `json:"summaries"`
-	CrossTab    *CrossTab    `json:"crossTab,omitempty"`
-	Reliability *Reliability `json:"reliability,omitempty"`
-	Regression  *Regression  `json:"regression,omitempty"`
-	Weighting   *Weighting   `json:"weighting,omitempty"`
-	Demo        bool         `json:"demo"`
+	Columns            []string            `json:"columns"`
+	Total              int                 `json:"total"`
+	Valid              int                 `json:"valid"`
+	Invalid            int                 `json:"invalid"`
+	Pending            int                 `json:"pending"`
+	Rows               []Row               `json:"rows"`
+	Summaries          []Summary           `json:"summaries"`
+	CrossTab           *CrossTab           `json:"crossTab,omitempty"`
+	Reliability        *Reliability        `json:"reliability,omitempty"`
+	Regression         *Regression         `json:"regression,omitempty"`
+	MultipleRegression *MultipleRegression `json:"multipleRegression,omitempty"`
+	FactorAnalysis     *FactorAnalysis     `json:"factorAnalysis,omitempty"`
+	Kano               *Kano               `json:"kano,omitempty"`
+	PSM                *PSM                `json:"psm,omitempty"`
+	Conjoint           *Conjoint           `json:"conjoint,omitempty"`
+	CFA                *CFA                `json:"cfa,omitempty"`
+	Weighting          *Weighting          `json:"weighting,omitempty"`
+	Demo               bool                `json:"demo"`
 }
 
 // Row gives one response's quality status and reasons in evaluation order.
@@ -186,6 +198,48 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 			return Report{}, err
 		}
 	}
+	var multipleRegression *multipleRegressionAccumulator
+	if options.MultipleRegression != nil {
+		multipleRegression, err = newMultipleRegression(*options.MultipleRegression, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var factorAnalysis *factorAnalysisAccumulator
+	if options.FactorAnalysis != nil {
+		factorAnalysis, err = newFactorAnalysis(*options.FactorAnalysis, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var kano *kanoAccumulator
+	if options.Kano != nil {
+		kano, err = newKano(*options.Kano, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var psm *psmAccumulator
+	if options.PSM != nil {
+		psm, err = newPSM(*options.PSM, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var conjoint *conjointAccumulator
+	if options.Conjoint != nil {
+		conjoint, err = newConjoint(*options.Conjoint, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	var cfa *cfaAccumulator
+	if options.CFA != nil {
+		cfa, err = newCFA(*options.CFA, header, byName)
+		if err != nil {
+			return Report{}, err
+		}
+	}
 	var weights *weightAccumulator
 	if options.WeightColumn != "" {
 		key := strings.ToLower(strings.TrimSpace(options.WeightColumn))
@@ -279,6 +333,24 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 			if regression != nil {
 				regression.add(record)
 			}
+			if multipleRegression != nil {
+				multipleRegression.add(record)
+			}
+			if factorAnalysis != nil {
+				factorAnalysis.add(record)
+			}
+			if kano != nil {
+				kano.add(record, mappings)
+			}
+			if psm != nil {
+				psm.add(record)
+			}
+			if conjoint != nil {
+				conjoint.add(record, mappings)
+			}
+			if cfa != nil {
+				cfa.add(record)
+			}
 			for i := range accumulators {
 				accumulators[i].add(record, weight, mappings)
 			}
@@ -306,6 +378,24 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	}
 	if regression != nil {
 		report.Regression = regression.finish()
+	}
+	if multipleRegression != nil {
+		report.MultipleRegression = multipleRegression.finish()
+	}
+	if factorAnalysis != nil {
+		report.FactorAnalysis = factorAnalysis.finish()
+	}
+	if kano != nil {
+		report.Kano = kano.finish()
+	}
+	if psm != nil {
+		report.PSM = psm.finish()
+	}
+	if conjoint != nil {
+		report.Conjoint = conjoint.finish()
+	}
+	if cfa != nil {
+		report.CFA = cfa.finish()
 	}
 	if weights != nil {
 		report.Weighting = weights.finish()

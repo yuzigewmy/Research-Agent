@@ -52,6 +52,17 @@ Cronbach α 使用清洗和复核后有效且所选题项均为数值的答卷�
 
 拟合需要至少两份完整数值配对，且自变量须有变异。因变量为常量时，报告保留系数，R² 未定义。复核后会按原资料和已选变量重算，形成独立报告供查看和下载。分析请求通过 `options.regression.predictorColumn` 和 `options.regression.outcomeColumn` 指定两列。
 
+## 高级统计分析
+
+在分析报告中展开「高级统计分析」，可按标签页切换计算六项确定性市调统计方法。所有计算均在工作台本地完成，仅纳入清洗和人工复核后的有效答卷，清晰列出纳入、缺失与非数值或无效份数；样本不足、存在完全多重共线性或矩阵奇异时会给出明确说明而非中断报告生成。计算后生成独立报告，后续人工复核与历史字段映射会自动沿用配置并重算，完整结果随报告 JSON 一并保存与下载。
+
+- **多元线性回归（`options.multipleRegression`）**：选择 1 个因变量与 2 至 8 个互异自变量（`outcomeColumn`、`predictorColumns`）。采用带截距普通最小二乘法（Householder QR 求解并检测共线性），输出截距与各预测变量的回归系数、标准误、t 值，以及整体 $R^2$、调整 $R^2$、F 值与模型/残差自由度。
+- **效度与探索性因子分析（`options.factorAnalysis`）**：选择 3 至 20 个数值题项（`columns`），可选指定因子数（`factors`，留空按特征值大于 1 自动确定）。计算皮尔逊相关矩阵、总体 KMO 与各题项 MSA、Bartlett 球形度检验（$\chi^2$、自由度与近似 p 值）、初始特征值及方差解释率，以及经 Kaiser 标准化 Varimax 正交旋转后的因子载荷矩阵与共同度。
+- **Kano 模型（`options.kano`）**：选择正向题与负向题两列（`functionalColumn`、`dysfunctionalColumn`），支持 1–5 编码或标准 5 级文本（很喜欢、理所当然、无所谓、可以忍受、不喜欢）。按经典 5×5 Kano 矩阵归类为 M（必备）、O（期望）、A（魅力）、I（无差异）、R（反向）、Q（可疑），输出各类计数与占比、主导类别及 Better / Worse 系数。
+- **PSM 价格敏感度（`options.psm`）**：选择四个互异的非负价格列（`tooCheapColumn`、`cheapColumn`、`expensiveColumn`、`tooExpensiveColumn`），剔除顺序矛盾答卷后计算累积分布曲线并线性插值求取 PMC（最低可接受价）、PME（最高可接受价）、OPP（最优价格点）、IDP（无差异价格点）及可接受价格区间 `[PMC, PME]`。
+- **联合分析（`options.conjoint`）**：选择 1 个数值评分列（`ratingColumn`）与 1 至 6 个分类属性列（`attributeColumns`，每列 2 至 8 个水平）。通过效果编码 OLS 回归输出基准截距、模型 $R^2$、各属性水平的中心化部分价值效用、效用极差及相对重要性百分比（合计 100%）。
+- **基础 CFA 收敛与区分效度（`options.cfa`）**：定义 2 至 6 个潜变量（`constructs`，每个含名称及 2 至 10 个互异观测数值列）。按各潜变量一阶单因子主成分估计标准化载荷、组合信度 CR、平均方差提取量 AVE 及 $\sqrt{\text{AVE}}$，并输出潜变量得分相关矩阵与 Fornell-Larcker 区分效度核验结论。 [高级统计回归](<../internal/workbench/survey_advanced_test.go>)
+
 ## 接口
 
 管理接口基址为 `/api/v1/projects/{id}/questionnaire`。使用 `GET` 读取状态，`PUT` 保存草稿。保存、发布和关闭操作以 `expectedRevision` 指定所读修订。单选题可在 `questions[].branches` 中提供 `{ "option", "target" }` 数组，其中 `target` 为后续题号或 `"__END__"`。`POST /publish` 发布，`POST /close` 关闭。`GET /responses.csv` 下载答卷，`POST /responses/material` 将当前答卷保存为项目资料。

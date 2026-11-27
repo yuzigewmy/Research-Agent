@@ -14,16 +14,22 @@ type surveyCreateInput struct {
 	RequestID  string `json:"requestId"`
 	MaterialID string `json:"materialId"`
 	Options    struct {
-		RequiredColumns  []string                   `json:"requiredColumns"`
-		DuplicateColumns []string                   `json:"duplicateColumns"`
-		CrossTab         *survey.CrossTabOptions    `json:"crossTab"`
-		Reliability      *survey.ReliabilityOptions `json:"reliability"`
-		Regression       *survey.RegressionOptions  `json:"regression"`
-		Sheet            string                     `json:"sheet"`
-		WeightColumn     string                     `json:"weightColumn"`
-		CategoryMappings []survey.CategoryMapping   `json:"categoryMappings"`
-		SettingsSource   *survey.SettingsSource     `json:"settingsSource"`
-		Reviews          []struct {
+		RequiredColumns    []string                          `json:"requiredColumns"`
+		DuplicateColumns   []string                          `json:"duplicateColumns"`
+		CrossTab           *survey.CrossTabOptions           `json:"crossTab"`
+		Reliability        *survey.ReliabilityOptions        `json:"reliability"`
+		Regression         *survey.RegressionOptions         `json:"regression"`
+		MultipleRegression *survey.MultipleRegressionOptions `json:"multipleRegression"`
+		FactorAnalysis     *survey.FactorAnalysisOptions     `json:"factorAnalysis"`
+		Kano               *survey.KanoOptions               `json:"kano"`
+		PSM                *survey.PSMOptions                `json:"psm"`
+		Conjoint           *survey.ConjointOptions           `json:"conjoint"`
+		CFA                *survey.CFAOptions                `json:"cfa"`
+		Sheet              string                            `json:"sheet"`
+		WeightColumn       string                            `json:"weightColumn"`
+		CategoryMappings   []survey.CategoryMapping          `json:"categoryMappings"`
+		SettingsSource     *survey.SettingsSource            `json:"settingsSource"`
+		Reviews            []struct {
 			Row    int    `json:"row"`
 			Accept *bool  `json:"accept"`
 			Reason string `json:"reason"`
@@ -73,13 +79,19 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 	}
 	options := survey.Options{
 		RequiredColumns: input.Options.RequiredColumns, DuplicateColumns: input.Options.DuplicateColumns,
-		Reviews:          make([]survey.Review, 0, len(input.Options.Reviews)),
-		CrossTab:         input.Options.CrossTab,
-		Reliability:      input.Options.Reliability,
-		Regression:       input.Options.Regression,
-		Sheet:            input.Options.Sheet,
-		WeightColumn:     input.Options.WeightColumn,
-		CategoryMappings: input.Options.CategoryMappings,
+		Reviews:            make([]survey.Review, 0, len(input.Options.Reviews)),
+		CrossTab:           input.Options.CrossTab,
+		Reliability:        input.Options.Reliability,
+		Regression:         input.Options.Regression,
+		MultipleRegression: input.Options.MultipleRegression,
+		FactorAnalysis:     input.Options.FactorAnalysis,
+		Kano:               input.Options.Kano,
+		PSM:                input.Options.PSM,
+		Conjoint:           input.Options.Conjoint,
+		CFA:                input.Options.CFA,
+		Sheet:              input.Options.Sheet,
+		WeightColumn:       input.Options.WeightColumn,
+		CategoryMappings:   input.Options.CategoryMappings,
 	}
 	for _, review := range input.Options.Reviews {
 		if review.Accept == nil {
