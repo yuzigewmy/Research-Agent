@@ -45,10 +45,20 @@ Cronbach α 使用清洗和复核后有效且所选题项均为数值的答卷�
 
 拟合需要至少两份完整数值配对，且自变量须有变异。因变量为常量时，报告保留系数，R² 未定义。复核后会按原资料和已选变量重算，形成独立报告供查看和下载。分析请求通过 `options.regression.predictorColumn` 和 `options.regression.outcomeColumn` 指定两列。
 
+## 样本量与分析计划
+
+在「问卷分析」中展开「样本量与分析计划」，填写研究目标、目标总体、抽样方式、计划统计方法、缺失值处理策略和样本量参数，实时预览结果后点击「保存计划版本」生成不可变版本。历史版本按版本号倒序保留，可随时回填查看或修改后保存新版本。
+
+样本量采用固定 Cochran 比例抽样口径（`proportion-cochran-v1`）：置信水平仅支持 90%（`z = 1.6448536269514722`）、95%（`z = 1.959963984540054`）或 99%（`z = 2.5758293035489004`）；预期比例 `p ∈ (0, 1)`，默认 `0.5`；允许误差 `e ∈ (0, 0.5)`，默认 `0.05`；可选有限总体 `N ∈ [1, 1,000,000,000]`（留空或 `0` 表示无限总体）；预期有效回收率 `r ∈ (0, 1]`，默认 `1`。基础样本量 `n₀ = ⌈z²·p·(1−p)/e²⌉`；指定有限总体时按未取整基础样本量校正 `n_fpc = ⌈n₀,raw / (1 + (n₀,raw − 1)/N)⌉`；计划发放量 `n_planned = ⌈n_fpc / r⌉`。固定核对样例：95%、`p = 0.5`、`e = 0.05` 时无限总体为 `385`，`N = 1000` 校正为 `278`，`r = 0.8` 时计划发放 `348`（99% 同条件下为 `664`、`400`、`500`）。
+
+发起「开始分析」时可选关联同项目的任一计划版本。报告详情与下载的 JSON 会固定保存所绑定的计划编号、版本号、目标摘要、计划统计方法及样本量计算口径；不关联计划时原有分析与旧报告完全兼容。
+
 ## 接口
 
 管理接口基址为 `/api/v1/projects/{id}/questionnaire`。使用 `GET` 读取状态，`PUT` 保存草稿。保存、发布和关闭操作以 `expectedRevision` 指定所读修订。`POST /publish` 发布，`POST /close` 关闭。`GET /responses.csv` 下载答卷，`POST /responses/material` 将当前答卷保存为项目资料。
 
 填写链接使用 `/?questionnaire={publicId}`。公开接口 `GET /api/v1/questionnaires/{publicId}` 只返回标题、卷首语和已发布题目。向其子路径 `/responses` 提交答案获取回执。关闭或归档项目后，填写接口停止接收新答卷。首版沿用工作台的本机访问范围。
 
-分析使用 `/api/v1/projects/{id}/surveys`。工作簿资料的 `GET /api/v1/projects/{id}/materials/{materialId}/survey-sheets` 返回数据工作表列表。创建分析时用 `options.sheet` 指定表名。工作簿报告的 `rows[].sourceRow` 记录 Excel 行号，复核请求使用报告中的 `row` 序号。 [工作簿回归](<../internal/workbench/survey_workbook_test.go>)
+分析使用 `/api/v1/projects/{id}/surveys`。工作簿资料的 `GET /api/v1/projects/{id}/materials/{materialId}/survey-sheets` 返回数据工作表列表。创建分析时用 `options.sheet` 指定表名，可用 `options.planId` 关联同项目的分析计划版本（报告在 `report.planSource` 中保留不可变计划来源）。工作簿报告的 `rows[].sourceRow` 记录 Excel 行号，复核请求使用报告中的 `row` 序号。 [工作簿回归](<../internal/workbench/survey_workbook_test.go>)
+
+样本量与分析计划使用 `/api/v1/projects/{id}/survey-plans`。`GET` 按版本号倒序返回项目全部计划版本及 `latestVersion`；`POST` 接受 `requestId`、`expectedVersion`（首次为 `0`，版本过期返回 409）、计划字段和 `sampleSizeInput`，保存后返回 `201`（同请求同内容幂等重放返回 `200`，同请求变更内容返回 `409`）。 [计划回归](<../internal/workbench/survey_plan_test.go>)
