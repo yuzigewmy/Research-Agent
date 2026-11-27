@@ -1,0 +1,3 @@
+overrides:
+  # Keep the Markdown math parser on the same patched renderer as the preview.
+  micromark-extension-math>katex: 0.19.1

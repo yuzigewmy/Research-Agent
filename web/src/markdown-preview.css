@@ -1,0 +1,16 @@
+.markdown-preview { min-inline-size: 0; }
+.markdown-preview > summary { color: var(--green); font-weight: 650; cursor: pointer; }
+.markdown-preview-body { display: grid; gap: 0.625rem; margin-block-start: 0.5rem; overflow-wrap: anywhere; }
+.markdown-preview-content {
+  min-inline-size: 0;
+  display: flow-root;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+.markdown-preview-content > * + * { margin-block-start: 0.625rem; }
+.markdown-preview-content a { color: var(--green); }
+.markdown-preview-content :is(pre, .katex-display) { max-inline-size: 100%; overflow-x: auto; }
+.markdown-preview-content blockquote { margin-inline: 0; padding-inline-start: 0.625rem; border-inline-start: 2px solid var(--line); }
+.markdown-preview-content .katex-error { color: var(--error) !important; }

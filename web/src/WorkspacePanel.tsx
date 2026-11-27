@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, ComponentProps, FormEvent } from 'react'
 import { ManuscriptEvidence } from './ManuscriptEvidence'
 import { ManuscriptReview } from './ManuscriptReview'
+import { MarkdownPreview } from './MarkdownPreview'
 import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
@@ -131,7 +132,10 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
     {document.content
       ? <pre className="workspace-text" tabIndex={0} aria-label="版本内容" dir="auto">{document.content}</pre>
       : <p className="workspace-note">此版本为空文件。</p>}
-    {markdownExtension.test(document.path) && <ManuscriptEvidence projectId={projectId} versionId={document.versionId} readOnly />}
+    {markdownExtension.test(document.path) && <>
+      <MarkdownPreview file={document} />
+      <ManuscriptEvidence projectId={projectId} versionId={document.versionId} readOnly />
+    </>}
     {!isCurrent && document.content.trim() && markdownExtension.test(document.path) && <>
       <WordExport key={document.versionId} projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256} />
       <ManuscriptReview projectId={projectId} versionId={document.versionId} sourceSha256={document.sha256}
@@ -518,8 +522,11 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
             : quoteLimitReached ? <>已引用 {manuscriptSelectionLimit} 份稿件，请先在<a href="#conversation-title">项目对话</a>中移除一份。</>
               : <>选取非空白文字，最多 {manuscriptSelectionByteLimit} 个 UTF-8 字节。{currentQuote && '再次引用会替换此稿件的选区。'}</>}
       </p>}
-      {isMarkdown && <ManuscriptEvidence projectId={projectId} versionId={document.versionId}
-        selection={selectedQuote} blockReason={restoreBlocked} />}
+      {isMarkdown && <>
+        <MarkdownPreview key={document.versionId} file={document} />
+        <ManuscriptEvidence projectId={projectId} versionId={document.versionId}
+          selection={selectedQuote} blockReason={restoreBlocked} />
+      </>}
       {isMarkdown && document.content.trim() && <>
         <SelectionEdit projectId={projectId} versionId={document.versionId} selection={selection}
           disabled={locked || dirty || conflict} onApplying={setApplying} onApplied={loadDocument} />
