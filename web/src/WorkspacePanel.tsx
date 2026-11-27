@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, ComponentProps, FormEvent } from 'react'
+import { EditHistoryPanel } from './EditHistoryPanel'
 import { LatexExportPanel } from './LatexExportPanel'
 import { ManuscriptCheckPanel } from './ManuscriptCheckPanel'
 import { ManuscriptEvidence } from './ManuscriptEvidence'
@@ -10,6 +11,7 @@ import { MarkdownPreview } from './MarkdownPreview'
 import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
+import { WorkspaceBatchRestore } from './WorkspaceBatchRestore'
 import { WorkspaceBundle, WorkspaceVersionBundleAdd } from './WorkspaceBundle'
 import type { BundleSelection } from './WorkspaceBundle'
 import { WorkspaceHTMLPreview } from './WorkspaceHTMLPreview'
@@ -594,6 +596,18 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
           : manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
     </p>}
     <WorkspaceBundle projectId={projectId} selection={bundleSelection} />
+    <WorkspaceBatchRestore projectId={projectId} onRestored={(restoredPaths) => {
+      page.retry()
+      if (currentPath && restoredPaths.includes(currentPath) && !dirty) {
+        void run('reload', (signal) => readText(projectId, currentPath, signal))
+      }
+    }} />
+    <EditHistoryPanel projectId={projectId} onUndone={(undonePath) => {
+      page.retry()
+      if (currentPath && undonePath === currentPath && !dirty) {
+        void run('reload', (signal) => readText(projectId, currentPath, signal))
+      }
+    }} />
     {destination && <div className="workspace-discard" ref={discardPrompt} tabIndex={-1}
       role="group" aria-label="处理未保存的修改">
       <p>当前有未保存的修改。{destinationLabel[destination.kind]} <bdi>{destination.path}</bdi> 前，请先保存或放弃草稿。</p>
