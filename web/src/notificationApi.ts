@@ -1,11 +1,16 @@
 import { request } from './projects'
 
+export type ReviewKind = 'simulation' | 'automatic'
+export type ReviewLink = { reviewId: string; reviewVersionId: string; reviewKind: ReviewKind }
+
 export interface TaskNotification {
   notificationId: string
   projectId: string
   projectName: string
   taskId: string
   workflowRunId?: string
+  reviewVersionId?: string
+  reviewKind?: ReviewKind
   instruction: string
   status: 'PROPOSED' | 'FAILED' | 'INTERRUPTED' | 'SUCCEEDED'
   createdAt: string
@@ -24,10 +29,22 @@ function isId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..'
 }
 
+function isReviewKind(value: unknown): value is ReviewKind {
+  return value === 'simulation' || value === 'automatic'
+}
+
+export function readReviewLink(reviewId: unknown, reviewVersionId: unknown, reviewKind: unknown): ReviewLink | undefined {
+  if (isId(reviewId) && isId(reviewVersionId) && isReviewKind(reviewKind)) {
+    return { reviewId, reviewVersionId, reviewKind }
+  }
+}
+
 function isNotification(value: unknown): value is TaskNotification {
   const item = value as Partial<TaskNotification> | null
   return !!item && isId(item.notificationId) && isId(item.projectId)
     && (item.workflowRunId === undefined ? isId(item.taskId) : isId(item.workflowRunId) && typeof item.taskId === 'string')
+    && (item.reviewVersionId === undefined || isId(item.reviewVersionId))
+    && (item.reviewKind === undefined || isReviewKind(item.reviewKind))
     && typeof item.projectName === 'string' && typeof item.instruction === 'string'
     && (item.status === 'PROPOSED' || item.status === 'FAILED' || item.status === 'INTERRUPTED' || item.status === 'SUCCEEDED')
     && typeof item.createdAt === 'string' && Number.isFinite(Date.parse(item.createdAt)) && typeof item.read === 'boolean'

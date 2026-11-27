@@ -67,6 +67,24 @@ const workflowNotificationsSchema = `
 	PRAGMA user_version = 56;
 `
 
+const reviewNotificationsSchema = `
+	CREATE TRIGGER notify_review_status AFTER UPDATE OF status ON tasks
+	WHEN OLD.status <> NEW.status AND NEW.status IN ('FAILED', 'INTERRUPTED', 'SUCCEEDED')
+		AND (NEW.review_version_id IS NOT NULL OR NEW.automatic_review = 1)
+	BEGIN
+		INSERT INTO task_notifications (project_id, task_id, status, instruction, created_at)
+		VALUES (NEW.project_id, NEW.task_id, NEW.status,
+			(CASE WHEN NEW.automatic_review = 1 THEN '多轮审稿' ELSE '模拟评审' END) ||
+			(CASE NEW.status
+				WHEN 'SUCCEEDED' THEN '已完成，可查看报告。'
+				WHEN 'FAILED' THEN '未完成，请查看评审记录。'
+				WHEN 'INTERRUPTED' THEN '已中断，请查看评审记录。'
+			END),
+			strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+	END;
+	PRAGMA user_version = 57;
+`
+
 // A proposal inserted and automatically queued in one transaction never needs approval.
 func insertProposalNotification(ctx context.Context, tx *sql.Tx, projectID, taskID string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO task_notifications (project_id, task_id, status, instruction, created_at)
@@ -78,15 +96,17 @@ func insertProposalNotification(ctx context.Context, tx *sql.Tx, projectID, task
 const notificationsPath = "/api/v1/notifications"
 
 type taskNotification struct {
-	ID            string `json:"notificationId"`
-	ProjectID     string `json:"projectId"`
-	ProjectName   string `json:"projectName"`
-	TaskID        string `json:"taskId"`
-	WorkflowRunID string `json:"workflowRunId,omitempty"`
-	Instruction   string `json:"instruction"`
-	Status        string `json:"status"`
-	CreatedAt     string `json:"createdAt"`
-	Read          bool   `json:"read"`
+	ID              string `json:"notificationId"`
+	ProjectID       string `json:"projectId"`
+	ProjectName     string `json:"projectName"`
+	TaskID          string `json:"taskId"`
+	WorkflowRunID   string `json:"workflowRunId,omitempty"`
+	ReviewVersionID string `json:"reviewVersionId,omitempty"`
+	ReviewKind      string `json:"reviewKind,omitempty"`
+	Instruction     string `json:"instruction"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"createdAt"`
+	Read            bool   `json:"read"`
 }
 
 type notificationPage struct {
@@ -143,9 +163,12 @@ func (s *Store) listNotifications(ctx context.Context, before int64, limit int) 
 		return page, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT n.seq, n.project_id, COALESCE(NULLIF(p.display_name, ''), p.title),
-		n.task_id, COALESCE(t.workflow_run_id, ''), n.instruction, n.status, n.created_at, n.read
+		n.task_id, COALESCE(t.workflow_run_id, ''), COALESCE(a.source_version_id, t.review_version_id, ''),
+		CASE WHEN a.task_id IS NOT NULL THEN 'automatic' WHEN t.review_version_id IS NOT NULL THEN 'simulation' ELSE '' END,
+		n.instruction, n.status, n.created_at, n.read
 		FROM task_notifications n JOIN projects p ON p.project_id = n.project_id
 		JOIN tasks t ON t.project_id = n.project_id AND t.task_id = n.task_id
+		LEFT JOIN automatic_reviews a ON a.project_id = n.project_id AND a.task_id = n.task_id
 		WHERE n.seq < ? ORDER BY n.seq DESC LIMIT ?`, before, limit+1)
 	if err != nil {
 		return page, err
@@ -153,8 +176,8 @@ func (s *Store) listNotifications(ctx context.Context, before int64, limit int) 
 	defer rows.Close()
 	for rows.Next() {
 		var item taskNotification
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.TaskID, &item.WorkflowRunID, &item.Instruction,
-			&item.Status, &item.CreatedAt, &item.Read); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.TaskID, &item.WorkflowRunID,
+			&item.ReviewVersionID, &item.ReviewKind, &item.Instruction, &item.Status, &item.CreatedAt, &item.Read); err != nil {
 			return page, err
 		}
 		page.Items = append(page.Items, item)

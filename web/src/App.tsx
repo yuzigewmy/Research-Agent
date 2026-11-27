@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from 'rea
 import type { MouseEvent } from 'react'
 import { CreateProjectForm } from './CreateProjectForm'
 import { ModelConnection } from './ModelConnection'
+import { readReviewLink } from './notificationApi'
+import type { ReviewLink } from './notificationApi'
 import { Notifications } from './Notifications'
 import { ProjectDetails } from './ProjectDetails'
 import { ProjectDraftPanel } from './ProjectDraftPanel'
@@ -17,7 +19,10 @@ import { WorkspaceComponents } from './WorkspaceComponents'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
 
-export type ProjectTarget = (TaskLink & { workflowRunId?: never }) | (WorkflowRunLink & { taskId?: never })
+export type ProjectTarget =
+  | (TaskLink & { workflowRunId?: never; reviewId?: never })
+  | (WorkflowRunLink & { taskId?: never; reviewId?: never })
+  | (ReviewLink & { taskId?: never; workflowRunId?: never })
 
 type Selection = { projectId: string | null; target?: ProjectTarget }
 
@@ -28,12 +33,18 @@ function selectedFromUrl(): Selection {
   const taskId = params.get('task')
   if (projectId && workflowRunId) return { projectId, target: { workflowRunId } }
   if (projectId && taskId) return { projectId, target: { taskId } }
+  const target = readReviewLink(params.get('review'), params.get('reviewVersion'), params.get('reviewKind'))
+  if (projectId && target) return { projectId, target }
   return { projectId }
 }
 
 function sameSelection(a: Selection, b: Selection) {
+  const aReview = a.target?.reviewId ? a.target : undefined
+  const bReview = b.target?.reviewId ? b.target : undefined
   return a.projectId === b.projectId && a.target?.taskId === b.target?.taskId
     && a.target?.workflowRunId === b.target?.workflowRunId
+    && aReview?.reviewId === bReview?.reviewId && aReview?.reviewVersionId === bReview?.reviewVersionId
+    && aReview?.reviewKind === bReview?.reviewKind
 }
 
 function projectUrl(projectId: string | null, target?: ProjectTarget) {
@@ -44,6 +55,15 @@ function projectUrl(projectId: string | null, target?: ProjectTarget) {
   else url.searchParams.delete('task')
   if (projectId !== null && target?.workflowRunId) url.searchParams.set('workflowRun', target.workflowRunId)
   else url.searchParams.delete('workflowRun')
+  if (projectId !== null && target?.reviewId) {
+    url.searchParams.set('review', target.reviewId)
+    url.searchParams.set('reviewVersion', target.reviewVersionId)
+    url.searchParams.set('reviewKind', target.reviewKind)
+  } else {
+    url.searchParams.delete('review')
+    url.searchParams.delete('reviewVersion')
+    url.searchParams.delete('reviewKind')
+  }
   url.hash = ''
   return url.href
 }
@@ -156,7 +176,7 @@ function Workbench() {
           </div>
           {selectedId !== null && <ProjectDetails key={selectedId} projectId={selectedId}
             taskLink={target?.taskId ? target : undefined} workflowRunLink={target?.workflowRunId ? target : undefined}
-            onUpdated={list.refresh} />}
+            reviewLink={target?.reviewId ? target : undefined} onUpdated={list.refresh} />}
         </section>
         <ProjectList list={list} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>

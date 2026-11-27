@@ -4,9 +4,11 @@ import { DiagramPanel } from './DiagramPanel'
 import { EngineeringPreview } from './EngineeringPreview'
 import { LiteraturePanel } from './LiteraturePanel'
 import { MaterialPanel } from './MaterialPanel'
+import type { ReviewLink } from './notificationApi'
 import { ProjectAdministration } from './ProjectAdministration'
 import { ProjectTaskQueue } from './ProjectTaskQueue'
 import { QuestionnairePanel } from './QuestionnairePanel'
+import { ReviewNoticeDetail } from './ReviewNoticeDetail'
 import { SurveyPanel } from './SurveyPanel'
 import { TaskPanel } from './TaskPanel'
 import type { Task, TaskLink } from './tasks'
@@ -68,10 +70,11 @@ function readManuscriptSelections(key: string): ManuscriptSelection[] {
   }
 }
 
-export function ProjectDetails({ projectId, taskLink, workflowRunLink, onUpdated }: {
+export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLink, onUpdated }: {
   projectId: string
   taskLink?: TaskLink
   workflowRunLink?: WorkflowRunLink
+  reviewLink?: ReviewLink
   onUpdated: (project: Project) => void
 }) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
@@ -198,6 +201,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, onUpdated
         <div><dt>创建时间</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
         <div><dt>修订</dt><dd>{project.revision}</dd></div>
       </dl>
+      {reviewLink && <ReviewNoticeDetail projectId={project.projectId} reviewLink={reviewLink} />}
       <ProjectAdministration project={project} onUpdated={(updated) => {
         setDetail({ kind: 'ready', project: updated })
         onUpdated(updated)

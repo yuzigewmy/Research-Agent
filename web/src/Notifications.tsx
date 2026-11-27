@@ -1,8 +1,8 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from 'react'
 import type { ProjectTarget } from './App'
-import { listNotifications, markNotificationRead } from './notificationApi'
-import type { NotificationPage } from './notificationApi'
+import { listNotifications, markNotificationRead, readReviewLink } from './notificationApi'
+import type { NotificationPage, TaskNotification } from './notificationApi'
 import { ProjectDate } from './ProjectDetails'
 import { taskStatusLabels } from './tasks'
 import './notifications.css'
@@ -34,6 +34,12 @@ function prependLatest(history: History | undefined, page: History): History {
 
 function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)])
+}
+
+function notificationTarget(item: TaskNotification): ProjectTarget {
+  const reviewLink = readReviewLink(item.taskId, item.reviewVersionId, item.reviewKind)
+  if (reviewLink) return reviewLink
+  return item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
 }
 
 export function Notifications({ hrefFor, onOpen, onNavigate }: NotificationLinks & {
@@ -73,7 +79,7 @@ export function Notifications({ hrefFor, onOpen, onNavigate }: NotificationLinks
       && BigInt(candidate.notificationId) > previous)
     if (!item) return
 
-    const target = item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
+    const target = notificationTarget(item)
     try {
       desktopNotice.current?.close()
       const notice = new Notification('研究工作台', { body: '收到一条新的站内通知。', tag: `research-notice-${item.notificationId}` })
@@ -290,7 +296,7 @@ function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed,
     {desktopControls}
     {!!history?.items.length && <ol className="notification-list" aria-label="站内通知" role="list">
       {history.items.map((item) => {
-        const target = item.workflowRunId ? { workflowRunId: item.workflowRunId } : { taskId: item.taskId }
+        const target = notificationTarget(item)
         return <li key={item.notificationId}>
           <p className="notification-meta">
             <bdi>{item.projectName}</bdi> · {taskStatusLabels[item.status]} · <ProjectDate value={item.createdAt} withTime />
@@ -300,7 +306,7 @@ function NotificationHistory({ hrefFor, onOpen, history, setHistory, headFailed,
           <div className="notification-actions">
             <a className="button outline" id={`${listId}-${item.notificationId}`} href={hrefFor(item.projectId, target)}
               onClick={(event) => onOpen(event, item.projectId, target)}>
-              {item.workflowRunId ? '打开工作流' : '打开任务'}
+              {target.reviewId ? '打开评审' : target.workflowRunId ? '打开工作流' : '打开任务'}
             </a>
             {!item.read && <button className="button outline" type="button" aria-disabled={pendingRead !== undefined}
               onClick={(event) => void markRead(item.notificationId, event.currentTarget)}>
