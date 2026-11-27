@@ -121,7 +121,7 @@ function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid
 
   return <section className="survey-section" aria-labelledby={`${selectId}-heading`}>
     <h6 id={`${selectId}-heading`}>答卷统计</h6>
-    <p className="survey-note">现有统计均使用未加权有效答卷。答卷统计的分母为 {valid} 份，均值和范围按数值回答计算。</p>
+    <p className="survey-note">描述统计覆盖 {valid} 份有效答卷。均值和范围按数值回答计算，每份答卷计一次。</p>
     {summary ? <>
       <div className="field">
         <label htmlFor={selectId}>统计列</label>
@@ -142,10 +142,16 @@ function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid
   </section>
 }
 
-function CrossTabTable({ tab }: { tab: SurveyCrossTab }) {
-  return <div className="survey-cross-tab-table" role="region" aria-label="交叉统计表" tabIndex={0}>
+function CrossTabTable({ tab, totals }: {
+  tab: SurveyCrossTab
+  totals?: NonNullable<SurveyCrossTab['weighted']>
+}) {
+  const values = totals?.weights ?? tab.counts
+  const rowTotals = totals?.rowTotals ?? tab.rowTotals
+  const columnTotals = totals?.columnTotals ?? tab.columnTotals
+  return <div className="survey-cross-tab-table" role="region" aria-label={totals ? '加权交叉统计表' : '交叉统计表'} tabIndex={0}>
     <table>
-      <caption><bdi>{tab.rowColumn}</bdi> × <bdi>{tab.columnColumn}</bdi>（次数）</caption>
+      <caption><bdi>{tab.rowColumn}</bdi> × <bdi>{tab.columnColumn}</bdi>（{totals ? '权重合计' : '次数'}）</caption>
       <thead><tr>
         <th scope="col" dir="auto">{tab.rowColumn}</th>
         {tab.columnLabels.map((label) => <th key={label} scope="col" dir="auto">{label}</th>)}
@@ -153,13 +159,13 @@ function CrossTabTable({ tab }: { tab: SurveyCrossTab }) {
       </tr></thead>
       <tbody>{tab.rowLabels.map((label, rowIndex) => <tr key={label}>
         <th scope="row" dir="auto">{label}</th>
-        {tab.columnLabels.map((column, columnIndex) => <td key={column}>{tab.counts[rowIndex][columnIndex]}</td>)}
-        <td className="survey-cross-tab-total">{tab.rowTotals[rowIndex]}</td>
+        {tab.columnLabels.map((column, columnIndex) => <td key={column}>{values[rowIndex][columnIndex]}</td>)}
+        <td className="survey-cross-tab-total">{rowTotals[rowIndex]}</td>
       </tr>)}</tbody>
       <tfoot><tr>
         <th scope="row">列合计</th>
-        {tab.columnLabels.map((column, index) => <td key={column}>{tab.columnTotals[index]}</td>)}
-        <td>{tab.included}</td>
+        {tab.columnLabels.map((column, index) => <td key={column}>{columnTotals[index]}</td>)}
+        <td>{totals?.totalWeight ?? tab.included}</td>
       </tr></tfoot>
     </table>
   </div>
@@ -210,6 +216,10 @@ function ReportCrossTab({ summaries, result, busy, error, onCalculate }: {
     {result && <>
       <p className="survey-note" role="status">完整配对 {result.included} 份。有效答卷中任一字段缺失 {result.missing} 份。</p>
       <CrossTabTable tab={result} />
+      {result.weighted && <>
+        <p className="survey-note">完整配对中有 {result.weighted.included} 份权重有效，权重合计 {result.weighted.totalWeight}。</p>
+        <CrossTabTable tab={result} totals={result.weighted} />
+      </>}
     </>}
   </section>
 }

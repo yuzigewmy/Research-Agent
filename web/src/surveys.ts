@@ -19,6 +19,15 @@ export interface SurveyCrossTab extends SurveyCrossTabOptions {
   counts: number[][]
   rowTotals: number[]
   columnTotals: number[]
+  weighted?: SurveyWeightedCrossTab
+}
+
+export interface SurveyWeightedCrossTab {
+  included: number
+  weights: string[][]
+  rowTotals: string[]
+  columnTotals: string[]
+  totalWeight: string
 }
 
 export const crossTabCategoryLimit = 20
@@ -227,12 +236,27 @@ function isCountList(value: unknown, length: number): value is number[] {
 function isCrossTab(value: unknown): value is SurveyCrossTab {
   const tab = value as Partial<SurveyCrossTab> | null
   if (!tab) return false
-  const { included, missing, rowLabels, columnLabels, counts, rowTotals, columnTotals } = tab
+  const { included, missing, rowLabels, columnLabels, counts, rowTotals, columnTotals, weighted } = tab
   return isCrossTabOptions(tab) && isCount(included) && isCount(missing)
     && isCrossTabLabels(rowLabels) && isCrossTabLabels(columnLabels)
     && Array.isArray(counts) && counts.length === rowLabels.length
     && counts.every((row) => isCountList(row, columnLabels.length))
     && isCountList(rowTotals, rowLabels.length) && isCountList(columnTotals, columnLabels.length)
+    && (weighted === undefined || isWeightedCrossTab(weighted, included, rowLabels.length, columnLabels.length))
+}
+
+function isWeight(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9]+(?:\.[0-9]{1,6})?$/.test(value)
+}
+
+function isWeightedCrossTab(value: SurveyWeightedCrossTab, included: number, rows: number, columns: number) {
+  function isWeightList(list: unknown, length: number) {
+    return Array.isArray(list) && list.length === length && list.every(isWeight)
+  }
+  return !!value && isCount(value.included) && value.included <= included && isWeight(value.totalWeight)
+    && isWeightList(value.rowTotals, rows) && isWeightList(value.columnTotals, columns)
+    && Array.isArray(value.weights) && value.weights.length === rows
+    && value.weights.every((row) => isWeightList(row, columns))
 }
 
 function isReliability(value: unknown, valid: number): value is SurveyReliability {

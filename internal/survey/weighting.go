@@ -27,30 +27,36 @@ type weightAccumulator struct {
 	units uint64
 }
 
-func (w *weightAccumulator) add(record []string) {
+func (w *weightAccumulator) add(record []string) uint64 {
 	value := fieldAt(record, w.index)
 	if value == "" {
 		w.Missing++
-		return
+		return 0
 	}
 	if !weightDecimal.MatchString(value) {
 		w.Invalid++
-		return
+		return 0
 	}
 	whole, fraction, _ := strings.Cut(value, ".")
 	units, err := strconv.ParseUint(whole+fraction+strings.Repeat("0", 6-len(fraction)), 10, 64)
 	if err != nil || units == 0 || units > maxWeight {
 		w.Invalid++
-		return
+		return 0
 	}
 	w.Included++
 	w.units += units
+	return units
 }
 
 func (w *weightAccumulator) finish() *Weighting {
-	w.TotalWeight = strconv.FormatUint(w.units/weightScale, 10)
-	if fraction := w.units % weightScale; fraction != 0 {
-		w.TotalWeight += strings.TrimRight(fmt.Sprintf(".%06d", fraction), "0")
-	}
+	w.TotalWeight = formatWeight(w.units)
 	return &w.Weighting
+}
+
+func formatWeight(units uint64) string {
+	result := strconv.FormatUint(units/weightScale, 10)
+	if fraction := units % weightScale; fraction != 0 {
+		result += strings.TrimRight(fmt.Sprintf(".%06d", fraction), "0")
+	}
+	return result
 }

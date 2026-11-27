@@ -93,6 +93,10 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		CrossTabOptions: survey.CrossTabOptions{RowColumn: "Station", ColumnColumn: "Choice"},
 		Included:        3, Missing: 2, RowLabels: []string{"North", "South"}, ColumnLabels: []string{"No", "Yes"},
 		Counts: [][]int{{1, 1}, {0, 1}}, RowTotals: []int{2, 1}, ColumnTotals: []int{1, 2},
+		Weighted: &survey.WeightedCrossTab{
+			Included: 3, Weights: [][]string{{"2.000001", "0.1"}, {"0", "0.2"}},
+			RowTotals: []string{"2.100001", "0.2"}, ColumnTotals: []string{"2.000001", "0.3"}, TotalWeight: "2.300001",
+		},
 	}
 	if !reflect.DeepEqual(run.Report.CrossTab, want) {
 		t.Fatalf("unexpected cross-tab: got %+v, want %+v", run.Report.CrossTab, want)

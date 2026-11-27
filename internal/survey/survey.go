@@ -150,7 +150,7 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	}
 	var crossTab *crossTabAccumulator
 	if options.CrossTab != nil {
-		crossTab, err = newCrossTab(*options.CrossTab, header, byName)
+		crossTab, err = newCrossTab(*options.CrossTab, header, byName, options.WeightColumn != "")
 		if err != nil {
 			return Report{}, err
 		}
@@ -247,11 +247,12 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 		switch result.Status {
 		case StatusValid:
 			report.Valid++
+			var weight uint64
 			if weights != nil {
-				weights.add(record)
+				weight = weights.add(record)
 			}
 			if crossTab != nil {
-				if err := crossTab.add(record); err != nil {
+				if err := crossTab.add(record, weight); err != nil {
 					return Report{}, err
 				}
 			}
