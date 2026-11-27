@@ -61,7 +61,7 @@ func (api manuscriptReviews) createAutomaticReview(w http.ResponseWriter, r *htt
 	input.Target = strings.TrimSpace(input.Target)
 	input.Criteria = strings.TrimSpace(input.Criteria)
 	if !validRequestID(input.RequestID) || input.Target == "" || utf8.RuneCountInString(input.Target) > 200 ||
-		strings.ContainsFunc(input.Target, unicode.IsControl) || input.MaxRounds < 1 || input.MaxRounds > 10 ||
+		strings.ContainsFunc(input.Target, unicode.IsControl) || input.MaxRounds < 1 || input.MaxRounds > maxAutomaticReviewRounds ||
 		input.TargetScore < 5 || input.TargetScore > 9 || len(input.Criteria) > maxReviewCriteria || strings.ContainsRune(input.Criteria, 0) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请核对投稿目标、1 至 10 轮、5 至 9 分的目标分数和 4 KiB 以内的补充标准。")
 		return

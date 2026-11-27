@@ -77,7 +77,7 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 				ImageQuality: generationRole.quality, modelSnapshot: generationRole.modelSnapshot})
 		}
 	}
-	registerModelConnection(mux, config.Model, connectionOptions)
+	registerModelConnection(mux, config, connectionOptions, flowModels)
 	conversation{store: store, model: config.Model, editModel: editModel, workflowModels: flowModels, modelOptions: conversationOptions}.register(mux)
 	projectDrafts{store: store, model: config.Model}.register(mux)
 	researchTasks{store: store, model: config.Model, editModel: editModel}.register(mux)

@@ -31,10 +31,11 @@ const automaticReviewSchema = `
 `
 
 const (
-	defaultReviewRounds  = 4
-	defaultReviewScore   = 6
-	maxReviewCriteria    = 4 << 10
-	retryAutomaticReview = "retry-automatic-review"
+	maxAutomaticReviewRounds = 10
+	defaultReviewRounds      = 4
+	defaultReviewScore       = 6
+	maxReviewCriteria        = 4 << 10
+	retryAutomaticReview     = "retry-automatic-review"
 )
 
 type automaticReviewOptions struct {

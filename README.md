@@ -117,6 +117,8 @@ $env:RESEARCH_WORD_PYTHON = (Resolve-Path .local/word/Scripts/python.exe).Path
 
 展开首页「模型连接」，通过「模型用途」查看全局默认、已配置的对话和工作流备选，以及审稿和改稿的模型名称与推理档位。点击「测试连接」会验证所选角色的回复。文本和视觉识别测试最多等待 30 秒，图片生成测试最多等待 2 分钟。测试结果保留在当前面板。服务地址和凭据由部署环境管理。修改部署配置后请重启服务。对话历史会显示每轮发送时的模型名称与推理档位。
 
+展开「模型能力目录」可核对七类模型用途的配置状态、模板默认模型，以及工作台执行的时限、字节数、图片尺寸和审稿轮数上限。
+
 使用 GPT-6.2 Sol 的最高推理档位时，将 `RESEARCH_MODEL_NAME` 设为 `gpt-6.2-sol`，将 `RESEARCH_MODEL_REASONING_EFFORT` 设为 `max`。默认对话的 8192 token 上限包含推理和正文。
 
 设置 `RESEARCH_CONVERSATION_MODEL_NAME` 和可选的 `RESEARCH_CONVERSATION_MODEL_REASONING_EFFORT`，可在同一服务上添加对话备选模型。服务重启后，在项目对话的「对话模型」中切换。浏览器标签页会按项目保留选择，已发送的消息按原回执显示模型和推理档。

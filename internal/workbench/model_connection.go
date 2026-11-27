@@ -17,13 +17,17 @@ type modelConnectionInfo struct {
 	Configured bool `json:"configured"`
 	modelSnapshot
 	ModelOptions []modelOption `json:"modelOptions,omitempty"`
+	Catalog      modelCatalog  `json:"catalog"`
 }
 
-func registerModelConnection(mux *http.ServeMux, model *inference.Client, options []modelOption) {
+func registerModelConnection(mux *http.ServeMux, config HandlerConfig, options []modelOption, workflows workflowModels) {
+	model := config.Model
 	info := modelConnectionInfo{
 		Configured: model != nil, modelSnapshot: snapshotModel(model, "", ""), ModelOptions: options,
+		Catalog: describeModelCatalog(options, workflows, config),
 	}
 	mux.HandleFunc("GET "+modelConnectionPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, info)
 	})
 	mux.HandleFunc("POST "+modelConnectionPath+"/test", func(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +35,13 @@ func registerModelConnection(mux *http.ServeMux, model *inference.Client, option
 	})
 	mux.HandleFunc(modelConnectionPath, methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(modelConnectionPath+"/test", methodNotAllowed("POST"))
+}
+
+func modelTestTimeout(id string) time.Duration {
+	if id == imageGenerationModelID {
+		return imageGenerationTimeout
+	}
+	return 30 * time.Second
 }
 
 func testModelConnection(w http.ResponseWriter, r *http.Request, model *inference.Client, options []modelOption) {
@@ -59,11 +70,7 @@ func testModelConnection(w http.ResponseWriter, r *http.Request, model *inferenc
 	option := options[index]
 	model = model.ForModel(option.Model, option.ReasoningEffort)
 
-	timeout := 30 * time.Second
-	if option.ID == imageGenerationModelID {
-		timeout = imageGenerationTimeout
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), modelTestTimeout(option.ID))
 	defer cancel()
 	var passed bool
 	var err error

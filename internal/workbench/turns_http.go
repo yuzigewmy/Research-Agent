@@ -45,13 +45,17 @@ func (c conversation) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+proposal+"/cancel", c.changeWorkflowProposal(false))
 }
 
+const (
+	maxTurnInputBytes  = 16 << 10
+	maxTurnOutputBytes = 64 << 10
+)
+
 func (c conversation) send(w http.ResponseWriter, r *http.Request) {
-	const maxText = 16 << 10
 	var input sendTurnInput
-	if !readJSON(w, r, &input, 6*(maxText+maxTurnReferences*referenceExcerptBytes)+(8<<10)) {
+	if !readJSON(w, r, &input, 6*(maxTurnInputBytes+maxTurnReferences*referenceExcerptBytes)+(8<<10)) {
 		return
 	}
-	if !validRequestID(input.RequestID) || strings.TrimSpace(input.Text) == "" || len(input.Text) > maxText {
+	if !validRequestID(input.RequestID) || strings.TrimSpace(input.Text) == "" || len(input.Text) > maxTurnInputBytes {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请发送有效的请求编号和 16 KiB 以内的消息。")
 		return
 	}
@@ -180,7 +184,7 @@ func (c conversation) generate(ctx context.Context, model *inference.Client, pro
 	var bytesWritten int
 	emit := func(delta string) error {
 		bytesWritten += len(delta)
-		if bytesWritten > 64<<10 {
+		if bytesWritten > maxTurnOutputBytes {
 			return errors.New("conversation output exceeds 64 KiB")
 		}
 		return c.store.appendTurnEvent(ctx, turn.TurnID, &TurnEvent{Kind: "delta", Text: delta})

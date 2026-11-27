@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { connectionModelLabels, readModelConnection, testModelConnection } from './modelConnectionApi'
-import type { ConnectionModelId, ModelConnectionStatus } from './modelConnectionApi'
+import type { ConnectionModelId, ModelCapabilityCatalog, ModelConnectionStatus } from './modelConnectionApi'
 import { errorMessage } from './projects'
 import './model-connection.css'
 
@@ -9,7 +9,9 @@ type TestState = { kind: 'testing' | 'success' } | { kind: 'error'; message: str
 
 export function ModelConnection() {
   const [open, setOpen] = useState(false)
-  return <details className="model-connection" onToggle={(event) => setOpen(event.currentTarget.open)}>
+  return <details className="model-connection" onToggle={(event) => {
+    if (event.target === event.currentTarget) setOpen(event.currentTarget.open)
+  }}>
     <summary>模型连接</summary>
     {open && <ConnectionDetails />}
   </details>
@@ -106,5 +108,82 @@ function ConnectionDetails() {
         : vision ? '测试通过，模型已读出图中方块的数量。' : '模型连接正常。'}</p>}
       {result?.kind === 'error' && <p className="form-error" id={testErrorId} role="alert">{result.message}</p>}
     </> : <p className="model-connection-note" role="status">模型未配置。</p>)}
+    {config.kind === 'ready' && config.status.catalog && <CapabilityCatalog catalog={config.status.catalog} />}
   </div>
+}
+
+const catalogStatusLabels = {
+  configured: '已配置',
+  inherited: '继承全局默认',
+  unconfigured: '未配置',
+}
+
+const capabilityLabels = {
+  text: '文本处理',
+  vision: '图像识别',
+  image: '图片生成',
+}
+
+const limitLabels: Readonly<Record<string, string>> = {
+  conversationTime: '对话回复时限',
+  conversationInput: '对话输入上限',
+  conversationOutput: '对话输出上限',
+  workflowStepTime: '工作流单步时限',
+  reviewTime: '审稿时限',
+  reviewSource: '审稿原稿大小上限',
+  automaticReviewTime: '多轮审稿时限',
+  automaticReviewRounds: '多轮审稿轮数上限',
+  editTime: '改稿时限',
+  editSelection: '改稿选区大小上限',
+  visionTime: '视觉识别时限',
+  visionImageBytes: '识别图片文件大小上限',
+  visionImageEdge: '识别图片单边长度上限',
+  visionImagePixels: '识别图片总像素上限',
+  imageTime: '图片生成时限',
+  imageBytes: '生成图片文件大小上限',
+}
+
+const limitUnits = { seconds: '秒', bytes: '字节', count: '次', pixels: '像素' }
+const catalogNumber = new Intl.NumberFormat('zh-CN')
+
+function CapabilityCatalog({ catalog }: { catalog: ModelCapabilityCatalog }) {
+  return <details className="model-capability-catalog">
+    <summary>模型能力目录</summary>
+    <div className="model-catalog-body">
+      <p className="model-connection-note">目录显示服务端配置与技术上限。连通性以「测试连接」结果为准。</p>
+      <h2>模型角色</h2>
+      <ul className="model-catalog-roles">
+        {catalog.roles.map((role) => <li key={role.id} data-model-role={role.id} data-model-status={role.status}>
+          <p className="model-catalog-role-heading">
+            <strong>{connectionModelLabels[role.id]}</strong>
+            <span>{catalogStatusLabels[role.status]}</span>
+          </p>
+          <dl className="model-catalog-settings">
+            <div><dt>用途</dt><dd>{capabilityLabels[role.capability]}</dd></div>
+            {role.model && <div><dt>模型</dt><dd><bdi>{role.model}</bdi></dd></div>}
+            {role.reasoningEffort && <div><dt>推理档</dt><dd><bdi>{role.reasoningEffort}</bdi></dd></div>}
+            {role.imageQuality && <div><dt>图片质量</dt><dd><bdi>{role.imageQuality}</bdi></dd></div>}
+            <div><dt>连接测试时限</dt><dd>{catalogNumber.format(role.testSeconds)} 秒</dd></div>
+          </dl>
+        </li>)}
+      </ul>
+      <h2>模板默认模型</h2>
+      <dl className="model-catalog-facts">
+        {catalog.templateDefaults.map(({ templateId, label, modelId }) => {
+          const role = catalog.roles.find(({ id }) => id === modelId)
+          return <div key={templateId} data-template-id={templateId}>
+            <dt>{label}</dt>
+            <dd>{connectionModelLabels[modelId]} · {role?.model ? <bdi>{role.model}</bdi> : '未配置'}</dd>
+          </div>
+        })}
+      </dl>
+      <h2>技术上限</h2>
+      <dl className="model-catalog-facts">
+        {catalog.limits.map(({ id, value, unit }) => <div key={id} data-limit-id={id}>
+          <dt>{Object.hasOwn(limitLabels, id) ? limitLabels[id] : id}</dt>
+          <dd>{catalogNumber.format(value)} {unit === 'count' && id === 'automaticReviewRounds' ? '轮' : limitUnits[unit]}</dd>
+        </div>)}
+      </dl>
+    </div>
+  </details>
 }

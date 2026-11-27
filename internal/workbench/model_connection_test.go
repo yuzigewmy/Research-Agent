@@ -81,8 +81,15 @@ func TestModelConnectionChecksOnlyConfiguredService(t *testing.T) {
 	}
 
 	offline := NewHandler(store, nil, HandlerConfig{})
-	if got := request(offline, http.MethodGet, route, "", http.StatusOK); got != `{"configured":false}` {
-		t.Fatalf("unconfigured status: %s", got)
+	var offlineInfo modelConnectionInfo
+	if body := request(offline, http.MethodGet, route, "", http.StatusOK); json.Unmarshal([]byte(body), &offlineInfo) != nil ||
+		offlineInfo.Configured || len(offlineInfo.Catalog.Roles) != 7 || len(offlineInfo.ModelOptions) != 0 {
+		t.Fatalf("unexpected unconfigured catalog: %s", body)
+	}
+	for _, role := range offlineInfo.Catalog.Roles {
+		if role.Status != "unconfigured" || role.Model != "" {
+			t.Fatalf("unconfigured service advertised a model: %+v", role)
+		}
 	}
 	request(offline, http.MethodPost, probe, `{}`, http.StatusServiceUnavailable)
 
@@ -90,8 +97,8 @@ func TestModelConnectionChecksOnlyConfiguredService(t *testing.T) {
 		Model:                 model,
 		ConversationModelName: "fixture-conversation", ConversationReasoningEffort: "high",
 		WorkflowModelName: "fixture-workflow", WorkflowReasoningEffort: "medium",
-		ReviewModelName: "fixture-review", ReviewReasoningEffort: "low",
-		EditModelName: "fixture-edit",
+		WorkflowModelTemplates: "experiment,unknown-template",
+		ReviewModelName:        "fixture-review", ReviewReasoningEffort: "low",
 	})
 	body := request(handler, http.MethodGet, route, "", http.StatusOK)
 	var info modelConnectionInfo
@@ -103,10 +110,31 @@ func TestModelConnectionChecksOnlyConfiguredService(t *testing.T) {
 		{ID: "conversation", modelSnapshot: modelSnapshot{Model: "fixture-conversation", ReasoningEffort: "high"}},
 		{ID: "workflow", modelSnapshot: modelSnapshot{Model: "fixture-workflow", ReasoningEffort: "medium"}},
 		{ID: "review", modelSnapshot: modelSnapshot{Model: "fixture-review", ReasoningEffort: "low"}},
-		{ID: "edit", modelSnapshot: modelSnapshot{Model: "fixture-edit"}},
+		{ID: "edit", modelSnapshot: modelSnapshot{Model: "fixture-chat", ReasoningEffort: "max"}},
 	}
 	if !slices.Equal(info.ModelOptions, want) {
 		t.Fatalf("unexpected model options: %+v", info.ModelOptions)
+	}
+	roles := make(map[string]modelCapabilityRole)
+	for _, role := range info.Catalog.Roles {
+		roles[role.ID] = role
+	}
+	if len(roles) != 7 || roles["review"].Status != "configured" || roles["review"].Model != "fixture-review" ||
+		roles["edit"].Status != "inherited" || roles["edit"].Model != info.Model ||
+		roles["vision"].Status != "unconfigured" || roles["vision"].Capability != "vision" ||
+		roles["image"].TestSeconds != 120 || roles["default"].TestSeconds != 30 {
+		t.Fatalf("unexpected capability roles: %+v", roles)
+	}
+	templateDefaults := make(map[string]string)
+	for _, template := range info.Catalog.TemplateDefaults {
+		templateDefaults[template.TemplateID] = template.ModelID
+	}
+	if templateDefaults["experiment"] != "workflow" || templateDefaults["paper"] != "default" || templateDefaults["unknown-template"] != "" {
+		t.Fatalf("unexpected template defaults: %+v", templateDefaults)
+	}
+	if !slices.Contains(info.Catalog.Limits, modelTechnicalLimit{"conversationOutput", maxTurnOutputBytes, "bytes"}) ||
+		!slices.Contains(info.Catalog.Limits, modelTechnicalLimit{"automaticReviewRounds", maxAutomaticReviewRounds, "count"}) {
+		t.Fatalf("catalog missing runtime limits: %+v", info.Catalog.Limits)
 	}
 	request(handler, http.MethodPost, probe, `{"baseUrl":"https://other.invalid"}`, http.StatusBadRequest)
 	request(handler, http.MethodPost, probe, `{"modelId":"unsupported"}`, http.StatusBadRequest)

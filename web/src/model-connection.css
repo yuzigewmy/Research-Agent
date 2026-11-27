@@ -13,3 +13,29 @@
 .model-connection-settings dt { color: var(--muted); font-size: 0.875rem; }
 .model-connection-body > .button { justify-self: start; }
 .model-connection .button:disabled { cursor: default; opacity: 0.62; }
+
+.model-capability-catalog {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.model-capability-catalog > summary { padding: 0.5rem 0.75rem; }
+.model-catalog-body { display: grid; gap: 0.625rem; padding: 0 0.75rem 0.75rem; }
+.model-catalog-body h2 { margin-block-start: 0.25rem; font-size: 1rem; }
+.model-catalog-roles, .model-catalog-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.5rem;
+}
+.model-catalog-roles { margin: 0; padding: 0; list-style: none; }
+.model-catalog-roles > li, .model-catalog-facts > div {
+  min-inline-size: 0;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+.model-catalog-role-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.625rem; }
+.model-catalog-settings { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; margin-block-start: 0.375rem; }
+.model-catalog-settings > div { min-inline-size: 0; }
+.model-catalog-role-heading span, .model-catalog-body dt { color: var(--muted); font-size: 0.875rem; }

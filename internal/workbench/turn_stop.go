@@ -10,6 +10,7 @@ import (
 )
 
 const turnStopped = "STOPPED"
+const turnReplyTimeout = 3 * time.Minute
 
 const stoppedReplyMessage = "已停止回复。已生成的内容已保留。"
 
@@ -42,7 +43,7 @@ func (c conversation) startReply(ctx context.Context, projectID string, input se
 	if err != nil || !created {
 		return turn, false, err
 	}
-	replyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	replyCtx, cancel := context.WithTimeout(context.Background(), turnReplyTimeout)
 	workers.active[turn.TurnID] = cancel
 	workers.wg.Add(1)
 	go func() {

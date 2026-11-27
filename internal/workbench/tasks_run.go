@@ -18,9 +18,11 @@ import (
 var researchPlanPrompt string
 
 const (
-	planTimeout = 45 * time.Second
-	planMaxSize = 32 << 10
-	taskDBLimit = 5 * time.Second
+	planTimeout            = 45 * time.Second
+	workflowTaskTimeout    = 2 * time.Minute
+	automaticReviewTimeout = 15 * time.Minute
+	planMaxSize            = 32 << 10
+	taskDBLimit            = 5 * time.Second
 )
 
 type taskWorkers struct {
@@ -76,10 +78,10 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		}
 		deadline := planTimeout
 		if task.workflowRunID != "" || task.reviewVersionID != "" || task.selectionEdit || task.findingRecheck {
-			deadline = 2 * time.Minute
+			deadline = workflowTaskTimeout
 		}
 		if task.automaticReview {
-			deadline = 15 * time.Minute
+			deadline = automaticReviewTimeout
 		}
 		switch task.Kind {
 		case experimentComparisonTask:
