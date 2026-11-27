@@ -46,6 +46,22 @@ func TestExcerptReadsWordBodyInOrder(t *testing.T) {
 	}
 }
 
+func TestPreviewRecordsExplicitPageBreaks(t *testing.T) {
+	source := wordZIP(t, `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>甲</w:t><w:br w:type="page"/><w:t>乙</w:t><w:lastRenderedPageBreak/><w:t>丙</w:t></w:r></w:p>
+<w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>丁</w:t></w:r></w:p>
+<w:p><w:pPr><w:pageBreakBefore w:val="false"/></w:pPr><w:r><w:t>戊</w:t><w:br w:type="page"/></w:r></w:p>
+</w:body></w:document>`)
+	text, truncated, breaks, err := Preview(t.Context(), source, source.Size(), 100)
+	if err != nil || truncated || text != "甲\n乙丙\n丁\n戊\n" || len(breaks) != 2 || breaks[0] != len("甲\n") || breaks[1] != len("甲\n乙丙\n") {
+		t.Fatalf("unexpected preview: %q %t %v (%v)", text, truncated, breaks, err)
+	}
+	text, truncated, breaks, err = Preview(t.Context(), source, source.Size(), len("甲\n"))
+	if err != nil || !truncated || text != "甲\n" || len(breaks) != 0 {
+		t.Fatalf("truncated preview retained an empty section: %q %t %v (%v)", text, truncated, breaks, err)
+	}
+}
+
 func TestExcerptReportsUnsupportedDamagedAndOversizeDocuments(t *testing.T) {
 	const prefix = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>`
 	const suffix = `</w:t></w:r></w:p></w:body></w:document>`

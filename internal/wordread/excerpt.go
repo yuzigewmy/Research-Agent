@@ -28,43 +28,60 @@ var ErrDocument = errors.New("invalid or unsupported Word document")
 // bytes of UTF-8 text. Paragraphs, including those in table cells, are separated
 // by newlines. It validates the main XML part even after the limit is reached.
 func Excerpt(ctx context.Context, source io.ReaderAt, size int64, limit int) (text string, truncated bool, err error) {
+	result, err := readExcerpt(ctx, source, size, limit, false)
+	return result.text, result.truncated, err
+}
+
+// Preview also returns UTF-8 byte offsets after explicit page break markers.
+func Preview(ctx context.Context, source io.ReaderAt, size int64, limit int) (text string, truncated bool, pageBreaks []int, err error) {
+	result, err := readExcerpt(ctx, source, size, limit, true)
+	return result.text, result.truncated, result.pageBreaks, err
+}
+
+type excerptResult struct {
+	text       string
+	truncated  bool
+	pageBreaks []int
+}
+
+func readExcerpt(ctx context.Context, source io.ReaderAt, size int64, limit int, recordBreaks bool) (excerptResult, error) {
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return excerptResult{}, err
 	}
 	if limit <= 0 {
-		return "", false, errors.New("Word excerpt limit must be positive")
+		return excerptResult{}, errors.New("Word excerpt limit must be positive")
 	}
 	if source == nil || size <= 0 {
-		return "", false, ErrDocument
+		return excerptResult{}, ErrDocument
 	}
 	archive, err := zip.NewReader(contextReaderAt{ctx, source}, size)
 	if ctx.Err() != nil {
-		return "", false, ctx.Err()
+		return excerptResult{}, ctx.Err()
 	}
 	if err != nil && !errors.Is(err, zip.ErrInsecurePath) {
-		return "", false, fmt.Errorf("%w: open archive: %w", ErrDocument, err)
+		return excerptResult{}, fmt.Errorf("%w: open archive: %w", ErrDocument, err)
 	}
 	var part *zip.File
 	for _, entry := range archive.File {
 		if entry.Name == "word/document.xml" {
 			if part != nil {
-				return "", false, fmt.Errorf("%w: duplicate main XML part", ErrDocument)
+				return excerptResult{}, fmt.Errorf("%w: duplicate main XML part", ErrDocument)
 			}
 			part = entry
 		}
 	}
 	if part == nil || !part.Mode().IsRegular() || part.Flags&1 != 0 {
-		return "", false, fmt.Errorf("%w: missing or unsupported main XML part", ErrDocument)
+		return excerptResult{}, fmt.Errorf("%w: missing or unsupported main XML part", ErrDocument)
 	}
 	if part.UncompressedSize64 > maxDocumentXML {
-		return "", false, fmt.Errorf("%w: main XML part exceeds 16 MiB", ErrDocument)
+		return excerptResult{}, fmt.Errorf("%w: main XML part exceeds 16 MiB", ErrDocument)
 	}
 	raw, err := part.Open()
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", false, ctx.Err()
+			return excerptResult{}, ctx.Err()
 		}
-		return "", false, fmt.Errorf("%w: open main XML part: %w", ErrDocument, err)
+		return excerptResult{}, fmt.Errorf("%w: open main XML part: %w", ErrDocument, err)
 	}
 	defer raw.Close()
 
@@ -73,18 +90,22 @@ func Excerpt(ctx context.Context, source io.ReaderAt, size int64, limit int) (te
 	if prefix, _ := reader.Peek(3); string(prefix) == "\ufeff" {
 		_, _ = reader.Discard(3)
 	}
-	result := excerptBuffer{limit: limit}
+	result := excerptBuffer{limit: limit, recordBreaks: recordBreaks}
 	err = readBody(ctx, xml.NewDecoder(reader), &result)
 	if ctx.Err() != nil {
-		return "", false, ctx.Err()
+		return excerptResult{}, ctx.Err()
 	}
 	if limited.N == 0 {
-		return "", false, fmt.Errorf("%w: main XML part exceeds 16 MiB", ErrDocument)
+		return excerptResult{}, fmt.Errorf("%w: main XML part exceeds 16 MiB", ErrDocument)
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("%w: %w", ErrDocument, err)
+		return excerptResult{}, fmt.Errorf("%w: %w", ErrDocument, err)
 	}
-	return result.text.String(), result.truncated, nil
+	text := result.text.String()
+	for len(result.pageBreaks) > 0 && result.pageBreaks[len(result.pageBreaks)-1] >= len(text) {
+		result.pageBreaks = result.pageBreaks[:len(result.pageBreaks)-1]
+	}
+	return excerptResult{text: text, truncated: result.truncated, pageBreaks: result.pageBreaks}, nil
 }
 
 func readBody(ctx context.Context, decoder *xml.Decoder, result *excerptBuffer) error {
@@ -165,6 +186,16 @@ func readBody(ctx context.Context, decoder *xml.Decoder, result *excerptBuffer) 
 					result.append([]byte("\t"))
 				case "br", "cr":
 					result.append([]byte("\n"))
+					if token.Name.Local == "br" && wordAttribute(token, "type") == "page" {
+						result.markPageBreak()
+					}
+				}
+			case "pageBreakBefore":
+				if paragraphDepth != 0 && depth == paragraphDepth+2 && elements[depth-1] == (xml.Name{Space: namespace, Local: "pPr"}) {
+					switch wordAttribute(token, "val") {
+					case "", "true", "1", "on":
+						result.markPageBreak()
+					}
 				}
 			}
 		case xml.EndElement:
@@ -192,10 +223,29 @@ func readBody(ctx context.Context, decoder *xml.Decoder, result *excerptBuffer) 
 	}
 }
 
+func wordAttribute(element xml.StartElement, name string) string {
+	for _, attr := range element.Attr {
+		if attr.Name.Space == element.Name.Space && attr.Name.Local == name {
+			return attr.Value
+		}
+	}
+	return ""
+}
+
 type excerptBuffer struct {
-	text      strings.Builder
-	limit     int
-	truncated bool
+	text         strings.Builder
+	limit        int
+	truncated    bool
+	recordBreaks bool
+	pageBreaks   []int
+}
+
+func (e *excerptBuffer) markPageBreak() {
+	offset := e.text.Len()
+	if e.recordBreaks && !e.truncated && offset > 0 &&
+		(len(e.pageBreaks) == 0 || e.pageBreaks[len(e.pageBreaks)-1] < offset) {
+		e.pageBreaks = append(e.pageBreaks, offset)
+	}
 }
 
 func (e *excerptBuffer) append(value []byte) {

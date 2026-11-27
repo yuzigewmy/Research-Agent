@@ -33,7 +33,7 @@ func TestWordMaterialPreviewAndConversationKeepSource(t *testing.T) {
 			return
 		}
 		last := request.Messages[len(request.Messages)-1].Content
-		if !strings.Contains(last, oldText) || !strings.Contains(last, cell) || !strings.Contains(last, digest) || strings.Contains(last, newText) {
+		if !strings.Contains(last, oldText) || !strings.Contains(last, cell) || !strings.Contains(last, digest) || strings.Contains(last, newText) || strings.Contains(last, `"sections":`) {
 			t.Error("model input did not use the selected original and its table text")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -94,7 +94,8 @@ func TestWordMaterialPreviewAndConversationKeepSource(t *testing.T) {
 	item := base + "/materials/" + selectedID
 	var excerpt MaterialPreview
 	decode(send(http.MethodGet, item+"/preview", "", nil, http.StatusOK), &excerpt)
-	if !strings.Contains(excerpt.Text, oldText) || !strings.Contains(excerpt.Text, cell) || excerpt.Truncated {
+	if !strings.Contains(excerpt.Text, oldText) || !strings.Contains(excerpt.Text, cell) || excerpt.Truncated ||
+		len(excerpt.Sections) != 2 || strings.TrimSpace(excerpt.Sections[0]) != oldText || strings.TrimSpace(excerpt.Sections[1]) != cell {
 		t.Fatalf("wrong preview: %+v", excerpt)
 	}
 	if got := send(http.MethodGet, item+"/download", "", nil, http.StatusOK).Body.Bytes(); !bytes.Equal(got, original) {
@@ -122,7 +123,7 @@ func wordMaterialFixture(t *testing.T, paragraph, cell string) []byte {
 	parts := [][2]string{
 		{"[Content_Types].xml", `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`},
 		{"_rels/.rels", `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`},
-		{"word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>` + paragraph + `</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>` + cell + `</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>`},
+		{"word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>` + paragraph + `</w:t><w:br w:type="page"/></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>` + cell + `</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>`},
 	}
 	for _, part := range parts {
 		writer, err := archive.Create(part[0])

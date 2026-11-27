@@ -33,6 +33,21 @@ function mergeMaterials(current: Material[], incoming: Material[]) {
   return [...byId.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 }
 
+function WordPreviewSections({ sections, name }: { sections: string[]; name: string }) {
+  const [index, setIndex] = useState(0)
+  return <div className="material-word-sections">
+    <p className="material-note">按显式分页标记分段。实际页码由排版引擎决定。</p>
+    <div className="material-actions">
+      <button className="button outline" type="button" disabled={index === 0}
+        onClick={() => setIndex(index - 1)}>上一段</button>
+      <span className="material-note" role="status">第 {index + 1} 段，共 {sections.length} 段</span>
+      <button className="button outline" type="button" disabled={index === sections.length - 1}
+        onClick={() => setIndex(index + 1)}>下一段</button>
+    </div>
+    <pre className="material-text" tabIndex={0} aria-label={`文本预览：${name}`} dir="auto">{sections[index]}</pre>
+  </div>
+}
+
 function MaterialPreviewContent({ projectId, material }: { projectId: string; material: Material }) {
   const [status, setStatus] = useState<PreviewStatus>({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
@@ -58,12 +73,13 @@ function MaterialPreviewContent({ projectId, material }: { projectId: string; ma
       }}>重试</button>
     </div>
   )
-  const { text, truncated } = status.preview
+  const { text, truncated, sections } = status.preview
   const isWord = material.format === 'word'
   return (
     <>
-      {text ? <pre className="material-text" tabIndex={0} aria-label={`文本预览：${material.name}`} dir="auto">{text}</pre>
-        : <p className="material-note" role="status">{isWord ? '未读取到正文或表格文字。' : '文件无文本内容'}</p>}
+      {isWord && sections ? <WordPreviewSections sections={sections} name={material.name} />
+        : text ? <pre className="material-text" tabIndex={0} aria-label={`文本预览：${material.name}`} dir="auto">{text}</pre>
+          : <p className="material-note" role="status">{isWord ? '未读取到正文或表格文字。' : '文件无文本内容'}</p>}
       {truncated && <p className="material-note" role="status">
         {isWord ? '文字节选已截断，可下载 Word 原件。' : '预览已截断，可下载原件查看全文。'}
       </p>}

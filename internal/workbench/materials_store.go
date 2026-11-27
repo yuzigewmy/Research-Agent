@@ -51,8 +51,9 @@ type Material struct {
 }
 
 type MaterialPreview struct {
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated"`
+	Text      string   `json:"text"`
+	Truncated bool     `json:"truncated"`
+	Sections  []string `json:"sections,omitempty"`
 }
 
 var errMaterialNotText = errors.New("material prefix is not UTF-8 text")
@@ -198,13 +199,20 @@ func (s *Store) previewMaterial(ctx context.Context, material Material, limit in
 	if material.Kind != "text" && material.Format != "word" {
 		return MaterialPreview{}, errMaterialNotText
 	}
-	return s.materialExcerpt(ctx, material.SHA256, material.Format, limit)
+	if material.Format == "word" {
+		return s.wordExcerpt(ctx, material.SHA256, limit, true)
+	}
+	return s.previewObject(material.SHA256, limit)
 }
 
 func (s *Store) materialExcerpt(ctx context.Context, digest, format string, limit int) (MaterialPreview, error) {
 	if format != "word" {
 		return s.previewObject(digest, limit)
 	}
+	return s.wordExcerpt(ctx, digest, limit, false)
+}
+
+func (s *Store) wordExcerpt(ctx context.Context, digest string, limit int, includeSections bool) (MaterialPreview, error) {
 	file, err := s.openObject(digest)
 	if err != nil {
 		return MaterialPreview{}, err
@@ -214,11 +222,30 @@ func (s *Store) materialExcerpt(ctx context.Context, digest, format string, limi
 	if err != nil {
 		return MaterialPreview{}, err
 	}
-	text, truncated, err := wordread.Excerpt(ctx, file, info.Size(), limit)
+	var preview MaterialPreview
+	var breaks []int
+	if includeSections {
+		preview.Text, preview.Truncated, breaks, err = wordread.Preview(ctx, file, info.Size(), limit)
+	} else {
+		preview.Text, preview.Truncated, err = wordread.Excerpt(ctx, file, info.Size(), limit)
+	}
 	if errors.Is(err, wordread.ErrDocument) {
 		return MaterialPreview{}, errMaterialNotText
 	}
-	return MaterialPreview{Text: text, Truncated: truncated}, err
+	if len(breaks) > 0 {
+		start := 0
+		for _, end := range append(breaks, len(preview.Text)) {
+			section := preview.Text[start:end]
+			if strings.TrimSpace(section) != "" {
+				preview.Sections = append(preview.Sections, section)
+			}
+			start = end
+		}
+		if len(preview.Sections) < 2 {
+			preview.Sections = nil
+		}
+	}
+	return preview, err
 }
 
 func (s *Store) previewObject(digest string, limit int) (MaterialPreview, error) {

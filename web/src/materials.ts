@@ -18,6 +18,7 @@ export interface MaterialPage {
 export interface MaterialPreview {
   text: string
   truncated: boolean
+  sections?: string[]
 }
 
 export const materialSizeLimit = 64 * 1024 * 1024
@@ -83,6 +84,8 @@ export async function uploadMaterial(projectId: string, file: File, signal: Abor
 function isMaterialPreview(value: unknown): value is MaterialPreview {
   const preview = value as Partial<MaterialPreview> | null
   return !!preview && typeof preview.text === 'string' && typeof preview.truncated === 'boolean'
+    && (preview.sections === undefined || (Array.isArray(preview.sections) && preview.sections.length >= 2
+      && preview.sections.every(section => typeof section === 'string')))
 }
 
 export function getMaterialPreview(projectId: string, materialId: string, signal: AbortSignal) {
