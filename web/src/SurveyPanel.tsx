@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
 import { ReportCoding } from './SurveyCoding'
+import { SurveyFieldMapping } from './SurveyFieldMapping'
 import { ReportRegression } from './SurveyRegression'
 import {
-  analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, readSurvey,
-  reliabilityItemLimit, surveyDownloadPath,
+  analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, mapSurveySettings,
+  readSurvey, reliabilityItemLimit, surveyDownloadPath,
 } from './surveys'
-import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary, SurveyWeighting } from './surveys'
+import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyFieldPair, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary, SurveyWeighting } from './surveys'
 import './survey.css'
 
 const reportDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
@@ -17,7 +19,7 @@ const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } a
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
 type SurveyCalculation = 'analyze' | 'coding' | 'weighting' | 'cross-tab' | 'reliability' | 'regression'
-type SurveyOperation = SurveyCalculation | 'read'
+type SurveyOperation = SurveyCalculation | 'map-settings' | 'read'
 const surveyOperationLabels: Record<SurveyOperation, string> = {
   analyze: '正在分析并保存报告…',
   coding: '正在应用分类编码并保存报告…',
@@ -25,6 +27,7 @@ const surveyOperationLabels: Record<SurveyOperation, string> = {
   'cross-tab': '正在计算交叉统计…',
   reliability: '正在计算量表信度…',
   regression: '正在计算线性回归…',
+  'map-settings': '正在沿用历史分析设置并保存报告…',
   read: '正在打开报告…',
 }
 
@@ -421,11 +424,12 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
   </section>
 }
 
-function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError, onAnalyze }: {
+function SurveyAnalysis({ projectId, run, busy, newerMaterial, settingsMapping, calculationError, onAnalyze }: {
   projectId: string
   run: SurveyRun
   busy: boolean
   newerMaterial: boolean
+  settingsMapping: ReactNode
   calculationError?: { kind: SurveyOperation; message: string }
   onAnalyze: (options: SurveyOptions, kind?: SurveyCalculation) => void
 }) {
@@ -469,6 +473,17 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
     </div>
     {options.sheet && <p className="survey-note">工作表 <bdi>{options.sheet}</bdi></p>}
     <p className="survey-note">原资料 SHA-256 <code>{run.materialSha256}</code></p>
+    {options.settingsSource && <details className="survey-details" data-survey-settings-source>
+      <summary>设置来源与字段对应</summary>
+      <div className="survey-section">
+        <p className="survey-note">历史报告 <code>{options.settingsSource.analysisId}</code></p>
+        {options.settingsSource.fields.length > 0 ? <dl className="survey-frequencies" aria-label="历史字段与当前字段">
+          {options.settingsSource.fields.map(({ from, to }) => <div key={from}>
+            <dt><bdi>{from}</bdi></dt><dd><bdi>{to}</bdi></dd>
+          </div>)}
+        </dl> : <p className="survey-note">来源设置没有引用字段。</p>}
+      </div>
+    </details>}
     {newerMaterial && <p className="survey-note">资料列表中有较新的同名文件。当前报告仍基于此摘要对应的旧版资料。</p>}
     <dl className="survey-counts">
       <div><dt>总答卷</dt><dd>{report.total}</dd></div>
@@ -476,6 +491,7 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
       <div><dt>无效</dt><dd>{report.invalid}</dd></div>
       <div><dt>待复核</dt><dd>{report.pending}</dd></div>
     </dl>
+    {settingsMapping}
     <details className="survey-details">
       <summary>清洗规则（{options.requiredColumns?.length ?? 0} 列必答，{options.duplicateColumns?.length ?? 0} 列查重）</summary>
       <div className="survey-section">
@@ -624,12 +640,21 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
     }
   }
 
-  function analyze(materialId: string, options: SurveyOptions, kind: SurveyCalculation = 'analyze') {
+  function submit(kind: SurveyCalculation | 'map-settings', key: string, request: (requestId: string, signal: AbortSignal) => Promise<SurveyRun>) {
     if (active.current) return
-    const key = JSON.stringify({ materialId, options })
     if (attempt.current?.key !== key) attempt.current = { key, requestId: crypto.randomUUID() }
     const { requestId } = attempt.current
-    void open(kind, (signal) => analyzeSurvey(projectId, { requestId, materialId, options }, signal))
+    void open(kind, (signal) => request(requestId, signal))
+  }
+
+  function analyze(materialId: string, options: SurveyOptions, kind: SurveyCalculation = 'analyze') {
+    submit(kind, JSON.stringify({ materialId, options }),
+      (requestId, signal) => analyzeSurvey(projectId, { requestId, materialId, options }, signal))
+  }
+
+  function applySettings(sourceAnalysisId: string, targetAnalysisId: string, fields: SurveyFieldPair[]) {
+    submit('map-settings', JSON.stringify({ sourceAnalysisId, targetAnalysisId, fields }),
+      (requestId, signal) => mapSurveySettings(projectId, sourceAnalysisId, { requestId, targetAnalysisId, fields }, signal))
   }
 
   return <section className="survey-panel" aria-labelledby={id}>
@@ -676,6 +701,11 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
     {busy && <p className="survey-note" role="status">{surveyOperationLabels[busy]}</p>}
     {failure && (failure.kind === 'analyze' || failure.kind === 'read') && <p className="form-error" role="alert">{failure.message}</p>}
     {run && <SurveyAnalysis key={run.analysisId} run={run} projectId={projectId} busy={!!busy} newerMaterial={newerMaterial}
+      settingsMapping={<SurveyFieldMapping projectId={projectId} target={run} reports={reports.items}
+        historyControls={<ListControls list={reports} label="报告" />} loadingHistory={reports.loading} busy={!!busy}
+        error={failure?.kind === 'map-settings' ? failure.message : undefined}
+        onEdit={() => setFailure((current) => current?.kind === 'map-settings' ? undefined : current)}
+        onApply={(sourceId, fields) => applySettings(sourceId, run.analysisId, fields)} />}
       calculationError={failure} onAnalyze={(options, kind) => analyze(run.materialId, options, kind)} />}
   </section>
 }

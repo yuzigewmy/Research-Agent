@@ -38,6 +38,18 @@ type Options struct {
 	Sheet            string              `json:"sheet,omitempty"`
 	WeightColumn     string              `json:"weightColumn,omitempty"`
 	CategoryMappings []CategoryMapping   `json:"categoryMappings,omitempty"`
+	SettingsSource   *SettingsSource     `json:"settingsSource,omitempty"`
+}
+
+// SettingsSource records the historical report and confirmed column pairs used to transfer settings.
+type SettingsSource struct {
+	AnalysisID string      `json:"analysisId"`
+	Fields     []FieldPair `json:"fields"`
+}
+
+type FieldPair struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // Review resolves a pending response by its one-based record number after the header.

@@ -70,7 +70,18 @@ export interface SurveyCategoryMapping {
 export const categoryMappingLimit = 64
 export const categoryMappingValueByteLimit = 128
 
+export interface SurveyFieldPair {
+  from: string
+  to: string
+}
+
+export interface SurveySettingsSource {
+  analysisId: string
+  fields: SurveyFieldPair[]
+}
+
 export interface SurveyOptions {
+  settingsSource?: SurveySettingsSource
   categoryMappings?: SurveyCategoryMapping[]
   sheet?: string
   requiredColumns?: string[]
@@ -94,6 +105,12 @@ export interface SurveyInput {
   requestId: string
   materialId: string
   options: SurveyOptions
+}
+
+export interface SurveyFieldMappingInput {
+  requestId: string
+  targetAnalysisId: string
+  fields: SurveyFieldPair[]
 }
 
 interface SurveyCounts {
@@ -210,10 +227,25 @@ function isCategoryMappings(value: unknown): value is SurveyCategoryMapping[] {
   })
 }
 
+function isSettingsSource(value: unknown): value is SurveySettingsSource {
+  const source = value as Partial<SurveySettingsSource> | null
+  if (!source || !isId(source.analysisId) || !Array.isArray(source.fields)) return false
+  const from = new Set<string>()
+  const to = new Set<string>()
+  for (const pair of source.fields) {
+    if (!pair || typeof pair.from !== 'string' || !pair.from || typeof pair.to !== 'string' || !pair.to
+      || from.has(pair.from) || to.has(pair.to)) return false
+    from.add(pair.from)
+    to.add(pair.to)
+  }
+  return true
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
   return (options.sheet === undefined || isSheetName(options.sheet))
+    && (options.settingsSource === undefined || isSettingsSource(options.settingsSource))
     && (options.categoryMappings === undefined || isCategoryMappings(options.categoryMappings))
     && (options.requiredColumns === undefined || isStringList(options.requiredColumns))
     && (options.duplicateColumns === undefined || isStringList(options.duplicateColumns))
@@ -367,6 +399,13 @@ export async function readSurvey(projectId: string, analysisId: string, signal: 
 export async function analyzeSurvey(projectId: string, input: SurveyInput, signal: AbortSignal) {
   return request(surveysPath(projectId), (value): value is SurveyRun =>
     isRun(value) && value.materialId === input.materialId && value.options.sheet === input.options.sheet, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
+  })
+}
+
+export async function mapSurveySettings(projectId: string, sourceAnalysisId: string, input: SurveyFieldMappingInput, signal: AbortSignal) {
+  return request(`${surveyPath(projectId, sourceAnalysisId)}/map-settings`, (value): value is SurveyRun =>
+    isRun(value) && value.options.settingsSource?.analysisId === sourceAnalysisId, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
   })
 }

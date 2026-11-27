@@ -123,7 +123,7 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 	if run.Options.Regression == nil || *run.Options.Regression != (survey.RegressionOptions{PredictorColumn: "Scale A", OutcomeColumn: "Scale B"}) {
 		t.Fatalf("regression settings changed: %+v", run.Options.Regression)
 	}
-	newCSV, _, err := store.saveMaterial(ctx, first, csv.Name, strings.NewReader("Score,Station,Choice\n9,East,Yes\n9,East,Yes\n"))
+	newCSV, _, err := store.saveMaterial(ctx, first, csv.Name, strings.NewReader("Rating,Site,Choice,Item A,Item B,Weight2\n9,South,Yes,1,4,0.4\n9,South,Yes,2,5,0.2\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 	}
 	request(http.MethodPost, base, strings.Replace(body, "Confirmed", "Amended", 1), http.StatusConflict)
 	request(http.MethodPost, base, strings.Replace(body, `" scale b ","SCALE A"`, `"Scale A","Scale B"`, 1), http.StatusConflict)
-	newBody := fmt.Sprintf(`{"requestId":"analysis-2","materialId":%q,"options":{"crossTab":{"rowColumn":"Station","columnColumn":"Choice"}}}`, newCSV.MaterialID)
+	newBody := fmt.Sprintf(`{"requestId":"analysis-2","materialId":%q,"options":{"crossTab":{"rowColumn":"Site","columnColumn":"Choice"}}}`, newCSV.MaterialID)
 	var replacement struct {
 		AnalysisID     string        `json:"analysisId"`
 		MaterialSHA256 string        `json:"materialSha256"`
@@ -166,6 +166,39 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		!reflect.DeepEqual(replacement.Report.CrossTab.Counts, [][]int{{2}}) {
 		t.Fatalf("same-name material did not produce a separate report: %s (%v)", updated, err)
 	}
+	mappingPath := base + "/" + codedRun.AnalysisID + "/map-settings"
+	mappingBody := fmt.Sprintf(`{"requestId":"mapped","targetAnalysisId":%q,"fields":[{"from":"Score","to":"Rating"},{"from":"Station","to":"Site"},{"from":"Choice","to":"Choice"},{"from":"Scale A","to":"Item A"},{"from":"Scale B","to":"Item B"},{"from":"Weight","to":"Weight2"}]}`, replacement.AnalysisID)
+	request(http.MethodPost, strings.Replace(mappingPath, first, second, 1), mappingBody, http.StatusNotFound)
+	request(http.MethodPost, mappingPath, strings.Replace(mappingBody, `{"from":"Weight","to":"Weight2"}`, `{"from":"Weight","to":"Rating"}`, 1), http.StatusUnprocessableEntity)
+	mapped := request(http.MethodPost, mappingPath, mappingBody, http.StatusCreated).Body.String()
+	var transferred struct {
+		surveyRunInfo
+		Options survey.Options
+		Report  survey.Report
+	}
+	if err := json.Unmarshal([]byte(mapped), &transferred); err != nil {
+		t.Fatal(err)
+	}
+	settings := transferred.Options
+	if transferred.MaterialSHA256 != newCSV.SHA256 || transferred.Report.Valid != 1 || transferred.Report.Invalid != 1 ||
+		settings.SettingsSource == nil || settings.SettingsSource.AnalysisID != codedRun.AnalysisID || len(settings.SettingsSource.Fields) != 6 ||
+		len(settings.Reviews) != 0 || settings.WeightColumn != "Weight2" || settings.CrossTab == nil || settings.CrossTab.RowColumn != "Site" ||
+		!reflect.DeepEqual(settings.Reliability.Columns, []string{"Item B", "Item A"}) || settings.Regression.PredictorColumn != "Item A" ||
+		!reflect.DeepEqual(settings.CategoryMappings, []survey.CategoryMapping{{Column: "Site", From: "South", To: "North"}}) ||
+		!reflect.DeepEqual(transferred.Report.CrossTab.RowLabels, []string{"North"}) || transferred.Report.Weighting.TotalWeight != "0.4" {
+		t.Fatalf("wrong mapped settings or report: %s", mapped)
+	}
+	if request(http.MethodPost, mappingPath, mappingBody, http.StatusOK).Body.String() != mapped ||
+		request(http.MethodGet, base+"/"+transferred.AnalysisID+"/download", "", http.StatusOK).Body.String() != mapped {
+		t.Fatal("replay or download changed the mapped report")
+	}
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recalculate := fmt.Sprintf(`{"requestId":"mapped-recalculate","materialId":%q,"options":%s}`, newCSV.MaterialID, settingsJSON)
+	request(http.MethodPost, base, recalculate, http.StatusCreated)
+	request(http.MethodPost, base, strings.Replace(recalculate, codedRun.AnalysisID, run.AnalysisID, 1), http.StatusUnprocessableEntity)
 	request(http.MethodPost, base, fmt.Sprintf(`{"requestId":"broken","materialId":%q}`, bad.MaterialID), http.StatusUnprocessableEntity)
 	request(http.MethodPost, projectsPath+"/"+second+"/surveys", body, http.StatusNotFound)
 	request(http.MethodGet, projectsPath+"/"+second+"/surveys/"+run.AnalysisID, "", http.StatusNotFound)

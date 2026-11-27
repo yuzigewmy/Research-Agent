@@ -22,6 +22,7 @@ type surveyCreateInput struct {
 		Sheet            string                     `json:"sheet"`
 		WeightColumn     string                     `json:"weightColumn"`
 		CategoryMappings []survey.CategoryMapping   `json:"categoryMappings"`
+		SettingsSource   *survey.SettingsSource     `json:"settingsSource"`
 		Reviews          []struct {
 			Row    int    `json:"row"`
 			Accept *bool  `json:"accept"`
@@ -36,6 +37,7 @@ func (s *Store) registerSurveys(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+path, s.handleCreateSurvey)
 	mux.HandleFunc("GET "+path+"/{analysisId}", s.handleGetSurvey(false))
 	mux.HandleFunc("GET "+path+"/{analysisId}/download", s.handleGetSurvey(true))
+	mux.HandleFunc("POST "+path+"/{analysisId}/map-settings", s.handleMapSurveySettings)
 	mux.HandleFunc(path, methodNotAllowed("GET, HEAD, POST"))
 	mux.HandleFunc(path+"/{analysisId}", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc(path+"/{analysisId}/download", methodNotAllowed("GET, HEAD"))
@@ -86,8 +88,17 @@ func (s *Store) handleCreateSurvey(w http.ResponseWriter, r *http.Request) {
 		}
 		options.Reviews = append(options.Reviews, survey.Review{Row: review.Row, Accept: *review.Accept, Reason: review.Reason})
 	}
+	options.SettingsSource = input.Options.SettingsSource
+	if err := s.verifySurveySettingsSource(r.Context(), r.PathValue("id"), input.MaterialID, options); err != nil {
+		writeSurveyError(w, "check survey settings source", err)
+		return
+	}
+	s.respondToSurveyCreation(w, r, input.RequestID, input.MaterialID, options)
+}
+
+func (s *Store) respondToSurveyCreation(w http.ResponseWriter, r *http.Request, requestID, materialID string, options survey.Options) {
 	projectID := r.PathValue("id")
-	run, created, err := s.createSurveyRun(r.Context(), projectID, input.RequestID, input.MaterialID, options)
+	run, created, err := s.createSurveyRun(r.Context(), projectID, requestID, materialID, options)
 	if err != nil {
 		writeSurveyError(w, "create survey run", err)
 		return
