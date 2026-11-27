@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
 import { ReportCoding } from './SurveyCoding'
+import { ReportAdvancedStats } from './SurveyAdvancedStats'
+import type { AdvancedStatMethod } from './SurveyAdvancedStats'
 import { SurveyFieldMapping } from './SurveyFieldMapping'
 import { ReportRegression } from './SurveyRegression'
 import {
@@ -18,7 +20,7 @@ const rowPageSize = 20
 const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
-type SurveyCalculation = 'analyze' | 'coding' | 'weighting' | 'cross-tab' | 'reliability' | 'regression'
+type SurveyCalculation = 'analyze' | 'coding' | 'weighting' | 'cross-tab' | 'reliability' | 'regression' | 'advanced'
 type SurveyOperation = SurveyCalculation | 'map-settings' | 'read'
 const surveyOperationLabels: Record<SurveyOperation, string> = {
   analyze: '正在分析并保存报告…',
@@ -27,6 +29,7 @@ const surveyOperationLabels: Record<SurveyOperation, string> = {
   'cross-tab': '正在计算交叉统计…',
   reliability: '正在计算量表信度…',
   regression: '正在计算线性回归…',
+  advanced: '正在计算高级统计并保存报告…',
   'map-settings': '正在沿用历史分析设置并保存报告…',
   read: '正在打开报告…',
 }
@@ -424,13 +427,15 @@ function ReportRows({ rows, busy, rulesChanged, onReview }: {
   </section>
 }
 
-function SurveyAnalysis({ projectId, run, busy, newerMaterial, settingsMapping, calculationError, onAnalyze }: {
+function SurveyAnalysis({ projectId, run, busy, newerMaterial, settingsMapping, calculationError, activeAdvancedTab, onAdvancedTabChange, onAnalyze }: {
   projectId: string
   run: SurveyRun
   busy: boolean
   newerMaterial: boolean
   settingsMapping: ReactNode
   calculationError?: { kind: SurveyOperation; message: string }
+  activeAdvancedTab: AdvancedStatMethod
+  onAdvancedTabChange: (tab: AdvancedStatMethod) => void
   onAnalyze: (options: SurveyOptions, kind?: SurveyCalculation) => void
 }) {
   const { report, options } = run
@@ -528,6 +533,13 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, settingsMapping, 
     <ReportRegression summaries={report.summaries} result={report.regression} busy={busy}
       error={calculationError?.kind === 'regression' ? calculationError.message : undefined}
       onCalculate={(regression) => onAnalyze({ ...options, regression }, 'regression')} />
+    <ReportAdvancedStats summaries={report.summaries} report={report} activeTab={activeAdvancedTab} busy={busy}
+      error={calculationError?.kind === 'advanced' ? calculationError.message : undefined}
+      onTabChange={onAdvancedTabChange}
+      onCalculate={(patch, tab) => {
+        onAdvancedTabChange(tab)
+        onAnalyze({ ...options, ...patch }, 'advanced')
+      }} />
     <ReportRows rows={report.rows} busy={busy} rulesChanged={rulesChanged} onReview={(reviews) => {
       onAnalyze({ ...options, reviews: [...(options.reviews ?? []), ...reviews].sort((a, b) => a.row - b.row) })
     }} />
@@ -606,6 +618,7 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
   const [run, setRun] = useState<SurveyRun>()
   const [busy, setBusy] = useState<SurveyOperation>()
   const [failure, setFailure] = useState<{ kind: SurveyOperation; message: string }>()
+  const [activeAdvancedTab, setActiveAdvancedTab] = useState<AdvancedStatMethod>('multiple-regression')
   const active = useRef<AbortController | null>(null)
   const attempt = useRef<{ key: string; requestId: string } | null>(null)
   const currentMaterial = surveyFiles.find((file) => file.materialId === materialId)
@@ -706,6 +719,7 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
         error={failure?.kind === 'map-settings' ? failure.message : undefined}
         onEdit={() => setFailure((current) => current?.kind === 'map-settings' ? undefined : current)}
         onApply={(sourceId, fields) => applySettings(sourceId, run.analysisId, fields)} />}
-      calculationError={failure} onAnalyze={(options, kind) => analyze(run.materialId, options, kind)} />}
+      calculationError={failure} activeAdvancedTab={activeAdvancedTab} onAdvancedTabChange={setActiveAdvancedTab}
+      onAnalyze={(options, kind) => analyze(run.materialId, options, kind)} />}
   </section>
 }

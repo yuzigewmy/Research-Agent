@@ -33,6 +33,217 @@ export interface SurveyWeightedCrossTab {
 export const crossTabCategoryLimit = 20
 export const crossTabLabelByteLimit = 128
 export const reliabilityItemLimit = 20
+export const multipleRegressionPredictorLimit = 8
+export const factorAnalysisColumnLimit = 20
+export const conjointAttributeLimit = 6
+export const cfaConstructLimit = 6
+export const cfaItemLimit = 10
+
+export interface SurveyMultipleRegressionOptions {
+  outcomeColumn: string
+  predictorColumns: string[]
+}
+
+export interface SurveyMultipleRegressionCoefficient {
+  name: string
+  coefficient: number
+  stdError: number
+  tStat?: number
+}
+
+export interface SurveyMultipleRegressionFit {
+  intercept: SurveyMultipleRegressionCoefficient
+  predictors: SurveyMultipleRegressionCoefficient[]
+  rSquared?: number
+  adjustedRSquared?: number
+  fStat?: number
+  dfModel: number
+  dfResidual: number
+}
+
+export interface SurveyMultipleRegression extends SurveyMultipleRegressionOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  fit?: SurveyMultipleRegressionFit
+  unavailableReason?: string
+}
+
+export interface SurveyFactorAnalysisOptions {
+  columns: string[]
+  factors?: number
+}
+
+export interface SurveyFactorSummary {
+  factor: number
+  eigenvalue: number
+  variancePercent: number
+  cumulativeVariancePercent: number
+  rotatedSSLoadings: number
+  rotatedVariancePercent: number
+}
+
+export interface SurveyFactorVariableResult {
+  column: string
+  msa: number
+  communality: number
+  loadings: number[]
+}
+
+export interface SurveyFactorAnalysisResult {
+  kmo: number
+  bartlettChiSquare: number
+  bartlettDf: number
+  bartlettPValue: number
+  factorCount: number
+  autoFactors: boolean
+  eigenvalues: number[]
+  factors: SurveyFactorSummary[]
+  variables: SurveyFactorVariableResult[]
+  correlationMatrix: number[][]
+}
+
+export interface SurveyFactorAnalysis extends SurveyFactorAnalysisOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  result?: SurveyFactorAnalysisResult
+  unavailableReason?: string
+}
+
+export interface SurveyKanoOptions {
+  functionalColumn: string
+  dysfunctionalColumn: string
+}
+
+export interface SurveyKanoCategory {
+  code: string
+  label: string
+  count: number
+  share: number
+}
+
+export interface SurveyKanoResult {
+  dominantCode: string
+  dominantLabel: string
+  categories: SurveyKanoCategory[]
+  better?: number
+  worse?: number
+}
+
+export interface SurveyKano extends SurveyKanoOptions {
+  included: number
+  missing: number
+  invalid: number
+  result?: SurveyKanoResult
+  unavailableReason?: string
+}
+
+export interface SurveyPSMOptions {
+  tooCheapColumn: string
+  cheapColumn: string
+  expensiveColumn: string
+  tooExpensiveColumn: string
+}
+
+export interface SurveyPSMCurvePoint {
+  price: number
+  tooCheap: number
+  cheap: number
+  notCheap: number
+  expensive: number
+  notExpensive: number
+  tooExpensive: number
+}
+
+export interface SurveyPSMResult {
+  pmc: number
+  pme: number
+  opp: number
+  idp: number
+  acceptableRange: [number, number]
+  curve: SurveyPSMCurvePoint[]
+}
+
+export interface SurveyPSM extends SurveyPSMOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  inconsistent: number
+  result?: SurveyPSMResult
+  unavailableReason?: string
+}
+
+export interface SurveyConjointOptions {
+  ratingColumn: string
+  attributeColumns: string[]
+}
+
+export interface SurveyConjointLevelUtility {
+  level: string
+  count: number
+  partWorth: number
+}
+
+export interface SurveyConjointAttributeResult {
+  column: string
+  range: number
+  importancePercent: number
+  levels: SurveyConjointLevelUtility[]
+}
+
+export interface SurveyConjointResult {
+  intercept: number
+  rSquared?: number
+  attributes: SurveyConjointAttributeResult[]
+}
+
+export interface SurveyConjoint extends SurveyConjointOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  result?: SurveyConjointResult
+  unavailableReason?: string
+}
+
+export interface SurveyCFAConstructOptions {
+  name: string
+  columns: string[]
+}
+
+export interface SurveyCFAOptions {
+  constructs: SurveyCFAConstructOptions[]
+}
+
+export interface SurveyCFAItemResult {
+  column: string
+  loading: number
+}
+
+export interface SurveyCFAConstructResult {
+  name: string
+  items: SurveyCFAItemResult[]
+  cr: number
+  ave: number
+  sqrtAve: number
+  maxInterConstructAbsCorr: number
+  convergentValid: boolean
+  discriminantValid: boolean
+}
+
+export interface SurveyCFAResult {
+  constructs: SurveyCFAConstructResult[]
+  correlationMatrix: number[][]
+  discriminantValid: boolean
+}
+
+export interface SurveyCFA extends SurveyCFAOptions {
+  included: number
+  missing: number
+  nonNumeric: number
+  result?: SurveyCFAResult
+  unavailableReason?: string
+}
 
 export interface SurveyReliabilityOptions {
   columns: string[]
@@ -90,6 +301,12 @@ export interface SurveyOptions {
   crossTab?: SurveyCrossTabOptions
   reliability?: SurveyReliabilityOptions
   regression?: SurveyRegressionOptions
+  multipleRegression?: SurveyMultipleRegressionOptions
+  factorAnalysis?: SurveyFactorAnalysisOptions
+  kano?: SurveyKanoOptions
+  psm?: SurveyPSMOptions
+  conjoint?: SurveyConjointOptions
+  cfa?: SurveyCFAOptions
   weightColumn?: string
 }
 
@@ -157,6 +374,12 @@ export interface SurveyReport extends SurveyCounts {
   crossTab?: SurveyCrossTab
   reliability?: SurveyReliability
   regression?: SurveyRegression
+  multipleRegression?: SurveyMultipleRegression
+  factorAnalysis?: SurveyFactorAnalysis
+  kano?: SurveyKano
+  psm?: SurveyPSM
+  conjoint?: SurveyConjoint
+  cfa?: SurveyCFA
   weighting?: SurveyWeighting
 }
 
@@ -241,6 +464,51 @@ function isSettingsSource(value: unknown): value is SurveySettingsSource {
   return true
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isMultipleRegressionOptions(value: unknown): value is SurveyMultipleRegressionOptions {
+  const opts = value as Partial<SurveyMultipleRegressionOptions> | null
+  return !!opts && typeof opts.outcomeColumn === 'string' && opts.outcomeColumn.length > 0
+    && isStringList(opts.predictorColumns) && opts.predictorColumns.length >= 2
+    && opts.predictorColumns.length <= multipleRegressionPredictorLimit
+}
+
+function isFactorAnalysisOptions(value: unknown): value is SurveyFactorAnalysisOptions {
+  const opts = value as Partial<SurveyFactorAnalysisOptions> | null
+  return !!opts && isStringList(opts.columns) && opts.columns.length >= 3 && opts.columns.length <= factorAnalysisColumnLimit
+    && (opts.factors === undefined || (isCount(opts.factors) && opts.factors <= opts.columns.length))
+}
+
+function isKanoOptions(value: unknown): value is SurveyKanoOptions {
+  const opts = value as Partial<SurveyKanoOptions> | null
+  return !!opts && typeof opts.functionalColumn === 'string' && opts.functionalColumn.length > 0
+    && typeof opts.dysfunctionalColumn === 'string' && opts.dysfunctionalColumn.length > 0
+}
+
+function isPSMOptions(value: unknown): value is SurveyPSMOptions {
+  const opts = value as Partial<SurveyPSMOptions> | null
+  return !!opts && typeof opts.tooCheapColumn === 'string' && opts.tooCheapColumn.length > 0
+    && typeof opts.cheapColumn === 'string' && opts.cheapColumn.length > 0
+    && typeof opts.expensiveColumn === 'string' && opts.expensiveColumn.length > 0
+    && typeof opts.tooExpensiveColumn === 'string' && opts.tooExpensiveColumn.length > 0
+}
+
+function isConjointOptions(value: unknown): value is SurveyConjointOptions {
+  const opts = value as Partial<SurveyConjointOptions> | null
+  return !!opts && typeof opts.ratingColumn === 'string' && opts.ratingColumn.length > 0
+    && isStringList(opts.attributeColumns) && opts.attributeColumns.length >= 1
+    && opts.attributeColumns.length <= conjointAttributeLimit
+}
+
+function isCFAOptions(value: unknown): value is SurveyCFAOptions {
+  const opts = value as Partial<SurveyCFAOptions> | null
+  return !!opts && Array.isArray(opts.constructs) && opts.constructs.length >= 2 && opts.constructs.length <= cfaConstructLimit
+    && opts.constructs.every((c) => !!c && typeof c.name === 'string' && c.name.trim().length > 0
+      && isStringList(c.columns) && c.columns.length >= 2 && c.columns.length <= cfaItemLimit)
+}
+
 function isOptions(value: unknown): value is SurveyOptions {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const options = value as SurveyOptions
@@ -253,6 +521,12 @@ function isOptions(value: unknown): value is SurveyOptions {
     && (options.crossTab === undefined || isCrossTabOptions(options.crossTab))
     && (options.reliability === undefined || isReliabilityOptions(options.reliability))
     && (options.regression === undefined || isRegressionOptions(options.regression))
+    && (options.multipleRegression === undefined || isMultipleRegressionOptions(options.multipleRegression))
+    && (options.factorAnalysis === undefined || isFactorAnalysisOptions(options.factorAnalysis))
+    && (options.kano === undefined || isKanoOptions(options.kano))
+    && (options.psm === undefined || isPSMOptions(options.psm))
+    && (options.conjoint === undefined || isConjointOptions(options.conjoint))
+    && (options.cfa === undefined || isCFAOptions(options.cfa))
     && (options.weightColumn === undefined || (typeof options.weightColumn === 'string' && options.weightColumn.trim().length > 0))
 }
 
@@ -342,6 +616,70 @@ function isWeighting(value: unknown, valid: number, columns: string[]): value is
     && typeof totalWeight === 'string' && /^[0-9]+(?:\.[0-9]+)?$/.test(totalWeight)
 }
 
+function isMultipleRegression(value: unknown, valid: number): value is SurveyMultipleRegression {
+  if (!isMultipleRegressionOptions(value)) return false
+  const r = value as Partial<SurveyMultipleRegression>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
+  if (r.fit === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const { fit } = r
+  const validCoef = (c: unknown): c is SurveyMultipleRegressionCoefficient => {
+    const entry = c as Partial<SurveyMultipleRegressionCoefficient> | null
+    return !!entry && typeof entry.name === 'string' && isFiniteNumber(entry.coefficient) && isFiniteNumber(entry.stdError)
+      && (entry.tStat === undefined || isFiniteNumber(entry.tStat))
+  }
+  return !!fit && validCoef(fit.intercept) && Array.isArray(fit.predictors) && fit.predictors.every(validCoef)
+    && isCount(fit.dfModel) && isCount(fit.dfResidual)
+}
+
+function isFactorAnalysis(value: unknown, valid: number): value is SurveyFactorAnalysis {
+  if (!isFactorAnalysisOptions(value)) return false
+  const r = value as Partial<SurveyFactorAnalysis>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
+  if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const res = r.result
+  return !!res && isFiniteNumber(res.kmo) && isFiniteNumber(res.bartlettChiSquare) && isCount(res.bartlettDf)
+    && isFiniteNumber(res.bartlettPValue) && isCount(res.factorCount) && typeof res.autoFactors === 'boolean'
+    && Array.isArray(res.eigenvalues) && Array.isArray(res.factors) && Array.isArray(res.variables)
+}
+
+function isKano(value: unknown, valid: number): value is SurveyKano {
+  if (!isKanoOptions(value)) return false
+  const r = value as Partial<SurveyKano>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.invalid) || r.included + r.missing + r.invalid !== valid) return false
+  if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const res = r.result
+  return !!res && typeof res.dominantCode === 'string' && typeof res.dominantLabel === 'string' && Array.isArray(res.categories)
+}
+
+function isPSM(value: unknown, valid: number): value is SurveyPSM {
+  if (!isPSMOptions(value)) return false
+  const r = value as Partial<SurveyPSM>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || !isCount(r.inconsistent)
+    || r.included + r.missing + r.nonNumeric + r.inconsistent !== valid) return false
+  if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const res = r.result
+  return !!res && isFiniteNumber(res.pmc) && isFiniteNumber(res.pme) && isFiniteNumber(res.opp) && isFiniteNumber(res.idp)
+    && Array.isArray(res.acceptableRange) && res.acceptableRange.length === 2
+}
+
+function isConjoint(value: unknown, valid: number): value is SurveyConjoint {
+  if (!isConjointOptions(value)) return false
+  const r = value as Partial<SurveyConjoint>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
+  if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const res = r.result
+  return !!res && isFiniteNumber(res.intercept) && Array.isArray(res.attributes)
+}
+
+function isCFA(value: unknown, valid: number): value is SurveyCFA {
+  if (!isCFAOptions(value)) return false
+  const r = value as Partial<SurveyCFA>
+  if (!isCount(r.included) || !isCount(r.missing) || !isCount(r.nonNumeric) || r.included + r.missing + r.nonNumeric !== valid) return false
+  if (r.result === undefined) return typeof r.unavailableReason === 'string' && r.unavailableReason.length > 0
+  const res = r.result
+  return !!res && Array.isArray(res.constructs) && Array.isArray(res.correlationMatrix) && typeof res.discriminantValid === 'boolean'
+}
+
 function isReport(value: unknown): value is SurveyReport {
   const report = value as Partial<SurveyReport> | null
   return !!report && isCounts(value) && isStringList(report.columns)
@@ -350,6 +688,12 @@ function isReport(value: unknown): value is SurveyReport {
     && (report.crossTab === undefined || isCrossTab(report.crossTab))
     && (report.reliability === undefined || isReliability(report.reliability, value.valid))
     && (report.regression === undefined || isRegression(report.regression, value.valid))
+    && (report.multipleRegression === undefined || isMultipleRegression(report.multipleRegression, value.valid))
+    && (report.factorAnalysis === undefined || isFactorAnalysis(report.factorAnalysis, value.valid))
+    && (report.kano === undefined || isKano(report.kano, value.valid))
+    && (report.psm === undefined || isPSM(report.psm, value.valid))
+    && (report.conjoint === undefined || isConjoint(report.conjoint, value.valid))
+    && (report.cfa === undefined || isCFA(report.cfa, value.valid))
     && (report.weighting === undefined || isWeighting(report.weighting, value.valid, report.columns))
 }
 
