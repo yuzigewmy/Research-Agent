@@ -367,6 +367,11 @@ func (s *Store) claimQueuedTask(ctx context.Context, projectID string, modelConf
 	if err != nil {
 		return Task{}, err
 	}
+	if task.Kind == experimentComparisonTask {
+		if err := recordExperimentClaim(ctx, tx, projectID, task); err != nil {
+			return Task{}, err
+		}
+	}
 	if task.workflowRunID != "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET status = 'RUNNING', revision = revision + 1
 			WHERE run_id = ?`, task.workflowRunID); err != nil {
@@ -405,6 +410,11 @@ func (s *Store) finishTask(ctx context.Context, projectID string, task Task, sta
 		status, result.topicData, projectID, task.TaskID, experimentComparisonTask, task.Revision).Scan(&status)
 	if err != nil {
 		return err
+	}
+	if task.Kind == experimentComparisonTask {
+		if err := finishExperimentAttempt(ctx, tx, projectID, task, status, message, result.jsonArtifact); err != nil {
+			return err
+		}
 	}
 	if task.workflowRunID != "" {
 		if err := finishWorkflowStep(ctx, tx, projectID, task, status); err != nil {

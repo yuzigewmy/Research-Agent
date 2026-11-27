@@ -40,6 +40,8 @@ func (api researchTasks) register(mux *http.ServeMux) {
 		mux.HandleFunc("POST "+mutation, api.change(action))
 		mux.HandleFunc(mutation, methodNotAllowed("POST"))
 	}
+	mux.HandleFunc("GET "+path+"/{taskId}/attempts", api.comparisonAttempts)
+	mux.HandleFunc(path+"/{taskId}/attempts", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("GET "+path+"/{taskId}/artifact", api.artifact)
 	mux.HandleFunc(path+"/{taskId}/artifact", methodNotAllowed("GET, HEAD"))
 	mux.HandleFunc("GET "+path+"/{taskId}/artifact/evidence", api.comparisonEvidence)

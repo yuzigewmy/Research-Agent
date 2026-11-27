@@ -85,7 +85,7 @@ func (s *Store) drainTaskQueue(projectID string, worker *taskWorker, model *infe
 		}
 		switch task.Kind {
 		case experimentComparisonTask:
-			deadline = 5 * time.Second
+			deadline = comparisonTimeout
 		case imageReviewTask:
 			deadline = imageReviewTimeout
 		case imageGenerationTask:

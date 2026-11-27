@@ -2,6 +2,7 @@ package workbench
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,6 +282,30 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 	if interrupted.Status != taskInterrupted {
 		t.Fatalf("unexpected state after restart: %+v", interrupted)
 	}
+	attemptPath := resumePath + "/attempts"
+	request(http.MethodGet, strings.Replace(attemptPath, project.ProjectID, other.ProjectID, 1), "", http.StatusNotFound)
+	readAttempts := func() (page struct {
+		Items []struct {
+			Revision                                             int
+			Status, StartedAt, FinishedAt, Message, ResultSHA256 string
+			Input                                                taskInput
+		}
+		TimeoutSeconds int
+	}) {
+		t.Helper()
+		result := request(http.MethodGet, attemptPath, "", http.StatusOK)
+		if err := json.Unmarshal(result.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	oldAttempt := readAttempts()
+	if len(oldAttempt.Items) != 1 || oldAttempt.TimeoutSeconds != 5 || oldAttempt.Items[0].Status != taskInterrupted ||
+		oldAttempt.Items[0].Revision != beforeRestart.Revision || oldAttempt.Items[0].StartedAt == "" ||
+		oldAttempt.Items[0].FinishedAt < oldAttempt.Items[0].StartedAt || oldAttempt.Items[0].Input != beforeRestart.Inputs[0] ||
+		oldAttempt.Items[0].Message == "" || oldAttempt.Items[0].ResultSHA256 != "" {
+		t.Fatalf("wrong recovered execution receipt: %+v", oldAttempt)
+	}
 	resume := fmt.Sprintf(`{"requestId":"resume-original","expectedRevision":%d}`, interrupted.Revision)
 	request(http.MethodPost, strings.Replace(resumePath, project.ProjectID, other.ProjectID, 1)+"/resume", resume, http.StatusNotFound)
 	// Hold the worker so a stale completion can be tested against the reclaimed task.
@@ -316,6 +341,13 @@ func TestExperimentComparisonResumesAndDownloadsPinnedResult(t *testing.T) {
 		t.Fatalf("resume replay changed the task: %+v", saved)
 	}
 	resumedReport := request(http.MethodGet, resumePath+"/artifact", "", http.StatusOK)
+	attempts := readAttempts()
+	wantDigest := fmt.Sprintf("%x", sha256.Sum256(resumedReport.Body.Bytes()))
+	if len(attempts.Items) != 2 || attempts.Items[1] != oldAttempt.Items[0] || attempts.Items[0].Revision != reclaimed.Revision ||
+		attempts.Items[0].Status != taskSucceeded || attempts.Items[0].Input != reclaimed.Inputs[0] ||
+		attempts.Items[0].ResultSHA256 != wantDigest || attempts.Items[0].FinishedAt < attempts.Items[0].StartedAt {
+		t.Fatalf("wrong resumed execution receipts: %+v", attempts)
+	}
 	if err := json.Unmarshal(resumedReport.Body.Bytes(), &report); err != nil || report.Input.VersionID != third.VersionID ||
 		report.Input.SHA256 != third.SHA256 || report.Metrics.MeanDifference != "60" {
 		t.Fatalf("resumed calculation used the wrong version: %+v (%v)", report, err)
