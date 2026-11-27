@@ -6,6 +6,8 @@ import { MaterialImageReview } from './MaterialImageReview'
 import { archiveFormatLabel, getMaterialPreview, listMaterials, materialDownloadPath, materialImagePreviewPath, uploadMaterial } from './materials'
 import type { Material, MaterialPreview } from './materials'
 import { PdfPreview } from './PdfPreview'
+import { WorkspaceBundleAdd } from './WorkspaceBundle'
+import type { BundleSelection } from './WorkspaceBundle'
 import { errorMessage } from './projects'
 import { turnReferenceLimit } from './turns'
 import './materials.css'
@@ -75,13 +77,14 @@ interface MaterialPanelProps {
   onPdfQuote?: (material: Material, page: number, text: string) => void
   referenceIds?: string[]
   allowSoftwareFolder?: boolean
+  bundleSelection: BundleSelection
 }
 
 function matchesMaterialQuery(name: string, q: string) {
   return q === '' || name.includes(q)
 }
 
-export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [], allowSoftwareFolder }: MaterialPanelProps) {
+export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds = [], allowSoftwareFolder, bundleSelection }: MaterialPanelProps) {
   const headingId = useId()
   const queryId = useId()
   const [items, setItems] = useState<Material[]>([])
@@ -228,6 +231,9 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
       {allowSoftwareFolder && <p id={`${headingId}-folder`} className="material-note">
         目录内的源码和文字说明将保留相对路径，打包成一份可选的 ZIP 资料。
       </p>}
+      {bundleSelection.items.length > 0 && <p className="material-note">
+        <a href="#workspace-bundle">查看工作区 ZIP 清单（{bundleSelection.items.length} 项）</a>
+      </p>}
       {onReference && referenceLimitReached && <p id={referenceLimitHint} className="material-note" role="status">
         已选满 {turnReferenceLimit} 份资料，移除一份后可继续选择。
       </p>}
@@ -259,7 +265,7 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
           const referenced = referenceIds.includes(material.materialId)
           const atLimit = referenceLimitReached && !referenced
           return (
-            <li className="material-row" key={material.materialId}>
+            <li className="material-row" key={material.materialId} data-material-id={material.materialId}>
               <div className="material-info">
                 <strong dir="auto">{material.name}</strong>
                 <div className="material-meta material-note">
@@ -276,6 +282,8 @@ export function MaterialPanel({ projectId, onReference, onPdfQuote, referenceIds
                   aria-describedby={wordScopeId} onClick={() => setPreviewId(isOpen ? undefined : material.materialId)}>{previewLabel}</button>}
                 <a className="button outline" href={downloadPath}
                   aria-label={`下载原件：${material.name}`} download>下载原件</a>
+                <WorkspaceBundleAdd item={{ kind: 'material', id: material.materialId, name: material.name, size: material.size }}
+                  source="material" selection={bundleSelection} />
                 {canViewImage && <button className="button outline" type="button"
                   aria-label={`${reviewOpen ? '收起图片复查' : '图片复查'}：${material.name}`}
                   aria-expanded={reviewOpen} aria-controls={reviewRegion}

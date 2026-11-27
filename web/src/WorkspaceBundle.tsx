@@ -1,36 +1,71 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { errorMessage } from './projects'
-import { readWorkspaceBundle, workspaceBundleLimit } from './workspace'
-import type { FileRecord } from './workspace'
+import {
+  readWorkspaceBundle, workspaceBundleItemKey, workspaceBundleLimit, workspaceBundleSizeLimit, workspaceBundleSizeLimitMiB,
+} from './workspace'
+import type { FileRecord, WorkspaceBundleItem } from './workspace'
 
-export type BundleVersion = Pick<FileRecord, 'path' | 'versionId'>
+export type BundleEntry = WorkspaceBundleItem & { name: string; size: number }
 
 export type BundleSelection = {
-  versions: readonly BundleVersion[]
-  onAdd: (version: BundleVersion) => void
+  items: readonly BundleEntry[]
+  onAdd: (item: BundleEntry) => void
+  onRemove: (item: WorkspaceBundleItem) => void
 }
 
 const bundleCountId = 'workspace-bundle-count'
+const sizeFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 })
 
-export function WorkspaceBundleAdd({ version, selection, historical = false }: {
-  version: BundleVersion
+function bundleSize(items: readonly BundleEntry[]) {
+  return items.reduce((total, item) => total + item.size, 0)
+}
+
+export function bundleAddState(items: readonly BundleEntry[], item: BundleEntry) {
+  if (items.some(({ kind, id }) => kind === item.kind && id === item.id)) return 'selected'
+  if (items.length >= workspaceBundleLimit) return 'count-limit'
+  if (bundleSize(items) + item.size > workspaceBundleSizeLimit) return 'size-limit'
+  return 'available'
+}
+
+const addLabels = {
+  current: '将已保存版本加入 ZIP 清单',
+  history: '将此版本加入 ZIP 清单',
+  material: '将原件加入 ZIP 清单',
+}
+
+export function WorkspaceBundleAdd({ item, selection, source }: {
+  item: BundleEntry
   selection: BundleSelection
-  historical?: boolean
+  source: keyof typeof addLabels
 }) {
-  const selected = selection.versions.some(({ versionId }) => versionId === version.versionId)
-  const full = selection.versions.length >= workspaceBundleLimit
-  const label = historical ? '将此版本加入 ZIP 清单' : '将已保存版本加入 ZIP 清单'
-  return <button className="button outline" type="button" data-workspace-bundle-add={historical ? 'history' : 'current'}
-    aria-disabled={selected || full || undefined} aria-describedby={full && !selected ? bundleCountId : undefined}
-    onClick={() => { if (!selected && !full) selection.onAdd(version) }}>
-    {selected ? '已加入 ZIP 清单' : label}
+  const state = bundleAddState(selection.items, item)
+  const limit = state === 'count-limit' || state === 'size-limit'
+  let label = addLabels[source]
+  if (state === 'selected') label = '已加入 ZIP 清单'
+  else if (state === 'count-limit') label = 'ZIP 清单已满'
+  else if (state === 'size-limit') label = '超出 ZIP 容量'
+
+  return <button className="button outline" type="button" data-workspace-bundle-add={source}
+    aria-label={source === 'material' ? `${label}：${item.name}` : undefined}
+    aria-disabled={state !== 'available' || undefined} aria-describedby={limit ? bundleCountId : undefined}
+    onClick={() => { if (state === 'available') selection.onAdd(item) }}>
+    {label}
   </button>
 }
 
-export function WorkspaceBundle({ projectId, versions, onRemove }: {
+export function WorkspaceVersionBundleAdd({ version, selection, historical = false }: {
+  version: Pick<FileRecord, 'path' | 'versionId' | 'size'>
+  selection: BundleSelection
+  historical?: boolean
+}) {
+  const { versionId, path, size } = version
+  return <WorkspaceBundleAdd item={{ kind: 'version', id: versionId, name: path, size }}
+    source={historical ? 'history' : 'current'} selection={selection} />
+}
+
+export function WorkspaceBundle({ projectId, selection: { items, onRemove } }: {
   projectId: string
-  versions: readonly BundleVersion[]
-  onRemove: (versionId: string) => void
+  selection: BundleSelection
 }) {
   const active = useRef<AbortController | null>(null)
   const [busy, setBusy] = useState(false)
@@ -38,14 +73,14 @@ export function WorkspaceBundle({ projectId, versions, onRemove }: {
   useLayoutEffect(() => () => active.current?.abort(), [])
 
   async function download() {
-    if (active.current || !versions.length) return
+    if (active.current || !items.length) return
     const controller = new AbortController()
     active.current = controller
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)])
     setBusy(true)
     setError('')
     try {
-      const bundle = await readWorkspaceBundle(projectId, versions.map(({ versionId }) => versionId), signal)
+      const bundle = await readWorkspaceBundle(projectId, items, signal)
       signal.throwIfAborted()
       const url = URL.createObjectURL(bundle)
       const link = document.createElement('a')
@@ -69,30 +104,38 @@ export function WorkspaceBundle({ projectId, versions, onRemove }: {
     }
   }
 
+  const totalMiB = bundleSize(items) / (1024 * 1024)
+  const sizeLabel = totalMiB > 0 && totalMiB < 0.01 ? '少于 0.01' : sizeFormat.format(totalMiB)
+
   return <section id="workspace-bundle" className="workspace-bundle" aria-labelledby="workspace-bundle-title">
     <div className="workspace-heading">
       <h5 id="workspace-bundle-title">工作区 ZIP 清单</h5>
       <p id={bundleCountId} className="workspace-note" role="status">
-        已选 {versions.length} / {workspaceBundleLimit} 个版本
-        {versions.length >= workspaceBundleLimit && '，请先移除一个版本再添加。'}
+        已选 {items.length} / {workspaceBundleLimit} 项，原件共 {sizeLabel} MiB（上限 {workspaceBundleSizeLimitMiB} MiB）。
+        {items.length >= workspaceBundleLimit && '请先移除一项再添加。'}
       </p>
     </div>
-    {versions.length > 0 ? <>
+    {items.length > 0 ? <>
       <ol className="workspace-list" role="list" aria-labelledby="workspace-bundle-title">
-        {versions.map(({ path, versionId }) => <li key={versionId} data-workspace-bundle-version={versionId}>
-          <div>
-            <bdi>{path}</bdi>
-            <p className="workspace-note">版本 <bdi>{versionId}</bdi></p>
-          </div>
-          <button className="button outline" type="button" data-workspace-bundle-remove
-            aria-label={`移除 ${path} 的版本 ${versionId}`} onClick={() => onRemove(versionId)}>移除</button>
-        </li>)}
+        {items.map((item) => {
+          const { kind, id, name } = item
+          const isVersion = kind === 'version'
+          return <li key={workspaceBundleItemKey(item)} data-workspace-bundle-version={isVersion ? id : undefined}
+            data-workspace-bundle-material={isVersion ? undefined : id}>
+            <div>
+              <bdi>{name}</bdi>
+              <p className="workspace-note">{isVersion ? <>文件版本 <bdi>{id}</bdi></> : '项目资料原件'}</p>
+            </div>
+            <button className="button outline" type="button" data-workspace-bundle-remove
+              aria-label={isVersion ? `移除 ${name} 的版本 ${id}` : `移除原件 ${name}`} onClick={() => onRemove(item)}>移除</button>
+          </li>
+        })}
       </ol>
-      <p className="workspace-note">ZIP 中的 manifest.json 记录每个文件的原路径、版本和 SHA-256。</p>
-    </> : <p className="workspace-note">从文件编辑区或版本历史加入已保存的版本。</p>}
+      <p className="workspace-note">ZIP 中的 manifest.json 记录每项的来源、原路径或名称以及 SHA-256。</p>
+    </> : <p className="workspace-note">从文件编辑区、版本历史或项目资料加入文件。</p>}
     <div className="workspace-actions">
       <button className="button outline" type="button" data-workspace-bundle-download
-        disabled={busy || !versions.length} aria-busy={busy} aria-describedby={error ? 'workspace-bundle-error' : undefined}
+        disabled={busy || !items.length} aria-busy={busy} aria-describedby={error ? 'workspace-bundle-error' : undefined}
         onClick={() => void download()}>{busy ? '正在打包…' : error ? '重试下载工作区 ZIP' : '下载工作区 ZIP'}</button>
     </div>
     {error && <p className="form-error" id="workspace-bundle-error" role="alert">{error}</p>}

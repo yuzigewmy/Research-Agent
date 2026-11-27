@@ -15,6 +15,8 @@ import { TaskPanel } from './TaskPanel'
 import type { Task, TaskLink } from './tasks'
 import { WorkflowPanel } from './WorkflowPanel'
 import type { WorkflowRunLink } from './WorkflowRunHistory'
+import { bundleAddState } from './WorkspaceBundle'
+import type { BundleEntry, BundleSelection } from './WorkspaceBundle'
 import { WorkspacePanel } from './WorkspacePanel'
 import type { Material } from './materials'
 import { errorMessage, getProject, ProjectApiError, templates } from './projects'
@@ -23,6 +25,7 @@ import {
   isManuscriptSelection, isManuscriptSelections, isTurnReferences, manuscriptSelectionLimit, sameManuscriptSelection, turnReferenceLimit,
 } from './turns'
 import type { ManuscriptSelection, ManuscriptSelectionInput, TurnReference } from './turns'
+import { workspaceBundleItemKey } from './workspace'
 import type { FileRecord } from './workspace'
 
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' })
@@ -85,6 +88,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
   const [references, setReferences] = useState(() => readReferences(referenceKey))
   const [manuscriptSelections, setManuscriptSelections] = useState(() => readManuscriptSelections(manuscriptKey))
   const [publishedPaths, setPublishedPaths] = useState<string[]>([])
+  const [bundleItems, setBundleItems] = useState<BundleEntry[]>([])
   const [workflowRefresh, setWorkflowRefresh] = useState(0)
   const [acceptanceDraft, setAcceptanceDraft] = useState<{ file: FileRecord; openId: number }>()
   const [taskUpdates, setTaskUpdates] = useState<Task[]>([])
@@ -112,6 +116,14 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
   }
 
   const taskSync = { updates: taskUpdates, onTaskChanged, onReviewAppliedFile: hasWorkflow ? reviewAppliedFile : undefined }
+  const bundleSelection: BundleSelection = {
+    items: bundleItems,
+    onAdd: (item) => setBundleItems((current) => bundleAddState(current, item) === 'available' ? [...current, item] : current),
+    onRemove: (item) => {
+      const key = workspaceBundleItemKey(item)
+      setBundleItems((current) => current.filter((entry) => workspaceBundleItemKey(entry) !== key))
+    },
+  }
 
   useEffect(() => {
     if (references.length) sessionStorage.setItem(referenceKey, JSON.stringify(references))
@@ -210,7 +222,7 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
       <ProjectTaskQueue projectId={project.projectId} onStopped={refreshWorkflow} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         onPdfQuote={addPdfQuote} referenceIds={references.map(({ materialId }) => materialId)}
-        allowSoftwareFolder={project.templateId === 'software_registration'} />
+        allowSoftwareFolder={project.templateId === 'software_registration'} bundleSelection={bundleSelection} />
       {project.templateId === 'interactive_survey' && (
         <QuestionnairePanel projectId={project.projectId} archived={project.status === 'ARCHIVED'} />
       )}
@@ -226,7 +238,8 @@ export function ProjectDetails({ projectId, taskLink, workflowRunLink, reviewLin
       <TaskPanel projectId={project.projectId} taskLink={taskLink} sync={taskSync} onReportSaved={addWorkspacePath} />
       <WorkspacePanel projectId={project.projectId} publishedPaths={publishedPaths}
         manuscriptIntake={project.templateId === 'automatic_review'} manuscriptSelections={manuscriptSelections}
-        onManuscriptSelection={addManuscriptSelection} pdfReferences={references.filter(isPDFEvidenceReference)} />
+        onManuscriptSelection={addManuscriptSelection} pdfReferences={references.filter(isPDFEvidenceReference)}
+        bundleSelection={bundleSelection} />
       {project.templateId === 'engineering_project' && (
         <EngineeringPreview key={`${project.projectId}:${project.status}`} projectId={project.projectId}
           archived={project.status === 'ARCHIVED'} />

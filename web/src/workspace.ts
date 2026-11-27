@@ -123,12 +123,21 @@ export function workspaceHTMLPath(projectId: string, versionId: string, action: 
 }
 
 export const workspaceBundleLimit = 24
+export const workspaceBundleSizeLimitMiB = 32
+export const workspaceBundleSizeLimit = workspaceBundleSizeLimitMiB * 1024 * 1024
 
-export async function readWorkspaceBundle(projectId: string, versionIds: readonly string[], signal: AbortSignal) {
+export type WorkspaceBundleItem = { kind: 'version' | 'material'; id: string }
+
+export function workspaceBundleItemKey({ kind, id }: WorkspaceBundleItem) {
+  return `${kind}:${id}`
+}
+
+export async function readWorkspaceBundle(projectId: string, items: readonly WorkspaceBundleItem[], signal: AbortSignal) {
   const path = `${filesPath(projectId)}/bundle`
-  if (!versionIds.length || versionIds.length > workspaceBundleLimit || new Set(versionIds).size !== versionIds.length
-    || !versionIds.every(isPathId)) {
-    throw new ProjectApiError(`请选择 1 至 ${workspaceBundleLimit} 个不同的已保存版本。`, 400)
+  if (!items.length || items.length > workspaceBundleLimit
+    || !items.every(({ kind, id }) => (kind === 'version' || kind === 'material') && isPathId(id))
+    || new Set(items.map(workspaceBundleItemKey)).size !== items.length) {
+    throw new ProjectApiError(`请选择 1 至 ${workspaceBundleLimit} 个不同的文件版本或资料原件。`, 400)
   }
 
   const zipType = 'application/zip'
@@ -136,7 +145,7 @@ export async function readWorkspaceBundle(projectId: string, versionIds: readonl
   try {
     response = await fetch(path, {
       method: 'POST', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal,
-      headers: { Accept: zipType, 'Content-Type': 'application/json' }, body: JSON.stringify({ versionIds }),
+      headers: { Accept: zipType, 'Content-Type': 'application/json' }, body: JSON.stringify({ items: items.map(({ kind, id }) => ({ kind, id })) }),
     })
   } catch (cause) {
     if (signal.aborted) throw cause
