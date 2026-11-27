@@ -438,8 +438,51 @@ export function importProjectArchive(file: File, requestId: string, signal: Abor
   })
 }
 
+export interface ProjectEvent {
+  seq: number
+  kind: string
+  entityId: string
+  summary: string
+  payload: Record<string, unknown>
+  createdAt: string
+}
+
+export interface ProjectEventsSnapshot {
+  projectId: string
+  latestSeq: number
+  afterSeq: number
+  items: ProjectEvent[]
+}
+
+function isProjectEvent(value: unknown): value is ProjectEvent {
+  return isRecord(value)
+    && isNonNegativeInt(value.seq)
+    && typeof value.kind === 'string'
+    && typeof value.entityId === 'string'
+    && typeof value.summary === 'string'
+    && isRecord(value.payload)
+    && typeof value.createdAt === 'string'
+}
+
+function isProjectEventsSnapshot(value: unknown): value is ProjectEventsSnapshot {
+  return isRecord(value)
+    && typeof value.projectId === 'string'
+    && isNonNegativeInt(value.latestSeq)
+    && isNonNegativeInt(value.afterSeq)
+    && Array.isArray(value.items) && value.items.every(isProjectEvent)
+}
+
 export function getProjectMemorySummary(projectId: string, signal: AbortSignal) {
   return request(`${projectPath(projectId)}/memory-summary`, isProjectMemorySummary, { signal, cache: 'no-store' })
+}
+
+export function getProjectEvents(projectId: string, afterSeq: number, limit: number, signal: AbortSignal) {
+  const params = new URLSearchParams({
+    after: String(Math.max(0, Math.floor(afterSeq))),
+    limit: String(limit),
+    format: 'json',
+  })
+  return request(`${projectPath(projectId)}/events?${params}`, isProjectEventsSnapshot, { signal, cache: 'no-store' })
 }
 
 export function errorMessage(error: unknown): string {

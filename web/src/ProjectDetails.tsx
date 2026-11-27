@@ -9,6 +9,7 @@ import { MaterialPanel } from './MaterialPanel'
 import type { ReviewLink } from './notificationApi'
 import { ProjectAdministration } from './ProjectAdministration'
 import { ProjectArtifacts } from './ProjectArtifacts'
+import { ProjectEventsPanel } from './ProjectEventsPanel'
 import { ProjectMemorySummary } from './ProjectMemorySummary'
 import { ProjectTaskQueue } from './ProjectTaskQueue'
 import { QuestionnairePanel } from './QuestionnairePanel'
@@ -236,6 +237,7 @@ export function ProjectDetails({ projectId, launch, taskLink, workflowRunLink, r
         onUpdated(updated)
       }} onDeleted={onDeleted} />
       <ProjectMemorySummary projectId={project.projectId} />
+      <ProjectEventsPanel projectId={project.projectId} />
       <ProjectTaskQueue projectId={project.projectId} onStopped={refreshWorkflow} />
       <MaterialPanel key={project.projectId} projectId={project.projectId} onReference={toggleReference}
         onPdfQuote={addPdfQuote} onWordQuote={addWordQuote} references={references}
