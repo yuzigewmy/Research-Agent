@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const computeNodePath = "/api/v1/compute-node"
@@ -32,7 +31,7 @@ func NewComputeNode(address, token string) (*ComputeNode, error) {
 	if base.Scheme != "https" && (base.Scheme != "http" || !net.ParseIP(base.Hostname()).IsLoopback()) {
 		return nil, errors.New("计算节点须使用 HTTPS 或回环 IP 的 HTTP 地址")
 	}
-	if token == "" || strings.IndexFunc(token, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0 {
+	if !validComputeToken(token) {
 		return nil, errors.New("请为计算节点设置有效的访问凭据")
 	}
 	return &ComputeNode{
@@ -83,7 +82,7 @@ func (node *ComputeNode) probe(ctx context.Context) (computeNodeInfo, error) {
 		computeNodeInfo
 	}
 	if len(body) > maxBody || json.Unmarshal(body, &payload) != nil || payload.Protocol != computeProtocol ||
-		len(payload.Name) > 160 || strings.TrimSpace(payload.Name) == "" || strings.ContainsFunc(payload.Name, unicode.IsControl) ||
+		!validComputeNodeName(payload.Name) ||
 		strings.Contains(payload.Name, node.token) || len(payload.Capabilities) != 1 {
 		return computeNodeInfo{}, errComputeCapabilities
 	}
