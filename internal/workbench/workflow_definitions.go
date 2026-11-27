@@ -107,6 +107,14 @@ var workflowStages = map[string][]workflowStage{
 	softwareRegistrationWorkflow:   softwareRegistrationStages(softwareSamplePrompt),
 	patentDisclosureWorkflowV1:     patentDisclosureStages(false),
 	patentDisclosureWorkflow:       patentDisclosureStages(true),
+	fullResearchWorkflow:           expandedWorkflowStages(fullResearchWorkflow),
+	chinesePaperWorkflow:           expandedWorkflowStages(chinesePaperWorkflow),
+	humanitiesPaperWorkflow:        expandedWorkflowStages(humanitiesPaperWorkflow),
+	thesisWorkflow:                 expandedWorkflowStages(thesisWorkflow),
+	existingMaterialsWorkflow:      expandedWorkflowStages(existingMaterialsWorkflow),
+	marketResearchWorkflow:         expandedWorkflowStages(marketResearchWorkflow),
+	mathModelingWorkflow:           expandedWorkflowStages(mathModelingWorkflow),
+	bigDataContestWorkflow:         expandedWorkflowStages(bigDataContestWorkflow),
 }
 
 func patentDisclosureStages(withFigures bool) []workflowStage {

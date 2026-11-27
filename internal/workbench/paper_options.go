@@ -31,6 +31,10 @@ func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, acti
 			return "", 0, errPatentOptions
 		}
 		options, err := freezePatentSettings(ctx, tx, projectID, req.Patent)
+		if err != nil {
+			return "", 0, err
+		}
+		options, err = applyWorkflowRunConfig(options, key, action, req)
 		return options, 0, err
 	}
 	if req.Patent != nil {
@@ -41,6 +45,10 @@ func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, acti
 			return "", 0, errSoftwareOptions
 		}
 		options, err := freezeSoftwareSettings(ctx, tx, projectID, req.Software)
+		if err != nil {
+			return "", 0, err
+		}
+		options, err = applyWorkflowRunConfig(options, key, action, req)
 		return options, 0, err
 	}
 	if req.Software != nil {
@@ -51,6 +59,10 @@ func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, acti
 			return "", 0, errCourseOptions
 		}
 		options, err := freezeCourseSettings(ctx, tx, projectID, key, req.Course)
+		if err != nil {
+			return "", 0, err
+		}
+		options, err = applyWorkflowRunConfig(options, key, action, req)
 		return options, 0, err
 	}
 	if req.Course != nil {
@@ -65,7 +77,11 @@ func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, acti
 			return "", 0, err
 		}
 		body, err := json.Marshal(options)
-		return string(body), options.TargetSources, err
+		if err != nil {
+			return "", 0, err
+		}
+		merged, err := applyWorkflowRunConfig(string(body), key, action, req)
+		return merged, options.TargetSources, err
 	}
 	if req.Proposal != nil {
 		return "", 0, errProposalOptions
@@ -75,6 +91,10 @@ func workflowStartSettings(ctx context.Context, tx *sql.Tx, projectID, key, acti
 		return "", 0, err
 	}
 	options, err := workflowOptions(key, action, req.Paper, req.Topic)
+	if err != nil {
+		return "", 0, err
+	}
+	options, err = applyWorkflowRunConfig(options, key, action, req)
 	return options, target, err
 }
 

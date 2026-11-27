@@ -43,10 +43,17 @@ type Project struct {
 	ModelRunsUsed   int    `json:"modelRunsUsed"`
 }
 
+const (
+	projectStartSaveOnly      = "save_only"
+	projectStartWorkflow      = "start_workflow"
+	projectStartCollaborate   = "collaborate"
+)
+
 type createProjectInput struct {
 	RequestID  string `json:"requestId"`
 	Title      string `json:"title"`
 	TemplateID string `json:"templateId"`
+	StartMode  string `json:"startMode,omitempty"`
 }
 
 type projectCursor struct {
@@ -470,14 +477,18 @@ func migrate(db *sql.DB, target int) error {
 }
 
 func (s *Store) createProject(ctx context.Context, input createProjectInput) (Project, bool, error) {
+	defaultMode := turnModeChat
+	if input.StartMode == projectStartCollaborate {
+		defaultMode = turnModeConfirm
+	}
 	project := Project{
 		ProjectID: rand.Text(), Title: input.Title, TemplateID: input.TemplateID,
-		Status: projectReady, Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout), DefaultTurnMode: turnModeChat,
+		Status: projectReady, Revision: 1, CreatedAt: time.Now().UTC().Format(createdAtLayout), DefaultTurnMode: defaultMode,
 	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO projects (project_id, title, created_title, template_id, status, revision, created_at, request_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (request_id) DO NOTHING
-	`, project.ProjectID, project.Title, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID)
+		INSERT INTO projects (project_id, title, created_title, template_id, status, revision, created_at, request_id, default_turn_mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (request_id) DO NOTHING
+	`, project.ProjectID, project.Title, project.Title, project.TemplateID, project.Status, project.Revision, project.CreatedAt, input.RequestID, project.DefaultTurnMode)
 	if err != nil {
 		return Project{}, false, err
 	}
@@ -494,6 +505,9 @@ func (s *Store) createProject(ctx context.Context, input createProjectInput) (Pr
 		WHERE request_id = ? AND created_title = ? AND template_id = ?`, input.RequestID, input.Title, input.TemplateID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, false, errRequestConflict
+	}
+	if err == nil {
+		project.ModelRunsUsed, err = projectModelRunsUsed(ctx, s.db, project.ProjectID)
 	}
 	return project, false, err
 }

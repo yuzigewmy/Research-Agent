@@ -196,6 +196,19 @@ func (s *Store) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_INPUT", "Unknown project template")
 		return
 	}
+	if input.StartMode != "" {
+		switch input.StartMode {
+		case projectStartSaveOnly, projectStartCollaborate:
+		case projectStartWorkflow:
+			if projectWorkflowKey(input.TemplateID) == "" {
+				writeError(w, http.StatusBadRequest, "INVALID_INPUT", "只有工作流模板支持创建后立即启动工作流。")
+				return
+			}
+		default:
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的建项起始方式。")
+			return
+		}
+	}
 
 	project, created, err := s.createProject(r.Context(), input)
 	if errors.Is(err, errRequestConflict) {

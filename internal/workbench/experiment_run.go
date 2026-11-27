@@ -83,6 +83,9 @@ func (s *Store) generateWorkflowResult(ctx context.Context, model *inference.Cli
 	if isPatentWorkflow(key) {
 		return s.generatePatentStep(ctx, model, project, task, key, input, options)
 	}
+	if isExpandedWorkflow(key) {
+		return s.generateExpandedWorkflowStep(ctx, model, project, task, key, input, evidence, options)
+	}
 	var sources []reviewSource
 	first := 0
 	usesLiterature := key == reviewWorkflow || key == paperWorkflow || isProposalWorkflow(key)

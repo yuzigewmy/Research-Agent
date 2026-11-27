@@ -22,14 +22,17 @@ type projectTemplateStep struct {
 }
 
 type projectTemplateDefaults struct {
-	Checkpoints      *bool            `json:"checkpoints,omitempty"`
-	Language         string           `json:"language,omitempty"`
-	TargetPaperCount int              `json:"targetPaperCount,omitempty"`
-	Proposal         *proposalTargets `json:"proposal,omitempty"`
-	Course           *courseSettings  `json:"course,omitempty"`
-	Software         *softwareOptions `json:"software,omitempty"`
-	MaxRounds        int              `json:"maxRounds,omitempty"`
-	TargetScore      int              `json:"targetScore,omitempty"`
+	Checkpoints      *bool                 `json:"checkpoints,omitempty"`
+	Language         string                `json:"language,omitempty"`
+	TargetPaperCount int                   `json:"targetPaperCount,omitempty"`
+	Proposal         *proposalTargets      `json:"proposal,omitempty"`
+	Course           *courseSettings       `json:"course,omitempty"`
+	Software         *softwareOptions      `json:"software,omitempty"`
+	MaxRounds        int                   `json:"maxRounds,omitempty"`
+	TargetScore      int                   `json:"targetScore,omitempty"`
+	MaxStepRetries   int                   `json:"maxStepRetries,omitempty"`
+	ContestID        string                `json:"contestId,omitempty"`
+	Contests         []mathModelingContest `json:"contests,omitempty"`
 }
 
 var projectTemplates = []projectTemplate{
@@ -76,6 +79,38 @@ var projectTemplates = []projectTemplate{
 	{ID: engineeringTemplate, Label: "工程项目", Revision: "engineering-preview-v1", Kind: "engineering",
 		Summary:      "在工作区编辑静态页面，按固定文件版本启动、切换和关闭隔离预览。",
 		Deliverables: []string{"已保存的工程文件", "版本化 HTML 预览"}},
+	{ID: "full_research", Label: "科研全流程", Revision: fullResearchWorkflow, Kind: "workflow",
+		Summary:      "从研究边界界定、文献梳理与研究契约确认到实验计划、论文撰写与交付核对的一体化流程。",
+		Deliverables: []string{"研究边界", "文献与候选分析", "选题与研究契约", "实验与验证计划", "论文稿件", "交付核对报告"},
+		Defaults:     projectTemplateDefaults{Language: defaultPaperLanguage}},
+	{ID: "chinese_paper", Label: "中文论文", Revision: chinesePaperWorkflow, Kind: "workflow",
+		Summary:      "面向中文学术期刊与会议论文，先界定文体范围、确认中文大纲，再完成正文撰写与结构核对。",
+		Deliverables: []string{"研究范围与文体规范", "中文论文大纲", "中文论文稿件", "稿件结构核对报告"},
+		Defaults:     projectTemplateDefaults{Language: "zh"}},
+	{ID: "humanities_paper", Label: "人文社科论文", Revision: humanitiesPaperWorkflow, Kind: "workflow",
+		Summary:      "梳理人文社科议题与文献脉络，经论证大纲确认后分章写作并核对引注与论证结构。",
+		Deliverables: []string{"议题与文献脉络", "论证大纲", "人文社科论文稿件", "引注与结构核对报告"},
+		Defaults:     projectTemplateDefaults{Language: "zh"}},
+	{ID: "thesis", Label: "学位论文", Revision: thesisWorkflow, Kind: "workflow",
+		Summary:      "依据学位规格搭建框架、规划目录与文献，再撰写主体章节并完成摘要与交付核对。",
+		Deliverables: []string{"学位规格与框架", "目录与文献规划", "学位论文主体稿件", "摘要与交付核对报告"},
+		Defaults:     projectTemplateDefaults{Language: "zh"}},
+	{ID: "existing_materials", Label: "已有材料成稿", Revision: existingMaterialsWorkflow, Kind: "workflow",
+		Summary:      "先清点现有笔记、数据与草稿并识别缺口，确认成稿规划后整合撰写并核对交付。",
+		Deliverables: []string{"材料清点与缺口识别", "成稿规划", "整合稿件", "交付核对报告"},
+		Defaults:     projectTemplateDefaults{Language: "zh"}},
+	{ID: "market_research", Label: "市场调查", Revision: marketResearchWorkflow, Kind: "workflow",
+		Summary:      "围绕调研目标制定样本计划与问卷编码，经确认后梳理统计解读并形成调研报告与附录。",
+		Deliverables: []string{"调研目标与样本计划", "问卷与编码设计", "数据清洗与统计解读", "调研报告与附录"},
+		Defaults:     projectTemplateDefaults{Language: "zh"}},
+	{ID: "math_modeling", Label: "数学建模竞赛", Revision: mathModelingWorkflow, Kind: "workflow",
+		Summary:      "覆盖国内外 22 项主流公开数模赛事规格，按题意剖析、假设拆解、求解验证与论文摘要核对推进。",
+		Deliverables: []string{"题意与数据剖析", "问题拆解与假设", "模型构建与求解验证", "竞赛论文与摘要核对"},
+		Defaults:     projectTemplateDefaults{Language: "zh", ContestID: defaultMathModelingContestID}},
+	{ID: "big_data_contest", Label: "大数据竞赛", Revision: bigDataContestWorkflow, Kind: "workflow",
+		Summary:      "围绕赛题数据探索、特征工程与基线确认、模型迭代消融验证到竞赛报告与代码核对。",
+		Deliverables: []string{"赛题与数据探索", "特征与基线方案", "模型迭代与消融验证", "竞赛报告与代码核对"},
+		Defaults:     projectTemplateDefaults{Language: "zh"}},
 }
 
 func projectTemplateFor(id string) (projectTemplate, bool) {
@@ -106,6 +141,7 @@ func listProjectTemplates(w http.ResponseWriter, _ *http.Request) {
 		template.Steps = make([]projectTemplateStep, 0, len(stages))
 		if template.Kind == "workflow" {
 			template.Defaults.Checkpoints = new(defaultTemplateCheckpoints(template.Revision))
+			template.Defaults.MaxStepRetries = defaultMaxStepRetries
 		}
 		switch {
 		case template.ID == "proposal":
@@ -114,6 +150,8 @@ func listProjectTemplates(w http.ResponseWriter, _ *http.Request) {
 		case isCourseWorkflow(template.Revision):
 			defaults := defaultCourseSettings(template.Revision)
 			template.Defaults.Course = &defaults
+		case template.ID == "math_modeling":
+			template.Defaults.Contests = allMathModelingContests()
 		}
 		for index, stage := range stages {
 			step := projectTemplateStep{workflowStepDefinition: workflowStepDefinition{Key: stage.key, Title: stage.title},

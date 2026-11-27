@@ -179,7 +179,7 @@ func (s *Store) acceptableWorkflowMarkdown(ctx context.Context, tx *sql.Tx, run 
 		}
 	}
 	if run.WorkflowKey == paperWorkflow || run.WorkflowKey == reviewWorkflow || run.WorkflowKey == topicWorkflow ||
-		isProposalWorkflow(run.WorkflowKey) || isCourseWorkflow(run.WorkflowKey) {
+		isProposalWorkflow(run.WorkflowKey) || isCourseWorkflow(run.WorkflowKey) || expandedWorkflowUsesLiterature(run.WorkflowKey) {
 		var evidence string
 		if err := tx.QueryRowContext(ctx, `SELECT evidence_json FROM workflow_runs WHERE run_id = ?`, run.RunID).Scan(&evidence); err != nil {
 			return "", err
