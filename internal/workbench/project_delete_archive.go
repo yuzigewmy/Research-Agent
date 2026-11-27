@@ -149,9 +149,7 @@ func (s *Store) registerProjectArchiveAndDelete(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+projectsPath+"/{id}/archive-export", s.handleProjectArchiveExport)
 	mux.HandleFunc(projectsPath+"/{id}/archive-export", methodNotAllowed("POST"))
 	mux.HandleFunc("POST "+projectsPath+"/archive-import/preview", s.handleProjectArchiveImportPreview)
-	mux.HandleFunc(projectsPath+"/archive-import/preview", methodNotAllowed("POST"))
 	mux.HandleFunc("POST "+projectsPath+"/archive-import", s.handleProjectArchiveImport)
-	mux.HandleFunc(projectsPath+"/archive-import", methodNotAllowed("POST"))
 }
 
 func countProjectActiveTasks(ctx context.Context, db workspaceQuery, projectID string) (int, error) {
