@@ -11,6 +11,7 @@ import { WordExport } from './WordExport'
 import { WorkspaceBundle, WorkspaceBundleAdd } from './WorkspaceBundle'
 import type { BundleSelection, BundleVersion } from './WorkspaceBundle'
 import { WorkspaceHTMLPreview } from './WorkspaceHTMLPreview'
+import { WorkspaceVersionDiff } from './WorkspaceVersionDiff'
 import { errorMessage, ProjectApiError } from './projects'
 import { researchBriefPath, researchDocumentTemplates } from './researchDocuments'
 import type { ResearchDocumentTemplate } from './researchDocuments'
@@ -110,14 +111,15 @@ type VersionPreviewProps = {
   projectId: string
   versionId: string
   restoreBlocked: string | undefined
-  isCurrent: boolean
+  current: Document
   onRestore: (versionId: string) => void
   revisionActions: RevisionActions
   initialFinding: InitialFinding
   bundleSelection: BundleSelection
 }
 
-function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRestore, revisionActions, initialFinding, bundleSelection }: VersionPreviewProps) {
+function VersionPreview({ projectId, versionId, restoreBlocked, current, onRestore, revisionActions, initialFinding, bundleSelection }: VersionPreviewProps) {
+  const isCurrent = versionId === current.versionId
   const [document, setDocument] = useState<Document>()
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -161,6 +163,7 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
         revisionActions={revisionActions} initialFinding={initialFinding} />
     </>}
     {!isCurrent && <>
+      <WorkspaceVersionDiff historical={document} current={current} />
       {restoreBlocked && <p className="workspace-note">{restoreBlocked}</p>}
       <button className="button outline" type="button" disabled={!!restoreBlocked}
         onClick={() => onRestore(versionId)}>恢复此版本</button>
@@ -199,7 +202,7 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore, select
     <PageControls page={page} label="版本" />
     {!page.loading && !page.error && !page.items.length && <p className="workspace-note">暂无版本。</p>}
     {selected && <VersionPreview key={selected} projectId={projectId} versionId={selected}
-      restoreBlocked={restoreBlocked} isCurrent={selected === currentId} onRestore={onRestore}
+      restoreBlocked={restoreBlocked} current={document} onRestore={onRestore}
       revisionActions={revisionActions} initialFinding={initialFinding} bundleSelection={bundleSelection} />}
   </div>
 }

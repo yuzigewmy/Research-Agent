@@ -1,0 +1,8 @@
+.workspace-diff { min-inline-size: 0; }
+.workspace-diff > summary { color: var(--green); font-weight: 650; cursor: pointer; }
+.workspace-diff-body { display: grid; gap: .625rem; margin-block-start: .5rem; }
+.workspace-diff-body dd { overflow-wrap: anywhere; }
+.workspace-diff-list { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.workspace-diff-list li { display: grid; gap: .375rem; min-inline-size: 0; padding-inline-start: .625rem; border-inline-start: 2px solid var(--green); }
+.workspace-diff-list [data-change='removed'] { border-inline-start-color: var(--error); }
+.workspace-diff-list .workspace-text { min-block-size: 2.25rem; }
