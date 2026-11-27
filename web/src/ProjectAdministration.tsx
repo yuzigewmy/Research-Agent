@@ -1,11 +1,22 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { errorMessage, getProject, isTurnMode, ProjectApiError, turnModeHelp, turnModeLabels, updateProject } from './projects'
-import type { Project, ProjectChanges, TurnMode, UpdateProject } from './projects'
+import {
+  deleteProject, errorMessage, getProject, getProjectDeletePreview, isTurnMode, ProjectApiError,
+  projectArchiveExportPath, turnModeHelp, turnModeLabels, updateProject,
+} from './projects'
+import type { Project, ProjectChanges, ProjectDeletePreview, TurnMode, UpdateProject } from './projects'
 import './project-management.css'
 
 interface ProjectAdministrationProps {
   project: Project
   onUpdated: (project: Project) => void
+  onDeleted?: (projectId: string) => void
+}
+
+const sizeFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 })
+function formatArchiveBytes(bytes: number) {
+  if (bytes >= 1_048_576) return `${sizeFormat.format(bytes / 1_048_576)} MiB`
+  if (bytes >= 1_024) return `${sizeFormat.format(bytes / 1_024)} KiB`
+  return `${bytes} B`
 }
 
 type Operation = 'save' | 'save-title' | 'save-mode' | 'archive' | 'restore' | 'refresh'
@@ -20,14 +31,20 @@ const successMessages: Record<Operation, string> = {
   refresh: '已加载项目的最新版本。',
 }
 
-export function ProjectAdministration({ project, onUpdated }: ProjectAdministrationProps) {
+export function ProjectAdministration({ project, onUpdated, onDeleted }: ProjectAdministrationProps) {
   const id = useId()
   const [draft, setDraft] = useState<string>()
   const [titleDraft, setTitleDraft] = useState<string>()
   const [modeDraft, setModeDraft] = useState<TurnMode>()
   const [pending, setPending] = useState<Operation>()
   const [feedback, setFeedback] = useState<Feedback>()
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deletePreview, setDeletePreview] = useState<ProjectDeletePreview>()
+  const [deleteBusy, setDeleteBusy] = useState<'preview' | 'delete'>()
+  const [deleteError, setDeleteError] = useState('')
+  const [confirmTitle, setConfirmTitle] = useState('')
   const operation = useRef<AbortController | null>(null)
+  const deleteOp = useRef<AbortController | null>(null)
   const attempt = useRef<UpdateProject | undefined>(undefined)
   const nameInput = useRef<HTMLInputElement>(null)
   const titleInput = useRef<HTMLInputElement>(null)
@@ -45,7 +62,62 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
   const archived = project.status === 'ARCHIVED'
   const writesBlocked = pending !== undefined || hasConflict
 
-  useEffect(() => () => operation.current?.abort(), [])
+  useEffect(() => () => {
+    operation.current?.abort()
+    deleteOp.current?.abort()
+  }, [])
+
+  async function openDeletePreview() {
+    if (deleteOp.current) return
+    setDeleteOpen(true)
+    setDeleteError('')
+    setConfirmTitle('')
+    setDeletePreview(undefined)
+    const controller = new AbortController()
+    deleteOp.current = controller
+    setDeleteBusy('preview')
+    try {
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+      const preview = await getProjectDeletePreview(project.projectId, signal)
+      if (!controller.signal.aborted) setDeletePreview(preview)
+    } catch (cause) {
+      if (!controller.signal.aborted) setDeleteError(errorMessage(cause))
+    } finally {
+      deleteOp.current = null
+      if (!controller.signal.aborted) setDeleteBusy(undefined)
+    }
+  }
+
+  async function confirmDeleteProject() {
+    if (!deletePreview || !deletePreview.canDelete || deleteOp.current) return
+    if (confirmTitle.trim() !== project.title) {
+      setDeleteError('请输入完整的研究题目以确认删除。')
+      return
+    }
+    const controller = new AbortController()
+    deleteOp.current = controller
+    setDeleteBusy('delete')
+    setDeleteError('')
+    try {
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
+      await deleteProject(project.projectId, {
+        expectedRevision: project.revision,
+        confirmTitle: confirmTitle.trim(),
+      }, signal)
+      if (!controller.signal.aborted) {
+        onDeleted?.(project.projectId)
+      }
+    } catch (cause) {
+      if (controller.signal.aborted) return
+      if (cause instanceof ProjectApiError && cause.status === 409 && cause.code === 'REVISION_CONFLICT') {
+        setFeedback({ kind: 'conflict' })
+      }
+      setDeleteError(errorMessage(cause))
+    } finally {
+      deleteOp.current = null
+      if (!controller.signal.aborted) setDeleteBusy(undefined)
+    }
+  }
 
   async function run(kind: Operation, changes?: ProjectChanges) {
     if (operation.current || (changes && hasConflict)) return
@@ -164,7 +236,88 @@ export function ProjectAdministration({ project, onUpdated }: ProjectAdministrat
         }}>
           {pending === 'archive' ? '正在归档…' : pending === 'restore' ? '正在恢复…' : archived ? '恢复项目' : '归档项目'}
         </button>
+        <form action={projectArchiveExportPath(project.projectId)} method="post" target="_blank" rel="noopener">
+          <button className="button outline" type="submit">导出项目归档 ZIP</button>
+        </form>
+        <button
+          className="button outline project-danger-button"
+          type="button"
+          aria-expanded={deleteOpen}
+          disabled={deleteBusy !== undefined}
+          onClick={() => {
+            if (deleteOpen) {
+              setDeleteOpen(false)
+              setDeleteError('')
+            } else {
+              void openDeletePreview()
+            }
+          }}
+        >
+          {deleteOpen ? '收起删除确认' : '删除项目'}
+        </button>
       </div>
+      {deleteOpen && (
+        <div className="project-delete-panel" role="region" aria-label="删除项目影响预览">
+          <h5>删除项目（不可撤销）</h5>
+          {deleteBusy === 'preview' && <p className="project-management-help" role="status">正在统计该项目的数据影响…</p>}
+          {deletePreview && (
+            <>
+              <dl className="project-delete-stats">
+                <div><dt>项目资料</dt><dd>{deletePreview.materialCount} 份</dd></div>
+                <div><dt>工作区文件版本</dt><dd>{deletePreview.fileVersionCount} 份</dd></div>
+                <div><dt>已核验文献</dt><dd>{deletePreview.literatureCount} 篇</dd></div>
+                <div><dt>工作流运行</dt><dd>{deletePreview.workflowRunCount} 次</dd></div>
+                <div><dt>活跃任务</dt><dd>{deletePreview.activeTaskCount} 项</dd></div>
+                <div><dt>去重对象体积</dt><dd>{formatArchiveBytes(deletePreview.totalBytes)}</dd></div>
+              </dl>
+              {!deletePreview.canDelete ? (
+                <p className="form-error" role="alert">
+                  当前存在 {deletePreview.activeTaskCount} 项运行中或排队中的任务，请先停止任务后再删除项目。
+                </p>
+              ) : (
+                <div className="field">
+                  <label htmlFor={`${id}-confirm-delete`}>
+                    请输入完整研究题目 <bdi>{project.title}</bdi> 以确认永久删除
+                  </label>
+                  <input
+                    id={`${id}-confirm-delete`}
+                    type="text"
+                    value={confirmTitle}
+                    placeholder={project.title}
+                    disabled={deleteBusy === 'delete'}
+                    onChange={(event) => {
+                      setConfirmTitle(event.currentTarget.value)
+                      setDeleteError('')
+                    }}
+                  />
+                  <div className="project-management-actions">
+                    <button
+                      className="button outline project-danger-button"
+                      type="button"
+                      disabled={deleteBusy === 'delete' || confirmTitle.trim() !== project.title}
+                      onClick={() => void confirmDeleteProject()}
+                    >
+                      {deleteBusy === 'delete' ? '正在删除…' : '确认永久删除'}
+                    </button>
+                    <button
+                      className="button outline"
+                      type="button"
+                      disabled={deleteBusy === 'delete'}
+                      onClick={() => {
+                        setDeleteOpen(false)
+                        setDeleteError('')
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {deleteError && <p className="form-error" role="alert">{deleteError}</p>}
+        </div>
+      )}
       {feedback?.kind === 'error' && <p role="alert" className="form-error">{feedback.message}</p>}
       {feedback?.kind === 'success' && <p role="status" className="project-management-help">{feedback.message}</p>}
       {feedback?.kind === 'conflict' && (

@@ -178,6 +178,232 @@ export function createProject(input: CreateProject) {
   })
 }
 
+export interface ProjectDeletePreview {
+  projectId: string
+  title: string
+  revision: number
+  materialCount: number
+  fileVersionCount: number
+  literatureCount: number
+  workflowRunCount: number
+  activeTaskCount: number
+  totalBytes: number
+  canDelete: boolean
+}
+
+export interface ProjectArchiveMaterial {
+  name: string
+  sha256: string
+  size: number
+  kind: string
+  createdAt: string
+}
+
+export interface ProjectArchiveFile {
+  path: string
+  sha256: string
+  size: number
+  createdAt: string
+  latest: boolean
+}
+
+export interface ProjectArchiveCitationSummary {
+  doi: string
+  title?: string
+  year?: number
+  verifiedAt?: string
+}
+
+export interface ProjectArchiveArtifact {
+  runId: string
+  stepKey: string
+  name: string
+  sha256: string
+  size: number
+  createdAt: string
+}
+
+export interface ProjectArchivePreview {
+  title: string
+  displayName?: string
+  templateId: TemplateId
+  goal?: string
+  deliverables?: string
+  exportedAt?: string
+  materials: ProjectArchiveMaterial[]
+  workspaceFiles: ProjectArchiveFile[]
+  citations: ProjectArchiveCitationSummary[]
+  artifacts: ProjectArchiveArtifact[]
+  totalBytes: number
+}
+
+export interface ProjectArchiveImportResult {
+  project: Project
+  importedMaterials: number
+  importedFiles: number
+  importedCitations: number
+  artifactCount: number
+  replayed?: boolean
+}
+
+export interface ProjectMemoryBrief {
+  path: string
+  versionId: string
+  sha256: string
+  updatedAt: string
+  excerpt: string
+  truncated: boolean
+}
+
+export interface ProjectMemoryWorkflow {
+  runId: string
+  workflowKey: string
+  status: string
+  createdAt: string
+  totalSteps: number
+  succeededSteps: number
+}
+
+export interface ProjectEvidenceChainItem {
+  kind: 'comparison' | 'pdf'
+  linkId: string
+  manuscriptPath: string
+  manuscriptVersionId: string
+  manuscriptOutdated: boolean
+  selectedText: string
+  sourceSummary: string
+  sourceChanged: boolean
+  taskId?: string
+  metric?: string
+  value?: string
+  sourcePath?: string
+  sourceVersionId?: string
+  sourceSha256?: string
+  materialId?: string
+  materialName?: string
+  page?: number
+  quote?: string
+  citationDoi?: string
+  citationTitle?: string
+}
+
+export interface ProjectMemorySummary {
+  project: {
+    projectId: string
+    title: string
+    displayName?: string
+    templateId: TemplateId
+    status: ProjectStatus
+    revision: number
+    goal?: string
+    deliverables?: string
+  }
+  researchBrief?: ProjectMemoryBrief
+  verifiedCitationCount: number
+  completedComparisonCount: number
+  latestWorkflow?: ProjectMemoryWorkflow
+  evidenceChain: ProjectEvidenceChainItem[]
+}
+
+function isNonNegativeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isProjectDeletePreview(value: unknown): value is ProjectDeletePreview {
+  return isRecord(value)
+    && typeof value.projectId === 'string'
+    && typeof value.title === 'string'
+    && isNonNegativeInt(value.revision)
+    && isNonNegativeInt(value.materialCount)
+    && isNonNegativeInt(value.fileVersionCount)
+    && isNonNegativeInt(value.literatureCount)
+    && isNonNegativeInt(value.workflowRunCount)
+    && isNonNegativeInt(value.activeTaskCount)
+    && isNonNegativeInt(value.totalBytes)
+    && typeof value.canDelete === 'boolean'
+}
+
+function isDeleteReceipt(value: unknown): value is { deleted: boolean; projectId: string } {
+  return isRecord(value) && value.deleted === true && typeof value.projectId === 'string'
+}
+
+function isProjectArchivePreview(value: unknown): value is ProjectArchivePreview {
+  return isRecord(value)
+    && typeof value.title === 'string'
+    && isTemplateId(value.templateId)
+    && Array.isArray(value.materials)
+    && Array.isArray(value.workspaceFiles)
+    && Array.isArray(value.citations)
+    && Array.isArray(value.artifacts)
+    && isNonNegativeInt(value.totalBytes)
+}
+
+function isProjectArchiveImportResult(value: unknown): value is ProjectArchiveImportResult {
+  return isRecord(value)
+    && isProject(value.project)
+    && isNonNegativeInt(value.importedMaterials)
+    && isNonNegativeInt(value.importedFiles)
+    && isNonNegativeInt(value.importedCitations)
+    && isNonNegativeInt(value.artifactCount)
+}
+
+function isProjectMemorySummary(value: unknown): value is ProjectMemorySummary {
+  return isRecord(value)
+    && isRecord(value.project)
+    && typeof value.project.projectId === 'string'
+    && typeof value.project.title === 'string'
+    && isTemplateId(value.project.templateId)
+    && isNonNegativeInt(value.verifiedCitationCount)
+    && isNonNegativeInt(value.completedComparisonCount)
+    && Array.isArray(value.evidenceChain)
+}
+
+export function getProjectDeletePreview(projectId: string, signal: AbortSignal) {
+  return request(`${projectPath(projectId)}/delete-preview`, isProjectDeletePreview, { signal, cache: 'no-store' })
+}
+
+export function deleteProject(
+  projectId: string,
+  input: { expectedRevision: number; confirmTitle: string },
+  signal: AbortSignal,
+) {
+  return request(projectPath(projectId), isDeleteReceipt, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    signal,
+  })
+}
+
+export function projectArchiveExportPath(projectId: string) {
+  return `${projectPath(projectId)}/archive-export`
+}
+
+export function previewProjectArchiveImport(file: File, signal: AbortSignal) {
+  return request(`${endpoint}/archive-import/preview`, isProjectArchivePreview, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/zip' },
+    body: file,
+    signal,
+  })
+}
+
+export function importProjectArchive(file: File, requestId: string, signal: AbortSignal) {
+  return request(`${endpoint}/archive-import`, isProjectArchiveImportResult, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/zip',
+      'X-Request-Id': requestId,
+    },
+    body: file,
+    signal,
+  })
+}
+
+export function getProjectMemorySummary(projectId: string, signal: AbortSignal) {
+  return request(`${projectPath(projectId)}/memory-summary`, isProjectMemorySummary, { signal, cache: 'no-store' })
+}
+
 export function errorMessage(error: unknown): string {
   return error instanceof ProjectApiError ? error.message : '操作未完成，请重试。'
 }
