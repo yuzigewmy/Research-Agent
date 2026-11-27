@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { DiagramCanvas } from './DiagramCanvas'
 import { DiagramDownload } from './DiagramDownload'
+import { WorkspaceHTMLPreview } from './WorkspaceHTMLPreview'
 import {
   diagramPath, diagramText, edgeKey, isCoordinate, isDiagram, isDiagramPath, isNodeLabel, maxDiagramEdges,
   maxDiagramNodes, maxNodeX, maxNodeY, newNode, parseDiagram,
@@ -14,6 +15,223 @@ import './diagram.css'
 
 const versionDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const undoLimit = 50
+const htmlDiagramPrefix = 'diagrams/'
+const htmlDiagramSuffix = '.html'
+const htmlDiagramStarter = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  body { margin: 0; padding: 16px; font-family: system-ui, sans-serif; background: #fff; color: #172920; }
+  figure { margin: 0; display: grid; gap: 8px; justify-items: center; }
+  figcaption { font-size: 13px; color: #39534a; }
+</style>
+</head>
+<body>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 180" width="420" height="180" role="img" aria-label="指标对比柱状图">
+      <rect width="100%" height="100%" fill="#f9fbfa" stroke="#c9d6cf" />
+      <rect x="60" y="70" width="60" height="80" fill="#39534a" />
+      <rect x="180" y="45" width="60" height="105" fill="#4f7a69" />
+      <rect x="300" y="30" width="60" height="120" fill="#234136" />
+      <text x="90" y="168" font-size="12" text-anchor="middle">基线</text>
+      <text x="210" y="168" font-size="12" text-anchor="middle">消融</text>
+      <text x="330" y="168" font-size="12" text-anchor="middle">本文方法</text>
+    </svg>
+    <figcaption>图 1：方案指标对比示意（可编辑 HTML/SVG 源码）</figcaption>
+  </figure>
+</body>
+</html>
+`
+
+function buildManuscriptFigureSnippet(file: FileRecord) {
+  const base = file.path.replace(/^diagrams\//, '').replace(/\.(flow\.json|html?)$/i, '')
+  return [
+    `<!-- diagram-ref: path="${file.path}" versionId="${file.versionId}" sha256="${file.sha256}" -->`,
+    `图 1：${base}（来源：\`${file.path}\`，版本 \`${file.versionId}\`，SHA-256 \`${file.sha256.slice(0, 12)}\`）`,
+  ].join('\n')
+}
+
+function DiagramManuscriptLink({ file }: { file: FileRecord }) {
+  const [snippet, setSnippet] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  async function generateAndCopy() {
+    const text = buildManuscriptFigureSnippet(file)
+    setSnippet(text)
+    try {
+      await navigator.clipboard?.writeText(text)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return <div className="diagram-manuscript-link">
+    <div className="workspace-actions">
+      <button className="button outline" type="button" onClick={() => void generateAndCopy()}>
+        插入稿件引用片段
+      </button>
+      {snippet && <span className="workspace-note" role="status">
+        {copied ? '已复制稿件引用片段（含路径、版本与 SHA-256），可直接粘贴到 Markdown 稿件。' : '已生成稿件引用片段（含路径、版本与 SHA-256），请从下方复制。'}
+      </span>}
+    </div>
+    {snippet && <pre className="workspace-text" tabIndex={0} aria-label="稿件引用片段">{snippet}</pre>}
+  </div>
+}
+
+function normalizeHtmlDiagramPath(rawName: string) {
+  let trimmed = rawName.trim()
+  if (trimmed.startsWith(htmlDiagramPrefix)) trimmed = trimmed.slice(htmlDiagramPrefix.length)
+  if (trimmed.toLowerCase().endsWith(htmlDiagramSuffix)) trimmed = trimmed.slice(0, -htmlDiagramSuffix.length)
+  if (!trimmed || /[\\/:\0]/.test(trimmed) || trimmed === '.' || trimmed === '..') {
+    throw new ProjectApiError('请输入有效的 HTML 图名称（不含路径分隔符）。', 400)
+  }
+  return `${htmlDiagramPrefix}${trimmed}${htmlDiagramSuffix}`
+}
+
+function HtmlDiagramWorkspace({ projectId }: { projectId: string }) {
+  const id = useId()
+  const load = useCallback((signal: AbortSignal, cursor?: string) => listFiles(projectId, signal, cursor, 'html'), [projectId])
+  const page = useDiagramPage(load, 'path')
+  const [name, setName] = useState('')
+  const [nameError, setNameError] = useState('')
+  const [path, setPath] = useState<string>()
+  const [draft, setDraft] = useState('')
+  const [saved, setSaved] = useState<Document>()
+  const [busy, setBusy] = useState<'open' | 'save'>()
+  const [error, setError] = useState('')
+  const [conflict, setConflict] = useState(false)
+  const operation = useRef<AbortController | null>(null)
+
+  const htmlPaths = new Set(page.items.map((item) => item.path).filter((p) => p.startsWith(htmlDiagramPrefix) && /\.html?$/i.test(p)))
+  if (saved) htmlPaths.add(saved.path)
+  const dirty = path !== undefined && (!saved || draft !== saved.content)
+
+  useEffect(() => () => operation.current?.abort(), [])
+
+  async function openHtml(targetPath: string) {
+    if (operation.current) return
+    const controller = new AbortController()
+    operation.current = controller
+    setBusy('open')
+    setError('')
+    setConflict(false)
+    try {
+      const doc = await readText(projectId, targetPath, requestSignal(controller))
+      if (!controller.signal.aborted) {
+        setPath(doc.path)
+        setDraft(doc.content)
+        setSaved(doc)
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(errorMessage(cause))
+    } finally {
+      operation.current = null
+      if (!controller.signal.aborted) setBusy(undefined)
+    }
+  }
+
+  function createHtml(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setNameError('')
+    try {
+      const nextPath = normalizeHtmlDiagramPath(name)
+      if (htmlPaths.has(nextPath) || nextPath === path) {
+        setNameError('此 HTML 图名称已存在，请更换名称。')
+        return
+      }
+      setPath(nextPath)
+      setDraft(htmlDiagramStarter)
+      setSaved(undefined)
+      setConflict(false)
+      setError('')
+      setName('')
+    } catch (cause) {
+      setNameError(errorMessage(cause))
+    }
+  }
+
+  async function saveHtml() {
+    if (!path || operation.current) return
+    const controller = new AbortController()
+    operation.current = controller
+    setBusy('save')
+    setError('')
+    try {
+      const doc = await saveText(projectId, path, draft, saved?.sha256 ?? '', requestSignal(controller))
+      if (!controller.signal.aborted) {
+        setSaved(doc)
+        setDraft(doc.content)
+        setConflict(false)
+        page.refresh()
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        if (cause instanceof ProjectApiError && cause.code === 'REVISION_CONFLICT') setConflict(true)
+        else setError(errorMessage(cause))
+      }
+    } finally {
+      operation.current = null
+      if (!controller.signal.aborted) setBusy(undefined)
+    }
+  }
+
+  return <div className="workspace-editor diagram-html-editor">
+    <form className="field" onSubmit={createHtml}>
+      <label htmlFor={`${id}-html-name`}>HTML 图名称</label>
+      <div className="workspace-create-row">
+        <input id={`${id}-html-name`} autoComplete="off" dir="auto" value={name} disabled={!!busy}
+          aria-describedby={`${id}-html-hint`} aria-invalid={!!nameError || undefined}
+          onChange={(event) => {
+            setName(event.currentTarget.value)
+            setNameError('')
+          }} />
+        <button className="button outline" type="submit" disabled={!!busy || !name.trim()}>新建 HTML 可编辑图</button>
+      </div>
+      <p id={`${id}-html-hint`} className="workspace-note">保存至 diagrams/*.html，右侧预览采用无脚本沙箱隔离。</p>
+      {nameError && <p className="form-error" role="alert">{nameError}</p>}
+    </form>
+    {htmlPaths.size > 0 && <ul className="workspace-list" aria-label="已保存 HTML 图" role="list">
+      {[...htmlPaths].map((itemPath) => <li key={itemPath}>
+        <button className="workspace-row" type="button" aria-current={path === itemPath ? 'true' : undefined}
+          disabled={!!busy} onClick={() => void openHtml(itemPath)}><bdi>{itemPath}</bdi></button>
+      </li>)}
+    </ul>}
+    <PageControls page={page} label="HTML 图" />
+    {!page.loading && !page.error && htmlPaths.size === 0 && <p className="workspace-note">暂无已保存的 HTML 可编辑图。</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {conflict && <p className="form-error" role="alert">此 HTML 图已有新版本，请重新加载后再保存。</p>}
+    {path && <section className="workspace-editor" aria-label="HTML 图编辑器">
+      <div className="workspace-heading">
+        <h4><bdi>{path}</bdi></h4>
+        <span className="diagram-status" role="status">{dirty ? '有未保存的修改' : '已保存'}</span>
+      </div>
+      <div className="workspace-actions">
+        <button className="button primary" type="button" disabled={!!busy || !dirty || conflict}
+          onClick={() => void saveHtml()}>{busy === 'save' ? '正在保存…' : '保存 HTML 图'}</button>
+        {saved && <button className="button outline" type="button" disabled={!!busy}
+          onClick={() => void openHtml(saved.path)}>重新加载</button>}
+      </div>
+      <div className="diagram-html-split">
+        <div className="field">
+          <label htmlFor={`${id}-html-source`}>HTML / SVG 源码</label>
+          <textarea id={`${id}-html-source`} className="workspace-text" rows={14} spellCheck={false}
+            value={draft} readOnly={!!busy} onChange={(event) => setDraft(event.currentTarget.value)} />
+        </div>
+        <div className="field">
+          <span className="diagram-preview-label">沙箱实时预览</span>
+          <iframe title={`HTML 图预览 ${path}`} sandbox="" referrerPolicy="no-referrer"
+            srcDoc={draft} className="engineering-preview-frame" />
+        </div>
+      </div>
+      {saved && <>
+        <DiagramManuscriptLink key={`link:${saved.versionId}`} file={saved} />
+        <WorkspaceHTMLPreview key={saved.versionId} projectId={projectId} file={saved} />
+      </>}
+    </section>}
+  </div>
+}
 
 type Editor = {
   path: string
@@ -440,6 +658,7 @@ function DiagramWorkspace({ projectId }: { projectId: string }) {
         {saved ? <>导出来源为已保存版本 <code title={saved.file.sha256}>{saved.file.sha256.slice(0, 12)}</code>。
           {dirty && ' 保存修改后可下载新版。'}</> : '保存流程图后可下载 SVG、PNG 或 PDF。'}
       </p>
+      {saved && <DiagramManuscriptLink key={`flow-link:${saved.file.versionId}`} file={saved.file} />}
       {!validDraft && <p className="form-error" role="status">请修正节点标签或坐标后再保存。</p>}
       <div className="workspace-actions" role="group" aria-label="画布缩放">
         <button className="button outline" type="button" disabled={zoom === 50} onClick={() => setZoom((value) => value - 25)}>缩小</button>
@@ -478,10 +697,21 @@ function DiagramWorkspace({ projectId }: { projectId: string }) {
 
 export function DiagramPanel({ projectId }: { projectId: string }) {
   const [visited, setVisited] = useState(false)
+  const [mode, setMode] = useState<'flow' | 'html'>('flow')
   return <details className="diagram-panel" id="project-diagrams" onToggle={(event) => {
     if (event.target === event.currentTarget && event.currentTarget.open) setVisited(true)
   }}>
     <summary>图表工作区</summary>
-    {visited && <DiagramWorkspace key={projectId} projectId={projectId} />}
+    {visited && <div className="diagram-panel-body">
+      <div className="workspace-actions" role="group" aria-label="图表编辑模式">
+        <button className="button outline" type="button" aria-pressed={mode === 'flow'}
+          onClick={() => setMode('flow')}>流程图画布</button>
+        <button className="button outline" type="button" aria-pressed={mode === 'html'}
+          onClick={() => setMode('html')}>HTML 可编辑图</button>
+      </div>
+      {mode === 'flow'
+        ? <DiagramWorkspace key={`flow:${projectId}`} projectId={projectId} />
+        : <HtmlDiagramWorkspace key={`html:${projectId}`} projectId={projectId} />}
+    </div>}
   </details>
 }

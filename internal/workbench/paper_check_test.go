@@ -1,8 +1,14 @@
 package workbench
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"research-agent/internal/literature"
 )
 
 func TestPaperCheckRecognizesAIDisclosureHeading(t *testing.T) {
@@ -213,5 +219,141 @@ func TestPaperCheckReportsDuplicateCaptionNumbers(t *testing.T) {
 				t.Fatalf("duplicate notices = %d, want %d:\n%s", notices, tt.notices, report)
 			}
 		})
+	}
+}
+
+func TestPaperCheckDetailedStagesCitationsAndHTTP(t *testing.T) {
+	source := strings.Join([]string{
+		"# 实验论文初稿",
+		"",
+		"## 摘要",
+		"本文对比两种方法，见 [@ref-valid] 与 [@missing2026]。",
+		"",
+		"## 引言",
+		"参考综述 \\cite{ref-valid, unknown-ref}，另见 [cite:missing-colon]。",
+		"",
+		"## 方法",
+		"TODO: 补充消融实验。",
+		"图 1：系统架构",
+		"Figure 1. Duplicate architecture caption",
+		"",
+		"## 结论",
+		"实验表明模型有效。",
+	}, "\n")
+
+	valid := map[string]bool{"ref-valid": true}
+
+	plan := paperCheckDetailed(source, "plan", valid)
+	if plan.Stage != "plan" || plan.Stats.ChineseChars == 0 || plan.Stats.EnglishWords == 0 {
+		t.Fatalf("unexpected plan report: %+v", plan)
+	}
+	if !slices.Equal(plan.Citations.Matched, []string{"ref-valid"}) {
+		t.Fatalf("matched citations = %v", plan.Citations.Matched)
+	}
+	if !slices.Equal(plan.Citations.Missing, []string{"missing-colon", "missing2026", "unknown-ref"}) {
+		t.Fatalf("missing citations = %v", plan.Citations.Missing)
+	}
+	// Plan stage treats placeholders as info, final treats as error
+	foundPlanPlaceholder := false
+	for _, d := range plan.Diagnostics {
+		if d.Rule == "placeholder" && d.Line == 10 && d.Severity == "info" {
+			foundPlanPlaceholder = true
+		}
+	}
+	if !foundPlanPlaceholder {
+		t.Fatalf("plan stage placeholder diagnostic mismatch: %+v", plan.Diagnostics)
+	}
+
+	draft := paperCheckDetailed(source, "draft", valid)
+	foundDraftDup := false
+	for _, d := range draft.Diagnostics {
+		if d.Rule == "duplicate_caption" && d.Line == 12 && d.Severity == "warning" {
+			foundDraftDup = true
+		}
+	}
+	if !foundDraftDup {
+		t.Fatalf("draft stage duplicate caption mismatch: %+v", draft.Diagnostics)
+	}
+
+	final := paperCheckDetailed(source, "final", valid)
+	var hasAIDisclosureErr, hasMissingCiteErr, hasDupErr bool
+	for _, d := range final.Diagnostics {
+		if d.Rule == "section_missing" && strings.Contains(d.Message, "AI 使用披露") && d.Severity == "error" {
+			hasAIDisclosureErr = true
+		}
+		if d.Rule == "citation_missing" && d.Line == 4 && strings.Contains(d.Message, "missing2026") && d.Severity == "error" {
+			hasMissingCiteErr = true
+		}
+		if d.Rule == "duplicate_caption" && d.Line == 12 && d.Severity == "error" {
+			hasDupErr = true
+		}
+	}
+	if !hasAIDisclosureErr || !hasMissingCiteErr || !hasDupErr {
+		t.Fatalf("final diagnostics missing expected items: %+v", final.Diagnostics)
+	}
+
+	// HTTP endpoint test with project literature & project isolation
+	ctx := t.Context()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, _, err := store.createProject(ctx, createProjectInput{
+		RequestID:  "req-check-1",
+		Title:      "检查测试项目",
+		TemplateID: "paper",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := store.createProject(ctx, createProjectInput{
+		RequestID:  "req-check-2",
+		Title:      "隔离项目",
+		TemplateID: "paper",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := literature.Work{DOI: "10.1000/check.2026", Title: "Check Ref", Authors: []string{"Wang"}, Year: 2026}
+	if _, _, err := store.saveCitation(ctx, project.ProjectID, work); err != nil {
+		t.Fatal(err)
+	}
+	key := citationKey(work.DOI)
+	md := "# 论文\n\n## 摘要\n见 [@" + key + "] 和 [@unregistered]。\n"
+	doc, err := store.saveWorkspaceDocument(ctx, project.ProjectID, "paper/check.md", "", md)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(store, nil, HandlerConfig{})
+	route := "http://127.0.0.1" + projectsPath + "/" + project.ProjectID + "/files/versions/" + doc.VersionID + "/check"
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, route, strings.NewReader(`{"stage":"final"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check endpoint returned %d: %s", rec.Code, rec.Body)
+	}
+	var report paperCheckReport
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.SourceVersionID != doc.VersionID || report.SourceSHA256 != doc.SHA256 || report.Stage != "final" {
+		t.Fatalf("unexpected report header: %+v", report)
+	}
+	if !slices.Equal(report.Citations.Matched, []string{key}) || !slices.Equal(report.Citations.Missing, []string{"unregistered"}) {
+		t.Fatalf("unexpected http citations: %+v", report.Citations)
+	}
+
+	// Project isolation check
+	isoRoute := "http://127.0.0.1" + projectsPath + "/" + other.ProjectID + "/files/versions/" + doc.VersionID + "/check"
+	isoReq := httptest.NewRequestWithContext(ctx, http.MethodPost, isoRoute, strings.NewReader(`{"stage":"final"}`))
+	isoReq.Header.Set("Content-Type", "application/json")
+	isoRec := httptest.NewRecorder()
+	handler.ServeHTTP(isoRec, isoReq)
+	if isoRec.Code != http.StatusNotFound {
+		t.Fatalf("cross-project check returned %d, want 404", isoRec.Code)
 	}
 }

@@ -18,6 +18,7 @@ import type { TaskLink } from './tasks'
 import type { WorkflowRunLink } from './WorkflowRunHistory'
 import { WorkspaceBackup } from './WorkspaceBackup'
 import { WorkspaceComponents } from './WorkspaceComponents'
+import { WorkbenchAssistant } from './WorkbenchAssistant'
 import { useWorkbenchPreferences, WorkbenchPreferences } from './WorkbenchPreferences'
 
 type Catalog = { kind: 'loading' } | { kind: 'ready'; items: ProjectTemplate[] } | { kind: 'error'; message: string }
@@ -148,11 +149,13 @@ function Workbench() {
     if (selectedFromUrl().projectId === null) navigate(project.projectId)
   }
 
+  const en = preferences.language === 'en'
+
   return (
     <main className="workbench">
       <header className="masthead workbench-masthead">
-        <h1>研究工作台</h1>
-        <Notifications hrefFor={projectUrl} onOpen={followProjectLink} onNavigate={navigate} />
+        <h1>{en ? 'Research Workbench' : '研究工作台'}</h1>
+        <Notifications hrefFor={projectUrl} onOpen={followProjectLink} onNavigate={navigate} language={preferences.language} />
       </header>
       <WorkbenchPreferences {...preferences} />
       <ModelConnection />
@@ -163,11 +166,11 @@ function Workbench() {
         <section className="project-panel" aria-labelledby="workspace-title">
           <header className="panel-heading">
             <h2 id="workspace-title" ref={heading} tabIndex={-1}>
-              {selectedId === null ? '新建项目' : '项目详情'}
+              {selectedId === null ? (en ? 'New Project' : '新建项目') : (en ? 'Project Details' : '项目详情')}
             </h2>
             {selectedId !== null && (
               <a className="button outline" href={projectUrl(null)} onClick={(event) => followProjectLink(event, null)}>
-                <span aria-hidden="true">+</span> 新建项目
+                <span aria-hidden="true">+</span> {en ? 'New Project' : '新建项目'}
               </a>
             )}
           </header>
@@ -191,6 +194,7 @@ function Workbench() {
         </section>
         <ProjectList list={list} hidden={preferences.sidebarHidden} selectedId={selectedId} hrefFor={projectUrl} onOpen={followProjectLink} />
       </div>
+      <WorkbenchAssistant projectId={selectedId} language={preferences.language} />
     </main>
   )
 }
