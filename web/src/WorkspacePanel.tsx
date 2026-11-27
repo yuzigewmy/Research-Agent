@@ -46,38 +46,45 @@ function requestSignal(controller: AbortController) {
   return AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
 }
 
-function useFilePage(load: (signal: AbortSignal, cursor?: string) => Promise<FilePage>, key: 'path' | 'versionId') {
-  const [page, setPage] = useState<FilePage>({ items: [] })
-  const [query, setQuery] = useState<{ cursor?: string }>({})
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+function useFilePage(load: (signal: AbortSignal, cursor?: string, search?: string) => Promise<FilePage>, key: 'path' | 'versionId') {
+  const [state, setState] = useState<{
+    page: FilePage
+    query: { cursor?: string; search: string }
+    loading: boolean
+    error: string
+  }>({ page: { items: [] }, query: { search: '' }, loading: true, error: '' })
+  const { page, query, loading, error } = state
 
   useEffect(() => {
     const controller = new AbortController()
-    void load(requestSignal(controller), query.cursor).then((next) => {
+    void load(requestSignal(controller), query.cursor, query.search).then((next) => {
       if (controller.signal.aborted) return
-      setPage((current) => {
-        if (!query.cursor) return next
-        const combined = new Map(current.items.map((item) => [item[key], item]))
+      setState((current) => {
+        if (current.query !== query) return current
+        if (!query.cursor) return { ...current, page: next, loading: false }
+        const combined = new Map(current.page.items.map((item) => [item[key], item]))
         for (const item of next.items) combined.set(item[key], item)
-        return { items: [...combined.values()], nextCursor: next.nextCursor }
+        return { ...current, page: { items: [...combined.values()], nextCursor: next.nextCursor }, loading: false }
       })
-      setLoading(false)
-    }).catch((error: unknown) => {
-      if (controller.signal.aborted) return
-      setError(errorMessage(error))
-      setLoading(false)
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted) setState((current) => current.query === query
+        ? { ...current, error: errorMessage(cause), loading: false } : current)
     })
     return () => controller.abort()
   }, [key, load, query])
 
-  function loadPage(cursor?: string) {
-    setError('')
-    setLoading(true)
-    setQuery({ cursor })
+  function loadPage(cursor?: string, search = query.search) {
+    setState(current => ({
+      page: search === current.query.search ? current.page : { items: [] },
+      query: { cursor, search }, loading: true, error: '',
+    }))
   }
 
-  return { ...page, loading, error, retry: () => loadPage(query.cursor), more: () => loadPage(page.nextCursor) }
+  return {
+    ...page, loading, error, search: query.search,
+    retry: () => loadPage(query.cursor), more: () => loadPage(page.nextCursor),
+    filter: (search: string) => loadPage(undefined, search),
+  }
 }
 
 function PageControls({ page, label }: { page: ReturnType<typeof useFilePage>; label: string }) {
@@ -210,8 +217,9 @@ export function WorkspacePanel(props: WorkspaceProps) {
 
 function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscriptSelections, onManuscriptSelection }: WorkspaceProps) {
   const id = useId()
-  const load = useCallback((signal: AbortSignal, cursor?: string) => listFiles(projectId, signal, cursor), [projectId])
+  const load = useCallback((signal: AbortSignal, cursor?: string, search?: string) => listFiles(projectId, signal, cursor, undefined, search), [projectId])
   const page = useFilePage(load, 'path')
+  const [searchInput, setSearchInput] = useState('')
   const [createdPaths, setCreatedPaths] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
@@ -229,6 +237,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const [conflict, setConflict] = useState(false)
   const operation = useRef<AbortController | null>(null)
   const editor = useRef<HTMLTextAreaElement>(null)
+  const searchField = useRef<HTMLInputElement>(null)
   const discardPrompt = useRef<HTMLDivElement>(null)
   const manuscriptInput = useRef<HTMLInputElement>(null)
   const currentPath = document?.path
@@ -257,7 +266,14 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   if (conflict) briefHint = '请重新加载研究简报后引用。'
   else if (dirty) briefHint = '请保存研究简报后再引用。'
   else if (!briefQuote) briefHint = '研究简报须有正文，全文最多 8 KiB（UTF-8）。'
-  const paths = [...new Set([...publishedPaths, ...createdPaths, ...page.items.map(({ path }) => path)])]
+  const recentPaths = [...publishedPaths, ...createdPaths]
+  // SQLite's lower() folds ASCII only. Apply the same search to files just added in this tab.
+  const asciiLower = (text: string) => text.replace(/[A-Z]/g, letter => letter.toLowerCase())
+  const needle = asciiLower(page.search)
+  const paths = [...new Set([
+    ...recentPaths.filter(path => asciiLower(path).includes(needle)),
+    ...page.items.map(({ path }) => path),
+  ])]
   const restoreBlocked = conflict ? '请先重新加载当前文件。'
     : dirty ? '请先保存草稿或放弃修改。'
       : applying ? '正在应用修改建议。' : busy ? progress[busy] : undefined
@@ -451,6 +467,22 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
         <p id={`${id}-path-hint`} className="workspace-note">输入项目内的相对路径，例如 paper/main.md。</p>
       </form>}
     </div>
+    <form className="field" onSubmit={(event) => {
+      event.preventDefault()
+      page.filter(searchInput.trim())
+    }}>
+      <label htmlFor={`${id}-search`}>搜索文件路径</label>
+      <div className="workspace-create-row">
+        <input id={`${id}-search`} ref={searchField} type="search" value={searchInput} maxLength={512}
+          onChange={event => setSearchInput(event.currentTarget.value)} />
+        <button className="button outline" type="submit">搜索文件</button>
+        {page.search && <button className="button outline" type="button" onClick={() => {
+          setSearchInput('')
+          page.filter('')
+          searchField.current?.focus()
+        }}>清除文件搜索</button>}
+      </div>
+    </form>
     {paths.length > 0 && <ul className="workspace-list" role="list" aria-label="工作区文件">
       {paths.map((path) => (
         <li key={path}>
@@ -462,8 +494,8 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
       ))}
     </ul>}
     <PageControls page={page} label="文件" />
-    {!page.loading && !page.error && !paths.length && <p className="workspace-note">
-      {manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
+    {!page.loading && !page.error && !paths.length && <p className="workspace-note" role="status">
+      {page.search ? '没有匹配的文件路径。' : manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
     </p>}
     {destination && <div className="workspace-discard" ref={discardPrompt} tabIndex={-1}
       role="group" aria-label="处理未保存的修改">

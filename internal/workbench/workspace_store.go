@@ -76,12 +76,17 @@ func (s *Store) readWorkspaceDocument(file WorkspaceFile) (WorkspaceDocument, er
 	return WorkspaceDocument{WorkspaceFile: file, Content: string(content)}, err
 }
 
-func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name, kind string, cursor int64, limit int) ([]WorkspaceFile, error) {
+func (s *Store) listWorkspaceFiles(ctx context.Context, projectID, name, kind, search string, cursor int64, limit int) ([]WorkspaceFile, error) {
 	query := `SELECT ` + workspaceFileColumns + ` FROM workspace_versions WHERE project_id = ?`
 	args := []any{projectID}
 	if name == "" {
-		query += ` AND ordinal IN (SELECT MAX(ordinal) FROM workspace_versions WHERE project_id = ? GROUP BY path)`
+		latest := `SELECT MAX(ordinal) FROM workspace_versions WHERE project_id = ?`
 		args = append(args, projectID)
+		if search != "" {
+			latest += ` AND instr(lower(path), lower(?)) > 0`
+			args = append(args, search)
+		}
+		query += ` AND ordinal IN (` + latest + ` GROUP BY path)`
 	} else {
 		query += ` AND path = ?`
 		args = append(args, name)

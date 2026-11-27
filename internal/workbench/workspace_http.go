@@ -6,9 +6,11 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const maxWorkspaceText = 512 << 10
@@ -47,20 +49,30 @@ func validWorkspaceBase(value string) bool {
 
 func (s *Store) handleListWorkspace(history bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "文件列表查询参数无效。")
+			return
+		}
 		var name string
-		kind := r.URL.Query().Get("kind")
+		search := strings.TrimSpace(query.Get("q"))
+		if (history && search != "") || len(search) > 512 || !utf8.ValidString(search) || strings.ContainsFunc(search, unicode.IsControl) {
+			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "文件列表可按有效的路径文字搜索，最多 512 个 UTF-8 字节。")
+			return
+		}
+		kind := query.Get("kind")
 		if kind != "" && (history || (kind != "diagram" && kind != "markdown" && kind != "html" && kind != "csv")) {
 			writeError(w, http.StatusBadRequest, "INVALID_INPUT", "请选择受支持的文件类型。")
 			return
 		}
 		if history {
-			name = r.URL.Query().Get("path")
+			name = query.Get("path")
 			if !validWorkspacePath(name) {
 				writeError(w, http.StatusBadRequest, "INVALID_PATH", "请输入项目内的相对路径，例如 paper/main.md。")
 				return
 			}
 		}
-		cursor, err := eventCursor(r.URL.Query().Get("cursor"))
+		cursor, err := eventCursor(query.Get("cursor"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_CURSOR", "文件列表游标无效。")
 			return
@@ -71,7 +83,7 @@ func (s *Store) handleListWorkspace(history bool) http.HandlerFunc {
 			return
 		}
 		const limit = 50
-		items, err := s.listWorkspaceFiles(ctx, projectID, name, kind, cursor, limit+1)
+		items, err := s.listWorkspaceFiles(ctx, projectID, name, kind, search, cursor, limit+1)
 		if err != nil {
 			writeWorkspaceError(w, "list workspace files", err)
 			return

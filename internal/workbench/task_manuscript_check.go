@@ -28,7 +28,7 @@ func markdownPath(name string) bool {
 }
 
 func (s *Store) manuscriptCheckChoices(ctx context.Context, projectID string) ([]taskInput, error) {
-	files, err := s.listWorkspaceFiles(ctx, projectID, "", "markdown", 0, maxManuscriptChoices)
+	files, err := s.listWorkspaceFiles(ctx, projectID, "", "markdown", "", 0, maxManuscriptChoices)
 	if err != nil {
 		return nil, err
 	}
