@@ -10,7 +10,11 @@ interface Directory extends FileSystemDirectoryHandle {
 type DirectoryPicker = (options: { mode: 'read' }) => Promise<Directory>
 type SavePicker = (options: { suggestedName: string; startIn: Directory }) => Promise<FileSystemFileHandle>
 type Folder = { chain: Directory[]; entries: Entry[] }
-type FilePreview = { handle: FileSystemFileHandle; file: File; text?: string }
+type LocalFileHandle = FileSystemFileHandle & {
+  requestPermission?: (options: { mode: 'readwrite' }) => Promise<PermissionState>
+  remove?: () => Promise<void>
+}
+type FilePreview = { handle: LocalFileHandle; file: File; text?: string }
 
 const entryLimit = 500
 const previewLimit = 64 * 1024
@@ -48,9 +52,10 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
   const titleId = useId()
   const [folder, setFolder] = useState<Folder>()
   const [preview, setPreview] = useState<FilePreview>()
+  const [deleteTarget, setDeleteTarget] = useState<FilePreview>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [receipt, setReceipt] = useState<{ action: '已导入' | '已复制'; name: string }>()
+  const [receipt, setReceipt] = useState<{ action: '已导入' | '已复制' | '已删除'; name: string }>()
   const active = useRef<AbortController | null>(null)
   useEffect(() => () => active.current?.abort(), [])
 
@@ -78,6 +83,7 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
     signal.throwIfAborted()
     setFolder(next)
     setPreview(undefined)
+    setDeleteTarget(undefined)
   }
 
   function selectDirectory() {
@@ -91,6 +97,7 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
 
   function openEntry(entry: Entry) {
     if (!folder) return
+    setDeleteTarget(undefined)
     if (entry.kind === 'directory') {
       void run(signal => openFolder([...folder.chain, entry], signal))
     } else {
@@ -130,6 +137,35 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
     }, '无法访问源文件或保存目标，请重新选择文件后重试。')
   }
 
+  function deleteFile() {
+    if (!folder || !deleteTarget) return
+    const { handle, file } = deleteTarget
+    const { requestPermission, remove } = handle
+    if (!requestPermission || !remove) return
+    void run(async signal => {
+      // Request permission from the confirmation button's user gesture.
+      const permission = await requestPermission.call(handle, { mode: 'readwrite' })
+      signal.throwIfAborted()
+      setDeleteTarget(undefined)
+      if (permission !== 'granted') {
+        setError('浏览器未授权删除此文件。')
+        return
+      }
+      const current = await handle.getFile()
+      signal.throwIfAborted()
+      if (current.size !== file.size || current.lastModified !== file.lastModified) {
+        setError('本机文件已变化，请重新预览后再删除。')
+        setPreview(undefined)
+        return
+      }
+      await remove.call(handle)
+      signal.throwIfAborted()
+      setFolder({ ...folder, entries: folder.entries.filter(entry => entry !== handle) })
+      setPreview(undefined)
+      setReceipt({ action: '已删除', name: file.name })
+    }, '无法删除此文件，请检查目录访问权限并重新预览。')
+  }
+
   return <details className="material-local-directory" aria-labelledby={titleId}>
     <summary id={titleId}>本机资料目录</summary>
     <div className="material-local-directory-body">
@@ -139,6 +175,7 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
         {folder && <button className="button outline" type="button" disabled={busy} onClick={() => {
           setFolder(undefined)
           setPreview(undefined)
+          setDeleteTarget(undefined)
           setError('')
           setReceipt(undefined)
         }}>卸载目录</button>}
@@ -167,7 +204,17 @@ export function LocalDirectory({ projectId, onImported }: { projectId: string; o
             onClick={() => importFile(preview.file)}>导入选中文件</button>
           {savePicker && <button className="button outline" type="button" disabled={busy}
             onClick={() => copyFile(preview)}>保存本机副本</button>}
+          {preview.handle.requestPermission && preview.handle.remove && <button className="button outline" type="button"
+            disabled={busy} aria-expanded={deleteTarget === preview} aria-controls={`${titleId}-delete`}
+            onClick={() => setDeleteTarget(deleteTarget === preview ? undefined : preview)}>删除本机文件</button>}
         </div>
+        {deleteTarget === preview && folder && <div id={`${titleId}-delete`} className="workspace-discard" role="group" aria-label="确认删除本机文件">
+          <p>将从本机删除 <bdi>{[...folder.chain.map(entry => entry.name), preview.file.name].join('/')}</bdi>。此操作无法在工作台撤销。</p>
+          <div className="material-actions">
+            <button className="button outline" type="button" disabled={busy} onClick={() => setDeleteTarget(undefined)}>取消删除</button>
+            <button className="button outline" type="button" disabled={busy} onClick={deleteFile}>确认删除</button>
+          </div>
+        </div>}
         {preview.file.size > materialSizeLimit && <p className="material-note">单个文件导入上限为 64 MiB。</p>}
       </section>}
       {busy && <p className="material-note" role="status">正在处理本机资料…</p>}
