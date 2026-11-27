@@ -149,6 +149,9 @@ func (s *Store) turnMaterialExcerpts(ctx context.Context, references []TurnRefer
 			if err != nil {
 				return nil, err
 			}
+			if isTableMaterialName(ref.Name) {
+				excerpt.Text = maskTableText(excerpt.Text, ref.Name)
+			}
 		}
 		materials = append(materials, turnMaterialExcerpt{ref, excerpt})
 	}

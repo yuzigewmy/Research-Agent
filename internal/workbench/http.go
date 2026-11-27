@@ -120,9 +120,12 @@ func NewHandler(store *Store, webFS fs.FS, config HandlerConfig) http.Handler {
 	mux.HandleFunc("GET "+projectsPath, store.handleListProjects)
 	mux.HandleFunc("POST "+projectsPath, store.handleCreateProject)
 	mux.HandleFunc(projectsPath, methodNotAllowed("GET, HEAD, POST"))
+	store.registerProjectArchiveAndDelete(mux)
+	store.registerProjectMemory(mux)
 	mux.HandleFunc("GET "+projectsPath+"/{id}", store.handleGetProject)
 	mux.HandleFunc("PATCH "+projectsPath+"/{id}", store.handlePatchProject)
-	mux.HandleFunc(projectsPath+"/{id}", methodNotAllowed("GET, HEAD, PATCH"))
+	mux.HandleFunc("DELETE "+projectsPath+"/{id}", store.handleDeleteProject)
+	mux.HandleFunc(projectsPath+"/{id}", methodNotAllowed("GET, HEAD, PATCH, DELETE"))
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
