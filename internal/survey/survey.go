@@ -36,6 +36,7 @@ type Options struct {
 	Reliability      *ReliabilityOptions `json:"reliability,omitempty"`
 	Regression       *RegressionOptions  `json:"regression,omitempty"`
 	Sheet            string              `json:"sheet,omitempty"`
+	WeightColumn     string              `json:"weightColumn,omitempty"`
 }
 
 // Review resolves a pending response by its one-based record number after the header.
@@ -59,6 +60,7 @@ type Report struct {
 	CrossTab    *CrossTab    `json:"crossTab,omitempty"`
 	Reliability *Reliability `json:"reliability,omitempty"`
 	Regression  *Regression  `json:"regression,omitempty"`
+	Weighting   *Weighting   `json:"weighting,omitempty"`
 	Demo        bool         `json:"demo"`
 }
 
@@ -167,6 +169,15 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 			return Report{}, err
 		}
 	}
+	var weights *weightAccumulator
+	if options.WeightColumn != "" {
+		key := strings.ToLower(strings.TrimSpace(options.WeightColumn))
+		index, found := byName[key]
+		if !found || excludeSummary(key) {
+			return Report{}, errors.New("请选择答卷表中的有效权重列。")
+		}
+		weights = &weightAccumulator{index: index, Weighting: Weighting{Column: header[index]}}
+	}
 	statusIndex, hasStatus := byName[qualityColumn]
 	_, demo := byName[syntheticColumn]
 	report := Report{Columns: header, Rows: []Row{}, Summaries: make([]Summary, 0, len(accumulators)), Demo: demo}
@@ -236,6 +247,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 		switch result.Status {
 		case StatusValid:
 			report.Valid++
+			if weights != nil {
+				weights.add(record)
+			}
 			if crossTab != nil {
 				if err := crossTab.add(record); err != nil {
 					return Report{}, err
@@ -274,6 +288,9 @@ func analyzeResponses(header []string, read readResponse, options Options) (Repo
 	}
 	if regression != nil {
 		report.Regression = regression.finish()
+	}
+	if weights != nil {
+		report.Weighting = weights.finish()
 	}
 	return report, nil
 }

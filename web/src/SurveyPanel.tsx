@@ -6,7 +6,7 @@ import {
   analyzeSurvey, crossTabCategoryLimit, crossTabLabelByteLimit, listSurveySheets, listSurveys, readSurvey,
   reliabilityItemLimit, surveyDownloadPath,
 } from './surveys'
-import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary } from './surveys'
+import type { SurveyCrossTab, SurveyCrossTabOptions, SurveyOptions, SurveyReliability, SurveyReliabilityOptions, SurveyReview, SurveyRow, SurveyRun, SurveySummary, SurveyWeighting } from './surveys'
 import './survey.css'
 
 const reportDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
@@ -15,10 +15,11 @@ const rowPageSize = 20
 const rowLabels = { VALID: '有效', INVALID: '无效', PENDING: '待复核' } as const
 const ruleNames = ['requiredColumns', 'duplicateColumns'] as const
 type RuleName = typeof ruleNames[number]
-type SurveyCalculation = 'analyze' | 'cross-tab' | 'reliability' | 'regression'
+type SurveyCalculation = 'analyze' | 'weighting' | 'cross-tab' | 'reliability' | 'regression'
 type SurveyOperation = SurveyCalculation | 'read'
 const surveyOperationLabels: Record<SurveyOperation, string> = {
   analyze: '正在分析并保存报告…',
+  weighting: '正在更新权重并保存报告…',
   'cross-tab': '正在计算交叉统计…',
   reliability: '正在计算量表信度…',
   regression: '正在计算线性回归…',
@@ -69,6 +70,50 @@ function ListControls({ list, label }: { list: ReturnType<typeof useSurveyList<u
   return null
 }
 
+function ReportWeighting({ summaries, valid, result, busy, error, onApply }: {
+  summaries: SurveySummary[]
+  valid: number
+  result?: SurveyWeighting
+  busy: boolean
+  error?: string
+  onApply: (column?: string) => void
+}) {
+  const id = useId()
+  const appliedColumn = result?.column ?? ''
+  const [column, setColumn] = useState(appliedColumn)
+  const columns = summaries.map(({ column }) => column)
+
+  return <section className="survey-section" aria-labelledby={`${id}-heading`}>
+    <h6 id={`${id}-heading`}>答卷权重</h6>
+    {result && <>
+      <p className="survey-note">当前权重列：<bdi>{result.column}</bdi></p>
+      <dl className="survey-counts">
+        <div><dt>未加权有效答卷</dt><dd>{valid}</dd></div>
+        <div><dt>参与加权答卷</dt><dd>{result.included}</dd></div>
+        <div><dt>缺失权重</dt><dd>{result.missing}</dd></div>
+        <div><dt>无效权重</dt><dd>{result.invalid}</dd></div>
+        <div><dt>权重合计</dt><dd>{result.totalWeight}</dd></div>
+      </dl>
+    </>}
+    {columns.length > 0 ? <>
+      <div className="field">
+        <label htmlFor={id}>权重列</label>
+        <select id={id} value={column} disabled={busy} aria-describedby={`${id}-help`}
+          onChange={(event) => setColumn(event.currentTarget.value)}>
+          <option value="">不使用权重</option>
+          {columns.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+      </div>
+      <p className="survey-note" id={`${id}-help`}>
+        权重须为大于 0、至多 1,000,000 的普通十进制数，最多 6 位小数。应用后会沿用当前报告的清洗规则和复核决定，生成新报告。
+      </p>
+      <button className="button outline" type="button" disabled={busy || column === appliedColumn}
+        onClick={() => onApply(column || undefined)}>应用权重</button>
+    </> : <p className="survey-note">此报告没有可用的权重列。</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </section>
+}
+
 function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid: number }) {
   const selectId = useId()
   const [column, setColumn] = useState(summaries[0]?.column ?? '')
@@ -76,7 +121,7 @@ function ReportSummary({ summaries, valid }: { summaries: SurveySummary[]; valid
 
   return <section className="survey-section" aria-labelledby={`${selectId}-heading`}>
     <h6 id={`${selectId}-heading`}>答卷统计</h6>
-    <p className="survey-note">仅统计有效答卷，分母为 {valid} 份。均值和范围根据数值回答计算。</p>
+    <p className="survey-note">现有统计均使用未加权有效答卷。答卷统计的分母为 {valid} 份，均值和范围按数值回答计算。</p>
     {summary ? <>
       <div className="field">
         <label htmlFor={selectId}>统计列</label>
@@ -383,13 +428,11 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
   const [rules, setRules] = useState(initialRules)
   const rulesChanged = ruleNames.some((key) => rules[key].length !== initialRules[key].length
     || rules[key].some((column, index) => column !== initialRules[key][index]))
-  const ruleOptions = {
-    sheet: options.sheet,
+  const ruleOptions: SurveyOptions = {
+    ...options,
     requiredColumns: rules.requiredColumns.length ? rules.requiredColumns : undefined,
     duplicateColumns: rules.duplicateColumns.length ? rules.duplicateColumns : undefined,
-    crossTab: options.crossTab,
-    reliability: options.reliability,
-    regression: options.regression,
+    reviews: undefined,
   }
 
   useEffect(() => { heading.current?.focus() }, [])
@@ -416,7 +459,7 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
     {newerMaterial && <p className="survey-note">资料列表中有较新的同名文件。当前报告仍基于此摘要对应的旧版资料。</p>}
     <dl className="survey-counts">
       <div><dt>总答卷</dt><dd>{report.total}</dd></div>
-      <div><dt>有效</dt><dd>{report.valid}</dd></div>
+      <div><dt>有效答卷</dt><dd>{report.valid}</dd></div>
       <div><dt>无效</dt><dd>{report.invalid}</dd></div>
       <div><dt>待复核</dt><dd>{report.pending}</dd></div>
     </dl>
@@ -440,6 +483,9 @@ function SurveyAnalysis({ projectId, run, busy, newerMaterial, calculationError,
           onClick={() => onAnalyze(ruleOptions)}>应用清洗规则</button>
       </div>
     </details>
+    <ReportWeighting summaries={report.summaries} valid={report.valid} result={report.weighting} busy={busy}
+      error={calculationError?.kind === 'weighting' ? calculationError.message : undefined}
+      onApply={(weightColumn) => onAnalyze({ ...options, weightColumn }, 'weighting')} />
     <ReportSummary summaries={report.summaries} valid={report.valid} />
     <ReportCrossTab summaries={report.summaries} result={report.crossTab} busy={busy}
       error={calculationError?.kind === 'cross-tab' ? calculationError.message : undefined}

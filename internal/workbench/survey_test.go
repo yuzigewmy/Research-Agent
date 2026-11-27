@@ -35,15 +35,15 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return project.ProjectID
 	}
 	first, second := create("Water samples"), create("Field notes")
-	csv, _, err := store.saveMaterial(ctx, first, "samples.CSV", strings.NewReader(`Score,Station,Choice,Scale A,Scale B,_quality_status,__synthetic__
-8,North,Yes,8,7,,true
-7,North,No,7,4,,true
-3,South,Yes,3,4,held,true
-4,South,,,NaN,,true
-1,South,No,2,3,held,true
-5,North,Yes,4,8,invalid,true
-6,South,,1,+Inf,,true
-8,South,Yes,3,20,,true
+	csv, _, err := store.saveMaterial(ctx, first, "samples.CSV", strings.NewReader(`Score,Station,Choice,Scale A,Scale B,_quality_status,__synthetic__,Weight
+8,North,Yes,8,7,,true,0.1
+7,North,No,7,4,,true,2.000001
+3,South,Yes,3,4,held,true,0.2
+4,South,,,NaN,,true,
+1,South,No,2,3,held,true,999
+5,North,Yes,4,8,invalid,true,999
+6,South,,1,+Inf,,true,0
+8,South,Yes,3,20,,true,999
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		return res
 	}
 	base := projectsPath + "/" + first + "/surveys"
-	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"duplicateColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"},"reliability":{"columns":[" scale b ","SCALE A"]},"regression":{"predictorColumn":"Scale A","outcomeColumn":"Scale B"}}}`, csv.MaterialID)
+	body := fmt.Sprintf(`{"requestId":"analysis-1","materialId":%q,"options":{"requiredColumns":["Score"],"duplicateColumns":["Score"],"reviews":[{"row":3,"accept":true,"reason":"Confirmed"}],"crossTab":{"rowColumn":"station","columnColumn":"Choice"},"reliability":{"columns":[" scale b ","SCALE A"]},"regression":{"predictorColumn":"Scale A","outcomeColumn":"Scale B"},"weightColumn":" weight "}}`, csv.MaterialID)
 	created := request(http.MethodPost, base, body, http.StatusCreated).Body.String()
 	var run struct {
 		AnalysisID     string         `json:"analysisId"`
@@ -84,6 +84,10 @@ func TestSurveyRunReplaysAndDownloadsSavedReport(t *testing.T) {
 		!run.Report.Demo || run.Report.Valid != 5 || run.Report.Pending != 1 || run.Report.Invalid != 2 ||
 		run.MaterialID != csv.MaterialID || run.MaterialName != csv.Name || run.MaterialSHA256 != csv.SHA256 {
 		t.Fatalf("unexpected analysis receipt %s (%v)", created, err)
+	}
+	if run.Options.WeightColumn != " weight " || run.Report.Weighting == nil ||
+		*run.Report.Weighting != (survey.Weighting{Column: "Weight", Included: 3, Missing: 1, Invalid: 1, TotalWeight: "2.300001"}) {
+		t.Fatalf("unexpected weighting in saved report: %+v", run.Report.Weighting)
 	}
 	want := &survey.CrossTab{
 		CrossTabOptions: survey.CrossTabOptions{RowColumn: "Station", ColumnColumn: "Choice"},

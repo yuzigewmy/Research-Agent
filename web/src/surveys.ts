@@ -60,6 +60,15 @@ export interface SurveyOptions {
   crossTab?: SurveyCrossTabOptions
   reliability?: SurveyReliabilityOptions
   regression?: SurveyRegressionOptions
+  weightColumn?: string
+}
+
+export interface SurveyWeighting {
+  column: string
+  included: number
+  missing: number
+  invalid: number
+  totalWeight: string
 }
 
 export interface SurveyInput {
@@ -111,6 +120,7 @@ export interface SurveyReport extends SurveyCounts {
   crossTab?: SurveyCrossTab
   reliability?: SurveyReliability
   regression?: SurveyRegression
+  weighting?: SurveyWeighting
 }
 
 export interface SurveyRun extends SurveyMetadata {
@@ -183,6 +193,7 @@ function isOptions(value: unknown): value is SurveyOptions {
     && (options.crossTab === undefined || isCrossTabOptions(options.crossTab))
     && (options.reliability === undefined || isReliabilityOptions(options.reliability))
     && (options.regression === undefined || isRegressionOptions(options.regression))
+    && (options.weightColumn === undefined || (typeof options.weightColumn === 'string' && options.weightColumn.trim().length > 0))
 }
 
 function isRow(value: unknown): value is SurveyRow {
@@ -244,6 +255,15 @@ function isRegression(value: unknown, valid: number): value is SurveyRegression 
     && (fit.rSquared === undefined || (Number.isFinite(fit.rSquared) && fit.rSquared >= 0 && fit.rSquared <= 1))
 }
 
+function isWeighting(value: unknown, valid: number, columns: string[]): value is SurveyWeighting {
+  const weighting = value as Partial<SurveyWeighting> | null
+  if (!weighting) return false
+  const { column, included, missing, invalid, totalWeight } = weighting
+  return typeof column === 'string' && columns.includes(column)
+    && isCount(included) && isCount(missing) && isCount(invalid) && included + missing + invalid === valid
+    && typeof totalWeight === 'string' && /^[0-9]+(?:\.[0-9]+)?$/.test(totalWeight)
+}
+
 function isReport(value: unknown): value is SurveyReport {
   const report = value as Partial<SurveyReport> | null
   return !!report && isCounts(value) && isStringList(report.columns)
@@ -252,6 +272,7 @@ function isReport(value: unknown): value is SurveyReport {
     && (report.crossTab === undefined || isCrossTab(report.crossTab))
     && (report.reliability === undefined || isReliability(report.reliability, value.valid))
     && (report.regression === undefined || isRegression(report.regression, value.valid))
+    && (report.weighting === undefined || isWeighting(report.weighting, value.valid, report.columns))
 }
 
 function isRun(value: unknown): value is SurveyRun {
