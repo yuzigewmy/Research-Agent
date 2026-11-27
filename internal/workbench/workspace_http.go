@@ -23,6 +23,10 @@ func (s *Store) registerWorkspace(mux *http.ServeMux, pdfFont string) {
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.svg", s.handleDiagramSVG)
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.pdf", s.handleDiagramPDF(pdfFont))
 	mux.HandleFunc("POST "+path+"/versions/{versionId}/restore", s.handleRestoreWorkspace)
+	evidence := path + "/versions/{versionId}/comparison-links"
+	mux.HandleFunc("GET "+evidence, s.handleListManuscriptEvidence)
+	mux.HandleFunc("POST "+evidence, s.handleCreateManuscriptEvidence)
+	mux.HandleFunc(evidence, methodNotAllowed("GET, HEAD, POST"))
 }
 
 func validWorkspacePath(value string) bool {

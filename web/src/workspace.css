@@ -103,3 +103,16 @@ pre.workspace-text { max-block-size: 16rem; overflow: auto; border-color: var(--
   background: var(--background);
   overflow-wrap: anywhere;
 }
+
+.manuscript-evidence, .manuscript-evidence-controls, .manuscript-evidence-list li {
+  display: grid;
+  gap: 0.625rem;
+  min-inline-size: 0;
+}
+
+.manuscript-evidence { padding-block: 0.625rem; border-block-start: 1px solid var(--line); }
+.manuscript-evidence h5 { margin: 0; font-size: 0.9375rem; font-weight: 650; }
+.manuscript-evidence-controls .field { min-inline-size: 0; flex: 1 1 10rem; }
+.manuscript-evidence-list { list-style: none; padding: 0; margin: 0; }
+.manuscript-evidence-list li { padding-block: 0.625rem; border-block-start: 1px solid var(--line); overflow-wrap: anywhere; }
+.manuscript-evidence-list a { color: var(--green); }

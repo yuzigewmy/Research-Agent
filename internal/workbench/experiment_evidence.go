@@ -15,22 +15,28 @@ const experimentEvidencePageSize = 50
 
 var errExperimentEvidence = errors.New("comparison evidence does not match the recorded input")
 
-func (s *Store) readExperimentEvidence(ctx context.Context, projectID, taskID string) (experimentComparisonReport, string, error) {
+func readExperimentReport(ctx context.Context, db workspaceQuery, projectID, taskID string) (experimentComparisonReport, error) {
 	var report experimentComparisonReport
-	artifact, err := s.readTaskArtifact(ctx, projectID, taskID)
+	var resultJSON, inputsJSON string
+	if err := db.QueryRowContext(ctx, `SELECT result_json, inputs_json FROM tasks
+		WHERE project_id = ? AND task_id = ? AND kind = ? AND status = 'SUCCEEDED' AND `+standaloneTask,
+		projectID, taskID, experimentComparisonTask).Scan(&resultJSON, &inputsJSON); err != nil {
+		return report, err
+	}
+	var inputs []taskInput
+	if err := json.Unmarshal([]byte(resultJSON), &report); err != nil || report.Method != experimentComparisonMethod {
+		return report, errExperimentEvidence
+	}
+	if err := json.Unmarshal([]byte(inputsJSON), &inputs); err != nil || len(inputs) != 1 || report.Input != inputs[0] {
+		return report, errExperimentEvidence
+	}
+	return report, nil
+}
+
+func (s *Store) readExperimentEvidence(ctx context.Context, projectID, taskID string) (experimentComparisonReport, string, error) {
+	report, err := readExperimentReport(ctx, s.db, projectID, taskID)
 	if err != nil {
 		return report, "", err
-	}
-	if artifact.kind != experimentComparisonTask {
-		return report, "", sql.ErrNoRows
-	}
-	task, err := lookupTask(ctx, s.db, projectID, taskID)
-	if err != nil {
-		return report, "", err
-	}
-	if err := json.Unmarshal([]byte(artifact.jsonArtifact), &report); err != nil ||
-		report.Method != experimentComparisonMethod || len(task.Inputs) != 1 || report.Input != task.Inputs[0] {
-		return report, "", errExperimentEvidence
 	}
 	source, err := s.readExperimentSource(ctx, projectID, report.Input)
 	if err != nil {

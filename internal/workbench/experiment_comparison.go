@@ -186,7 +186,11 @@ func compareExperimentMetrics(ctx context.Context, source string) (experimentMet
 }
 
 func (s *Store) readExperimentSource(ctx context.Context, projectID string, input taskInput) (string, error) {
-	file, err := s.workspaceVersion(ctx, projectID, input.VersionID)
+	return s.readExperimentSourceFrom(ctx, s.db, projectID, input)
+}
+
+func (s *Store) readExperimentSourceFrom(ctx context.Context, db workspaceQuery, projectID string, input taskInput) (string, error) {
+	file, err := lookupWorkspaceVersion(ctx, db, projectID, input.VersionID)
 	if err != nil {
 		return "", err
 	}

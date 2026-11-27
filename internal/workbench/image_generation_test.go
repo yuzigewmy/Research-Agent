@@ -123,7 +123,7 @@ func TestImageGenerationKeepsRequestAndMaterialAcrossRestart(t *testing.T) {
 	request(handler, http.MethodPost, path, strings.TrimSuffix(redraw, "}")+`,"size":"1024x1024"}`, http.StatusBadRequest)
 
 	// Preserve the queued receipts in the previous schema before reopening.
-	if _, err := store.db.ExecContext(ctx, `DROP TABLE image_generation_sources; PRAGMA user_version = 53`); err != nil {
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE manuscript_comparison_links; DROP TABLE image_generation_sources; PRAGMA user_version = 53`); err != nil {
 		t.Fatal(err)
 	}
 	var archive bytes.Buffer
