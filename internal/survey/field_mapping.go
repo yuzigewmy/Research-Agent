@@ -68,6 +68,48 @@ func MapSettings(source Options, sourceColumns, targetColumns []string, fields [
 	if regression := source.Regression; regression != nil {
 		result.Regression = &RegressionOptions{PredictorColumn: translate(regression.PredictorColumn), OutcomeColumn: translate(regression.OutcomeColumn)}
 	}
+	if mr := source.MultipleRegression; mr != nil {
+		result.MultipleRegression = &MultipleRegressionOptions{
+			OutcomeColumn:    translate(mr.OutcomeColumn),
+			PredictorColumns: translateList(mr.PredictorColumns),
+		}
+	}
+	if fa := source.FactorAnalysis; fa != nil {
+		result.FactorAnalysis = &FactorAnalysisOptions{
+			Columns: translateList(fa.Columns),
+			Factors: fa.Factors,
+		}
+	}
+	if kano := source.Kano; kano != nil {
+		result.Kano = &KanoOptions{
+			FunctionalColumn:    translate(kano.FunctionalColumn),
+			DysfunctionalColumn: translate(kano.DysfunctionalColumn),
+		}
+	}
+	if psm := source.PSM; psm != nil {
+		result.PSM = &PSMOptions{
+			TooCheapColumn:     translate(psm.TooCheapColumn),
+			CheapColumn:        translate(psm.CheapColumn),
+			ExpensiveColumn:    translate(psm.ExpensiveColumn),
+			TooExpensiveColumn: translate(psm.TooExpensiveColumn),
+		}
+	}
+	if cj := source.Conjoint; cj != nil {
+		result.Conjoint = &ConjointOptions{
+			RatingColumn:     translate(cj.RatingColumn),
+			AttributeColumns: translateList(cj.AttributeColumns),
+		}
+	}
+	if cfa := source.CFA; cfa != nil {
+		constructs := make([]CFAConstructOptions, len(cfa.Constructs))
+		for i, c := range cfa.Constructs {
+			constructs[i] = CFAConstructOptions{
+				Name:    c.Name,
+				Columns: translateList(c.Columns),
+			}
+		}
+		result.CFA = &CFAOptions{Constructs: constructs}
+	}
 	for _, rule := range source.CategoryMappings {
 		rule.Column = translate(rule.Column)
 		result.CategoryMappings = append(result.CategoryMappings, rule)
