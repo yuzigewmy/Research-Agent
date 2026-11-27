@@ -135,10 +135,19 @@ func (s *Store) createSurveyRun(ctx context.Context, projectID, requestID, mater
 	if err != nil {
 		return surveyRun{}, false, err
 	}
+	var planSource *survey.AnalysisPlanSource
+	if options.PlanID != "" {
+		plan, err := s.getSurveyPlan(ctx, projectID, options.PlanID)
+		if err != nil {
+			return surveyRun{}, false, err
+		}
+		planSource = planSourceFromRecord(plan)
+	}
 	report, err := s.analyzeSurveyMaterial(material, options)
 	if err != nil {
 		return surveyRun{}, false, err
 	}
+	report.PlanSource = planSource
 	reportJSON, err := json.Marshal(report)
 	if err != nil {
 		return surveyRun{}, false, err

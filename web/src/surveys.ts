@@ -291,6 +291,93 @@ export interface SurveySettingsSource {
   fields: SurveyFieldPair[]
 }
 
+export const sampleSizeMethodCochran = 'proportion-cochran-v1'
+export const sampleSizeConfidenceLevels = [90, 95, 99] as const
+export type SampleSizeConfidenceLevel = typeof sampleSizeConfidenceLevels[number]
+export const defaultPlannedStatisticalMethods = [
+  '描述统计',
+  '交叉统计',
+  '权重加权',
+  '分类编码',
+  '量表信度（Cronbach α）',
+  '一元线性回归',
+] as const
+
+const sampleSizeZScores: Record<SampleSizeConfidenceLevel, number> = {
+  90: 1.6448536269514722,
+  95: 1.959963984540054,
+  99: 2.5758293035489004,
+}
+const maxSamplePopulation = 1_000_000_000
+const maxCalculatedSample = 1_000_000_000
+
+export interface SurveySampleSizeInput {
+  method?: string
+  confidenceLevel: SampleSizeConfidenceLevel
+  expectedProportion: number
+  marginOfError: number
+  populationSize?: number
+  responseRate: number
+}
+
+export interface SurveySampleSizeResult {
+  method: string
+  zScore: number
+  unadjustedSampleSize: number
+  finitePopulationAdjusted: number
+  plannedInvitations: number
+  formulaSummary: string
+}
+
+export interface SurveyAnalysisPlan {
+  planId: string
+  projectId: string
+  version: number
+  createdAt: string
+  title: string
+  objective: string
+  targetPopulation: string
+  samplingMethod: string
+  plannedMethods: string[]
+  missingStrategy: string
+  notes?: string
+  sampleSizeInput: SurveySampleSizeInput
+  sampleSizeResult: SurveySampleSizeResult
+}
+
+export interface SurveyAnalysisPlanList {
+  latestVersion: number
+  items: SurveyAnalysisPlan[]
+}
+
+export interface SurveyAnalysisPlanInput {
+  requestId: string
+  expectedVersion: number
+  title: string
+  objective: string
+  targetPopulation: string
+  samplingMethod: string
+  plannedMethods: string[]
+  missingStrategy: string
+  notes?: string
+  sampleSizeInput: SurveySampleSizeInput
+}
+
+export interface SurveyAnalysisPlanSource {
+  planId: string
+  version: number
+  title: string
+  objective: string
+  method: string
+  confidenceLevel: number
+  unadjustedSampleSize: number
+  finitePopulationAdjusted: number
+  plannedInvitations: number
+  formulaSummary: string
+  plannedMethods: string[]
+  createdAt: string
+}
+
 export interface SurveyOptions {
   settingsSource?: SurveySettingsSource
   categoryMappings?: SurveyCategoryMapping[]
@@ -308,6 +395,7 @@ export interface SurveyOptions {
   conjoint?: SurveyConjointOptions
   cfa?: SurveyCFAOptions
   weightColumn?: string
+  planId?: string
 }
 
 export interface SurveyWeighting {
@@ -381,6 +469,7 @@ export interface SurveyReport extends SurveyCounts {
   conjoint?: SurveyConjoint
   cfa?: SurveyCFA
   weighting?: SurveyWeighting
+  planSource?: SurveyAnalysisPlanSource
 }
 
 export interface SurveyRun extends SurveyMetadata {
@@ -528,6 +617,7 @@ function isOptions(value: unknown): value is SurveyOptions {
     && (options.conjoint === undefined || isConjointOptions(options.conjoint))
     && (options.cfa === undefined || isCFAOptions(options.cfa))
     && (options.weightColumn === undefined || (typeof options.weightColumn === 'string' && options.weightColumn.trim().length > 0))
+    && (options.planId === undefined || isId(options.planId))
 }
 
 function isRow(value: unknown): value is SurveyRow {
@@ -680,6 +770,71 @@ function isCFA(value: unknown, valid: number): value is SurveyCFA {
   return !!res && Array.isArray(res.constructs) && Array.isArray(res.correlationMatrix) && typeof res.discriminantValid === 'boolean'
 }
 
+function isConfidenceLevel(value: unknown): value is SampleSizeConfidenceLevel {
+  return value === 90 || value === 95 || value === 99
+}
+
+function isSampleSizeInput(value: unknown): value is SurveySampleSizeInput {
+  const input = value as Partial<SurveySampleSizeInput> | null
+  return !!input
+    && (input.method === undefined || typeof input.method === 'string')
+    && isConfidenceLevel(input.confidenceLevel)
+    && typeof input.expectedProportion === 'number' && Number.isFinite(input.expectedProportion)
+    && typeof input.marginOfError === 'number' && Number.isFinite(input.marginOfError)
+    && (input.populationSize === undefined || (isCount(input.populationSize) && input.populationSize > 0))
+    && typeof input.responseRate === 'number' && Number.isFinite(input.responseRate)
+}
+
+function isSampleSizeResult(value: unknown): value is SurveySampleSizeResult {
+  const result = value as Partial<SurveySampleSizeResult> | null
+  return !!result
+    && typeof result.method === 'string' && result.method.length > 0
+    && typeof result.zScore === 'number' && Number.isFinite(result.zScore)
+    && isCount(result.unadjustedSampleSize) && result.unadjustedSampleSize > 0
+    && isCount(result.finitePopulationAdjusted) && result.finitePopulationAdjusted > 0
+    && isCount(result.plannedInvitations) && result.plannedInvitations > 0
+    && typeof result.formulaSummary === 'string' && result.formulaSummary.length > 0
+}
+
+function isAnalysisPlan(value: unknown): value is SurveyAnalysisPlan {
+  const plan = value as Partial<SurveyAnalysisPlan> | null
+  return !!plan
+    && isId(plan.planId) && isId(plan.projectId)
+    && isCount(plan.version) && plan.version > 0
+    && typeof plan.createdAt === 'string' && Number.isFinite(Date.parse(plan.createdAt))
+    && typeof plan.title === 'string' && plan.title.length > 0
+    && typeof plan.objective === 'string' && plan.objective.length > 0
+    && typeof plan.targetPopulation === 'string' && plan.targetPopulation.length > 0
+    && typeof plan.samplingMethod === 'string' && plan.samplingMethod.length > 0
+    && isStringList(plan.plannedMethods) && plan.plannedMethods.length > 0
+    && typeof plan.missingStrategy === 'string' && plan.missingStrategy.length > 0
+    && (plan.notes === undefined || typeof plan.notes === 'string')
+    && isSampleSizeInput(plan.sampleSizeInput)
+    && isSampleSizeResult(plan.sampleSizeResult)
+}
+
+function isAnalysisPlanList(value: unknown): value is SurveyAnalysisPlanList {
+  const list = value as Partial<SurveyAnalysisPlanList> | null
+  return !!list && isCount(list.latestVersion) && Array.isArray(list.items) && list.items.every(isAnalysisPlan)
+}
+
+function isAnalysisPlanSource(value: unknown): value is SurveyAnalysisPlanSource {
+  const source = value as Partial<SurveyAnalysisPlanSource> | null
+  return !!source
+    && isId(source.planId)
+    && isCount(source.version) && source.version > 0
+    && typeof source.title === 'string' && source.title.length > 0
+    && typeof source.objective === 'string' && source.objective.length > 0
+    && typeof source.method === 'string' && source.method.length > 0
+    && isConfidenceLevel(source.confidenceLevel)
+    && isCount(source.unadjustedSampleSize) && source.unadjustedSampleSize > 0
+    && isCount(source.finitePopulationAdjusted) && source.finitePopulationAdjusted > 0
+    && isCount(source.plannedInvitations) && source.plannedInvitations > 0
+    && typeof source.formulaSummary === 'string' && source.formulaSummary.length > 0
+    && isStringList(source.plannedMethods) && source.plannedMethods.length > 0
+    && typeof source.createdAt === 'string' && Number.isFinite(Date.parse(source.createdAt))
+}
+
 function isReport(value: unknown): value is SurveyReport {
   const report = value as Partial<SurveyReport> | null
   return !!report && isCounts(value) && isStringList(report.columns)
@@ -695,6 +850,7 @@ function isReport(value: unknown): value is SurveyReport {
     && (report.conjoint === undefined || isConjoint(report.conjoint, value.valid))
     && (report.cfa === undefined || isCFA(report.cfa, value.valid))
     && (report.weighting === undefined || isWeighting(report.weighting, value.valid, report.columns))
+    && (report.planSource === undefined || isAnalysisPlanSource(report.planSource))
 }
 
 function isRun(value: unknown): value is SurveyRun {
@@ -756,4 +912,78 @@ export async function mapSurveySettings(projectId: string, sourceAnalysisId: str
 
 export function surveyDownloadPath(projectId: string, analysisId: string) {
   return `${surveyPath(projectId, analysisId)}/download`
+}
+
+function ceilSampleCount(value: number): number | undefined {
+  if (!Number.isFinite(value) || value <= 0) return undefined
+  const rounded = Math.round(value)
+  const ceiled = Math.max(1, Math.abs(value - rounded) <= 1e-12 ? rounded : Math.ceil(value))
+  return ceiled <= maxCalculatedSample ? ceiled : undefined
+}
+
+export function calculateSampleSizePreview(input: SurveySampleSizeInput): { result: SurveySampleSizeResult } | { error: string } {
+  const method = input.method?.trim() || sampleSizeMethodCochran
+  if (method !== sampleSizeMethodCochran) {
+    return { error: `不支持的样本量计算口径 ${method}。` }
+  }
+  if (!isConfidenceLevel(input.confidenceLevel)) {
+    return { error: '置信水平仅支持 90%、95% 或 99%。' }
+  }
+  const z = sampleSizeZScores[input.confidenceLevel]
+  const p = input.expectedProportion
+  if (!Number.isFinite(p) || p <= 0 || p >= 1) {
+    return { error: '预期比例 p 须为大于 0 且小于 1 的数值。' }
+  }
+  const e = input.marginOfError
+  if (!Number.isFinite(e) || e <= 0 || e >= 0.5) {
+    return { error: '允许误差 e 须为大于 0 且小于 0.5 的数值。' }
+  }
+  let pop: number | undefined
+  if (input.populationSize !== undefined) {
+    if (!Number.isSafeInteger(input.populationSize) || input.populationSize < 0 || input.populationSize > maxSamplePopulation) {
+      return { error: `总体规模 N 若指定则须为 1 至 ${maxSamplePopulation} 的整数，留空或 0 表示无限总体。` }
+    }
+    if (input.populationSize > 0) pop = input.populationSize
+  }
+  const r = input.responseRate
+  if (!Number.isFinite(r) || r <= 0 || r > 1) {
+    return { error: '预期有效回收率 r 须为大于 0 且不超过 1 的数值。' }
+  }
+
+  const n0Raw = (z * z * p * (1 - p)) / (e * e)
+  const unadjusted = ceilSampleCount(n0Raw)
+  if (unadjusted === undefined) return { error: '基础样本量超出系统计算上限。' }
+
+  const fpcAdjusted = pop !== undefined ? ceilSampleCount(n0Raw / (1 + (n0Raw - 1) / pop)) : unadjusted
+  if (fpcAdjusted === undefined) return { error: '有限总体校正样本量超出系统计算上限。' }
+
+  const planned = ceilSampleCount(fpcAdjusted / r)
+  if (planned === undefined) return { error: '计划发放量超出系统计算上限。' }
+
+  const rPct = Number((Math.round(r * 10000) / 100).toString())
+  const base = `Cochran 比例抽样口径（${method}）：置信水平 ${input.confidenceLevel}%（z = ${z.toFixed(4)}），预期比例 p = ${p}，允许误差 e = ${e}，基础样本量 n₀ = ⌈z²·p·(1−p)/e²⌉ = ${unadjusted}`
+  const formulaSummary = pop !== undefined
+    ? `${base}；有限总体 N = ${pop}，校正样本量 n_fpc = ⌈n₀,raw / (1 + (n₀,raw − 1) / N)⌉ = ${fpcAdjusted}；预期有效回收率 ${rPct}%（r = ${r}），计划发放量 = ⌈${fpcAdjusted} / ${r}⌉ = ${planned}。`
+    : `${base}；按无限总体计算（n_fpc = ${fpcAdjusted}）；预期有效回收率 ${rPct}%（r = ${r}），计划发放量 = ⌈${fpcAdjusted} / ${r}⌉ = ${planned}。`
+
+  return {
+    result: {
+      method,
+      zScore: z,
+      unadjustedSampleSize: unadjusted,
+      finitePopulationAdjusted: fpcAdjusted,
+      plannedInvitations: planned,
+      formulaSummary,
+    },
+  }
+}
+
+export async function listSurveyPlans(projectId: string, signal: AbortSignal) {
+  return request(`${projectPath(projectId)}/survey-plans`, isAnalysisPlanList, { signal })
+}
+
+export async function createSurveyPlan(projectId: string, input: SurveyAnalysisPlanInput, signal: AbortSignal) {
+  return request(`${projectPath(projectId)}/survey-plans`, isAnalysisPlan, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal,
+  })
 }

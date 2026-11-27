@@ -45,6 +45,7 @@ type Options struct {
 	WeightColumn       string                     `json:"weightColumn,omitempty"`
 	CategoryMappings   []CategoryMapping          `json:"categoryMappings,omitempty"`
 	SettingsSource     *SettingsSource            `json:"settingsSource,omitempty"`
+	PlanID             string                     `json:"planId,omitempty"`
 }
 
 // SettingsSource records the historical report and confirmed column pairs used to transfer settings.
@@ -86,6 +87,7 @@ type Report struct {
 	Conjoint           *Conjoint           `json:"conjoint,omitempty"`
 	CFA                *CFA                `json:"cfa,omitempty"`
 	Weighting          *Weighting          `json:"weighting,omitempty"`
+	PlanSource         *AnalysisPlanSource `json:"planSource,omitempty"`
 	Demo               bool                `json:"demo"`
 }
 
