@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -302,5 +303,46 @@ func TestRemoteComparisonRecoversOriginalJobAndVerifiesResult(t *testing.T) {
 	}
 	if latest, err := store.workspaceFile(ctx, project, published.Path); err != nil || latest.VersionID != edited.VersionID {
 		t.Fatalf("replay displaced the edited version: %+v (%v)", latest, err)
+	}
+
+	var backup bytes.Buffer
+	if err := store.writeWorkspaceBackup(ctx, t.TempDir(), &backup); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "restored")
+	if err := restoreWorkspace(ctx, bytes.NewReader(backup.Bytes()), int64(backup.Len()), destination, maxRestoreDatabaseBytes); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	handler = NewHandler(restored, nil, HandlerConfig{})
+	var restoredSnapshot struct {
+		Configured      bool
+		Job             computeJob
+		ReportRetrieved bool
+		Scatter         *remoteScatter
+	}
+	if err := json.Unmarshal(request(http.MethodGet, path, http.StatusOK).Body.Bytes(), &restoredSnapshot); err != nil ||
+		restoredSnapshot.Configured || restoredSnapshot.Job != job || !restoredSnapshot.ReportRetrieved ||
+		restoredSnapshot.Scatter == nil || *restoredSnapshot.Scatter != *snapshot.Scatter {
+		t.Fatalf("restore changed the remote receipt: %+v (%v)", restoredSnapshot, err)
+	}
+	if recovered := read(http.MethodGet, stopPath); recovered != stopped {
+		t.Fatalf("restore changed the stopped receipt: %+v", recovered)
+	}
+	for route, original := range map[string]*httptest.ResponseRecorder{
+		path + "/result":             result,
+		path + "/scatter":            plot,
+		catalog.Items[0].DownloadURL: plot,
+	} {
+		if got := request(http.MethodGet, route, http.StatusOK); !bytes.Equal(got.Body.Bytes(), original.Body.Bytes()) {
+			t.Fatalf("restore changed the downloaded artifact at %s", route)
+		}
+	}
+	if latest, err := restored.workspaceFile(ctx, project, published.Path); err != nil || latest != edited.WorkspaceFile {
+		t.Fatalf("restore changed the current workspace version: %+v (%v)", latest, err)
 	}
 }
