@@ -120,6 +120,38 @@ export function workspaceHTMLPath(projectId: string, versionId: string, action: 
   return `${versionPath(projectId, versionId)}/html/${action}`
 }
 
+export const workspaceBundleLimit = 24
+
+export async function readWorkspaceBundle(projectId: string, versionIds: readonly string[], signal: AbortSignal) {
+  const path = `${filesPath(projectId)}/bundle`
+  if (!versionIds.length || versionIds.length > workspaceBundleLimit || new Set(versionIds).size !== versionIds.length
+    || !versionIds.every(isPathId)) {
+    throw new ProjectApiError(`请选择 1 至 ${workspaceBundleLimit} 个不同的已保存版本。`, 400)
+  }
+
+  const zipType = 'application/zip'
+  let response: Response
+  try {
+    response = await fetch(path, {
+      method: 'POST', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal,
+      headers: { Accept: zipType, 'Content-Type': 'application/json' }, body: JSON.stringify({ versionIds }),
+    })
+  } catch (cause) {
+    if (signal.aborted) throw cause
+    throw new ProjectApiError('无法连接到项目服务，请检查连接后重试。', 0)
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown } } | null
+    const message = body?.error?.message
+    const code = body?.error?.code
+    throw new ProjectApiError(typeof message === 'string' && message.trim() ? message : `无法读取工作区 ZIP（HTTP ${response.status}）。`,
+      response.status, typeof code === 'string' ? code : undefined)
+  }
+  const contentType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
+  if (contentType !== zipType) throw new ProjectApiError('项目服务返回的文件无法识别为 ZIP。', 422)
+  return response.blob()
+}
+
 export async function readText(projectId: string, path: string, signal: AbortSignal) {
   return request(`${filesPath(projectId)}/text?${new URLSearchParams({ path })}`, isDocument, { signal })
 }

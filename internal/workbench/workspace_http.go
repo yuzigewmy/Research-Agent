@@ -20,6 +20,8 @@ func (s *Store) registerWorkspace(mux *http.ServeMux, pdfFont string) {
 	mux.HandleFunc("GET "+path, s.handleListWorkspace(false))
 	mux.HandleFunc("GET "+path+"/text", s.handleWorkspaceText)
 	mux.HandleFunc("PUT "+path+"/text", s.handleSaveWorkspace)
+	mux.HandleFunc("POST "+path+"/bundle", s.handleWorkspaceBundle)
+	mux.HandleFunc(path+"/bundle", methodNotAllowed("POST"))
 	mux.HandleFunc("GET "+path+"/versions", s.handleListWorkspace(true))
 	mux.HandleFunc("GET "+path+"/versions/{versionId}", s.handleWorkspaceVersion)
 	mux.HandleFunc("GET "+path+"/versions/{versionId}/diagram.svg", s.handleDiagramSVG)

@@ -6,13 +6,15 @@ import { MarkdownPreview } from './MarkdownPreview'
 import { SelectionEdit } from './SelectionEdit'
 import type { SelectionEditRange } from './SelectionEdit'
 import { WordExport } from './WordExport'
+import { WorkspaceBundle, WorkspaceBundleAdd } from './WorkspaceBundle'
+import type { BundleSelection, BundleVersion } from './WorkspaceBundle'
 import { WorkspaceHTMLPreview } from './WorkspaceHTMLPreview'
 import { errorMessage, ProjectApiError } from './projects'
 import { researchBriefPath, researchDocumentTemplates } from './researchDocuments'
 import type { ResearchDocumentTemplate } from './researchDocuments'
 import { isManuscriptSelection, manuscriptSelectionByteLimit, manuscriptSelectionLimit, sameManuscriptSelection } from './turns'
 import type { ManuscriptSelection } from './turns'
-import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText } from './workspace'
+import { listFiles, listVersions, readText, readVersion, restoreVersion, saveText, workspaceBundleLimit } from './workspace'
 import type { Document, FilePage } from './workspace'
 import './workspace.css'
 
@@ -110,9 +112,10 @@ type VersionPreviewProps = {
   onRestore: (versionId: string) => void
   revisionActions: RevisionActions
   initialFinding: InitialFinding
+  bundleSelection: BundleSelection
 }
 
-function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRestore, revisionActions, initialFinding }: VersionPreviewProps) {
+function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRestore, revisionActions, initialFinding, bundleSelection }: VersionPreviewProps) {
   const [document, setDocument] = useState<Document>()
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -137,7 +140,10 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
   if (!document) return <p className="workspace-note" role="status">正在加载版本内容…</p>
 
   return <div className="workspace-preview">
-    <p className="workspace-note">只读预览 · <time dateTime={document.createdAt}>{versionDate.format(new Date(document.createdAt))}</time></p>
+    <div className="workspace-heading">
+      <p className="workspace-note">只读预览 · <time dateTime={document.createdAt}>{versionDate.format(new Date(document.createdAt))}</time></p>
+      <WorkspaceBundleAdd version={document} selection={bundleSelection} historical />
+    </div>
     {document.content
       ? <pre className="workspace-text" tabIndex={0} aria-label="版本内容" dir="auto">{document.content}</pre>
       : <p className="workspace-note">此版本为空文件。</p>}
@@ -159,7 +165,7 @@ function VersionPreview({ projectId, versionId, restoreBlocked, isCurrent, onRes
   </div>
 }
 
-function VersionHistory({ projectId, document, restoreBlocked, onRestore, selected, onSelect, applying, revisionActions, initialFinding }: {
+function VersionHistory({ projectId, document, restoreBlocked, onRestore, selected, onSelect, applying, revisionActions, initialFinding, bundleSelection }: {
   projectId: string
   document: Document
   restoreBlocked: string | undefined
@@ -169,6 +175,7 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore, select
   applying: boolean
   revisionActions: RevisionActions
   initialFinding: InitialFinding
+  bundleSelection: BundleSelection
 }) {
   const { path, versionId: currentId } = document
   const load = useCallback((signal: AbortSignal, cursor?: string) => listVersions(projectId, path, signal, cursor), [projectId, path])
@@ -190,7 +197,7 @@ function VersionHistory({ projectId, document, restoreBlocked, onRestore, select
     {!page.loading && !page.error && !page.items.length && <p className="workspace-note">暂无版本。</p>}
     {selected && <VersionPreview key={selected} projectId={projectId} versionId={selected}
       restoreBlocked={restoreBlocked} isCurrent={selected === currentId} onRestore={onRestore}
-      revisionActions={revisionActions} initialFinding={initialFinding} />}
+      revisionActions={revisionActions} initialFinding={initialFinding} bundleSelection={bundleSelection} />}
   </div>
 }
 
@@ -228,6 +235,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
   const [name, setName] = useState('')
   const [template, setTemplate] = useState<ResearchDocumentTemplate>()
   const [document, setDocument] = useState<Document>()
+  const [bundleVersions, setBundleVersions] = useState<BundleVersion[]>([])
   const [draft, setDraft] = useState('')
   const [selection, setSelection] = useState<SelectionEditRange>()
   const [applying, setApplying] = useState(false)
@@ -291,6 +299,15 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     setSelection(undefined)
     setConflict(false)
   }
+
+  function addBundleVersion({ path, versionId }: BundleVersion) {
+    setBundleVersions((versions) => {
+      if (versions.length >= workspaceBundleLimit || versions.some((version) => version.versionId === versionId)) return versions
+      return [...versions, { path, versionId }]
+    })
+  }
+
+  const bundleSelection = { versions: bundleVersions, onAdd: addBundleVersion }
 
   function reviewActionsFor(reviewVersionId: string, baseVersionId: string): RevisionActions {
     return {
@@ -500,6 +517,8 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
     {!page.loading && !page.error && !paths.length && <p className="workspace-note" role="status">
       {page.search ? '没有匹配的文件路径。' : manuscriptIntake ? '暂无文本文件，可导入稿件或新建文件。' : '暂无文本文件，可新建文件开始编辑。'}
     </p>}
+    <WorkspaceBundle projectId={projectId} versions={bundleVersions}
+      onRemove={(versionId) => setBundleVersions((versions) => versions.filter((version) => version.versionId !== versionId))} />
     {destination && <div className="workspace-discard" ref={discardPrompt} tabIndex={-1}
       role="group" aria-label="处理未保存的修改">
       <p>当前有未保存的修改。{destinationLabel[destination.kind]} <bdi>{destination.path}</bdi> 前，请先保存或放弃草稿。</p>
@@ -537,6 +556,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
         </button>
         <button className="button outline" type="button" aria-expanded={history} aria-controls={`${id}-history`}
           disabled={applying} onClick={() => setHistory((value) => !value)}>版本历史</button>
+        <WorkspaceBundleAdd version={document} selection={bundleSelection} />
         {isMarkdown && <button className="button outline" type="button" aria-describedby={`${id}-quote-hint`}
           aria-disabled={alreadyQuoted || undefined} disabled={locked || !selectedQuote || quoteLimitReached} onClick={() => {
             if (!locked && selectedQuote && !alreadyQuoted && !quoteLimitReached) onManuscriptSelection(selectedQuote)
@@ -573,7 +593,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
       <div id={`${id}-history`} hidden={!history}>
         {history && <VersionHistory key={document.versionId} projectId={projectId} document={document}
           restoreBlocked={restoreBlocked} onRestore={restore} selected={historyVersion} applying={applying}
-          initialFinding={historyFinding} onSelect={(versionId) => {
+          initialFinding={historyFinding} bundleSelection={bundleSelection} onSelect={(versionId) => {
             setHistoryVersion(versionId)
             setHistoryFinding(undefined)
           }}
