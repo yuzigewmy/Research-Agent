@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage, ProjectApiError } from './projects'
 import { getTaskQueue, queueTaskKindLabels, stopTaskQueue } from './taskQueue'
 import type { StopTaskInput, StopTaskReceipt, TaskQueue } from './taskQueue'
@@ -18,6 +19,7 @@ function describeStop({ receipt, runningTaskStopped }: StopFeedback) {
 }
 
 export function ProjectTaskQueue({ projectId, onStopped }: { projectId: string; onStopped: () => void }) {
+  const locale = useLocale()
   const id = useId()
   const [queue, setQueue] = useState<TaskQueue>()
   const [refreshing, setRefreshing] = useState(true)
@@ -124,7 +126,7 @@ export function ProjectTaskQueue({ projectId, onStopped }: { projectId: string; 
 
   return (
     <section className="task-panel" aria-labelledby={`${id}-heading`}>
-      <h4 id={`${id}-heading`} ref={heading} tabIndex={-1}>后台任务</h4>
+      <h4 id={`${id}-heading`} ref={heading} tabIndex={-1}>{t(locale, 'panel.backgroundTasks')}</h4>
       <div role="status">
         {queue === undefined && refreshing && <p className="task-note">正在读取后台任务…</p>}
         {queue && <>

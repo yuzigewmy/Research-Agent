@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import {
   errorMessage, importProjectArchive, previewProjectArchiveImport, templates,
 } from './projects'
@@ -14,6 +15,7 @@ function formatBytes(bytes: number) {
 }
 
 export function ProjectArchiveImport({ onImported }: { onImported: (project: Project) => void }) {
+  const locale = useLocale()
   const id = useId()
   const [file, setFile] = useState<File>()
   const [requestId, setRequestId] = useState<string>()
@@ -83,7 +85,7 @@ export function ProjectArchiveImport({ onImported }: { onImported: (project: Pro
 
   return (
     <details className="project-archive-import">
-      <summary>导入项目归档（ZIP）</summary>
+      <summary>{t(locale, 'section.archiveImport')}</summary>
       <div className="project-archive-import-body">
         <div className="field">
           <label htmlFor={`${id}-file`}>选择单项目归档 ZIP（上限 64 MiB）</label>
@@ -113,7 +115,7 @@ export function ProjectArchiveImport({ onImported }: { onImported: (project: Pro
             disabled={!file || busy !== undefined}
             onClick={() => void handlePreview()}
           >
-            {busy === 'preview' ? '正在校验归档…' : '预览归档清单'}
+            {busy === 'preview' ? t(locale, 'section.archiveVerifying') : t(locale, 'section.archivePreview')}
           </button>
           {preview && (
             <button

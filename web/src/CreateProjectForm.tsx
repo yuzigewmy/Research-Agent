@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { ProjectTemplatePicker } from './ProjectTemplatePicker'
 import { createProject, errorMessage, projectStartModeHelp, projectStartModeLabels } from './projects'
 import type { CreateProject, Project, ProjectStartMode, TemplateId } from './projects'
@@ -22,6 +23,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
   templateItems: ProjectTemplate[]
   onCreated: (project: Project, options?: CreateProjectLaunchOptions) => void
 }) {
+  const locale = useLocale()
   const [title, setTitle] = useState('')
   const [preferredTemplate, setTemplate] = useState<TemplateId>('freeform')
   const [startMode, setStartMode] = useState<ProjectStartMode>('save_only')
@@ -34,8 +36,8 @@ export function CreateProjectForm({ templateItems, onCreated }: {
     ?? contests.find((item) => item.id === selectedTemplate?.defaults.contestId)
     ?? contests[0]
   const effectiveStartMode: ProjectStartMode = isWorkflowTemplate ? startMode : 'save_only'
-  const titleLabel = template === 'software_registration' ? '软件全称'
-    : template === 'patent_disclosure' ? '技术方案名称' : '项目名称'
+  const titleLabel = template === 'software_registration' ? t(locale, 'create.softwareName')
+    : template === 'patent_disclosure' ? t(locale, 'create.patentName') : t(locale, 'create.projectName')
   const [pending, setPending] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [submitError, setSubmitError] = useState('')
@@ -116,7 +118,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
         }} />
       {contests.length > 0 && contest && (
         <div className="field">
-          <label htmlFor="project-contest">目标数学建模赛事</label>
+          <label htmlFor="project-contest">{t(locale, 'create.contestLabel')}</label>
           <select id="project-contest" name="contestId" value={contest.id} disabled={pending}
             aria-describedby="project-contest-help"
             onChange={(event) => setContestId(event.currentTarget.value)}>
@@ -133,7 +135,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
       )}
       {isWorkflowTemplate && (
         <div className="field">
-          <label htmlFor="project-start-mode">建项起始方式</label>
+          <label htmlFor="project-start-mode">{t(locale, 'create.startModeLabel')}</label>
           <select id="project-start-mode" name="startMode" value={startMode} disabled={pending}
             aria-describedby="project-start-mode-help"
             onChange={(event) => {
@@ -150,7 +152,7 @@ export function CreateProjectForm({ templateItems, onCreated }: {
       {submitError && <p className="form-error" role="alert">{submitError}</p>}
       <div className="form-actions">
         <button type="submit" className="button primary" disabled={!template} aria-disabled={pending || !template}>
-          {pending ? '正在创建…' : '创建项目'}
+          {pending ? t(locale, 'create.submitting') : t(locale, 'create.submit')}
         </button>
       </div>
     </form>

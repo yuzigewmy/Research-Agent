@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage, ProjectApiError, request } from './projects'
 import { WorkspaceBundleAdd } from './WorkspaceBundle'
 import type { BundleEntry, BundleSelection } from './WorkspaceBundle'
@@ -88,9 +89,10 @@ function pageItems(current: Artifact[], incoming: Artifact[]) {
 type Props = { projectId: string; bundleSelection: BundleSelection }
 
 export function ProjectArtifacts(props: Props) {
+  const locale = useLocale()
   const [open, setOpen] = useState(false)
   return <details id="project-artifacts" className="project-artifacts" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>项目成果库</summary>
+    <summary>{t(locale, 'panel.artifacts')}</summary>
     {open && <ArtifactList key={props.projectId} {...props} />}
   </details>
 }

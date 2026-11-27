@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { t, useLocale } from './i18n'
 import { ConversationTasks } from './ConversationTasks'
 import { ConversationWorkflowProposal } from './ConversationWorkflowProposal'
 import { materialDownloadPath } from './materials'
@@ -143,6 +144,7 @@ interface ConversationProps {
 
 export function Conversation({ projectId, defaultTurnMode = 'CHAT', autoFocus = false, references, onClearReferences, manuscriptSelections,
   onClearManuscriptSelections, onWorkflowConfirmed, taskSync }: ConversationProps) {
+  const locale = useLocale()
   const attemptKey = `research.turn.${projectId}`
   const draftKey = `research.draft.${projectId}`
   const modelPreferenceKey = `research.conversation-model.${projectId}`
@@ -407,7 +409,7 @@ export function Conversation({ projectId, defaultTurnMode = 'CHAT', autoFocus = 
 
   return (
     <section className="conversation" aria-labelledby="conversation-title">
-      <h4 id="conversation-title" ref={headingRef} tabIndex={-1}>项目对话</h4>
+      <h4 id="conversation-title" ref={headingRef} tabIndex={-1}>{t(locale, 'panel.conversation')}</h4>
       {loading && <p role="status">正在读取会话…</p>}
       {cursor && <button className="button outline" type="button" disabled={loadingEarlier} onClick={() => void earlier()}>
         {loadingEarlier ? '正在读取…' : '更早的对话'}

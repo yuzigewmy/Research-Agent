@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { t, useLocale } from './i18n'
 import { listMaterials } from './materials'
 import { errorMessage } from './projects'
 import { ReportCoding } from './SurveyCoding'
@@ -662,6 +663,7 @@ export function SurveyPanel({ projectId }: { projectId: string }) {
 }
 
 function ProjectSurveys({ projectId }: { projectId: string }) {
+  const locale = useLocale()
   const id = useId()
   const loadMaterials = useCallback((signal: AbortSignal, cursor?: string) => listMaterials(projectId, signal, cursor), [projectId])
   const loadReports = useCallback((signal: AbortSignal, cursor?: string) => listSurveys(projectId, signal, cursor), [projectId])
@@ -770,7 +772,7 @@ function ProjectSurveys({ projectId }: { projectId: string }) {
   }
 
   return <section className="survey-panel" aria-labelledby={id}>
-    <h4 id={id}>问卷分析</h4>
+    <h4 id={id}>{t(locale, 'panel.survey')}</h4>
     <div className="field">
       <label htmlFor={`${id}-csv`}>
         {surveyFiles.some(({ name }) => isWorkbook(name)) ? '已上传的问卷 CSV 或 XLSX' : '已上传的问卷 CSV'}

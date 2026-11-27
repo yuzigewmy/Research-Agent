@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
-import type { WorkbenchLanguage } from './WorkbenchPreferences'
+import { t, useLocale } from './i18n'
+import type { WorkbenchLanguage } from './i18n'
 
 const assistantOpenKey = 'research-agent.assistant.open'
 const assistantMutedKey = 'research-agent.assistant.muted'
@@ -34,12 +35,13 @@ function scrollToSelector(selector: string, openDetails = false) {
 
 export function WorkbenchAssistant({ projectId, language }: {
   projectId: string | null
-  language: WorkbenchLanguage
+  language?: WorkbenchLanguage
 }) {
   const id = useId()
+  const contextLocale = useLocale()
+  const locale = language ?? contextLocale
   const [open, setOpen] = useState(() => readFlag(assistantOpenKey))
   const [muted, setMuted] = useState(() => readFlag(assistantMutedKey))
-  const en = language === 'en'
   const notificationSupported = typeof window !== 'undefined' && window.isSecureContext && typeof window.Notification === 'function'
   const notificationDenied = notificationSupported && Notification.permission === 'denied'
 
@@ -57,68 +59,64 @@ export function WorkbenchAssistant({ projectId, language }: {
 
   return <aside className="workbench-assistant" aria-labelledby={`${id}-heading`} data-open={open} data-muted={muted}>
     <div className="workbench-assistant-bar">
-      <strong id={`${id}-heading`}>{en ? 'In-Page Assistant' : '页内研究助手'}</strong>
+      <strong id={`${id}-heading`}>{t(locale, 'assistant.title')}</strong>
       <div className="workbench-assistant-controls">
         <button className="button outline workbench-assistant-btn" type="button"
           aria-pressed={muted} onClick={toggleMuted}>
-          {en ? (muted ? 'Muted' : 'Mute') : (muted ? '已静音' : '静音提示')}
+          {t(locale, muted ? 'assistant.muted' : 'assistant.mute')}
         </button>
         <button className="button outline workbench-assistant-btn" type="button"
           aria-expanded={open} aria-controls={`${id}-body`} onClick={toggleOpen}>
-          {en ? (open ? 'Collapse' : 'Open') : (open ? '收起助手' : '展开助手')}
+          {t(locale, open ? 'assistant.collapse' : 'assistant.open')}
         </button>
       </div>
     </div>
     <div id={`${id}-body`} className="workbench-assistant-body" hidden={!open}>
       {notificationDenied && (
         <p className="workbench-assistant-fallback" role="status">
-          {en
-            ? 'Browser desktop notifications are blocked. In-app notification center remains active.'
-            : '浏览器桌面通知已被拒绝，已自动降级为站内通知提醒。'}
+          {t(locale, 'assistant.desktopDenied')}
         </p>
       )}
       {!notificationSupported && (
         <p className="workspace-note" role="status">
-          {en
-            ? 'Desktop notifications are unavailable in this context; check the in-app notification center.'
-            : '当前环境不支持桌面通知，请使用顶部站内通知查看任务更新。'}
+          {t(locale, 'assistant.desktopUnsupported')}
         </p>
       )}
       {muted && (
         <p className="workspace-note" role="status">
-          {en ? 'Assistant alerts are muted.' : '页内助手提醒已静音，仍可通过下方快捷入口跳转。'}
+          {t(locale, 'assistant.mutedNotice')}
         </p>
       )}
-      <div className="workbench-assistant-links" role="navigation" aria-label={en ? 'Quick Navigation' : '快捷入口'}>
+      <div className="workbench-assistant-links" role="navigation" aria-label={t(locale, 'assistant.quickNav')}>
         {projectId !== null ? <>
           <button className="button outline workbench-assistant-btn" type="button"
             onClick={() => scrollToSelector('#conversation-title')}>
-            {en ? 'Conversation' : '跳转对话区'}
+            {t(locale, 'assistant.navConversation')}
           </button>
           <button className="button outline workbench-assistant-btn" type="button"
             onClick={() => scrollToSelector('.workflow-panel')}>
-            {en ? 'Workflow' : '跳转工作流'}
+            {t(locale, 'assistant.navWorkflow')}
           </button>
           <button className="button outline workbench-assistant-btn" type="button"
             onClick={() => scrollToSelector('#project-workspace')}>
-            {en ? 'Text Workspace' : '跳转文本工作区'}
+            {t(locale, 'assistant.navWorkspace')}
           </button>
           <button className="button outline workbench-assistant-btn" type="button"
             onClick={() => scrollToSelector('#project-diagrams', true)}>
-            {en ? 'Diagrams' : '跳转图表工作区'}
+            {t(locale, 'assistant.navDiagrams')}
           </button>
         </> : (
           <p className="workspace-note">
-            {en ? 'Open or create a project to jump directly to conversation, workflow, or manuscript workspace.' : '打开或新建项目后，可在此快速跳转对话区、工作流与文本工作区。'}
+            {t(locale, 'assistant.emptyProjectHint')}
           </p>
         )}
         <button className="button outline workbench-assistant-btn" type="button"
           onClick={() => scrollToSelector('.notifications', true)}>
-          {en ? 'Notifications' : '查看未读通知'}
+          {t(locale, 'assistant.navNotifications')}
         </button>
         <button className="button outline workbench-assistant-btn" type="button"
           onClick={() => scrollToSelector('.workspace-components', true)}>
-          {en ? 'Components' : '环境组件检查'}
+          {t(locale, 'assistant.navComponents')}
         </button>
       </div>
     </div>

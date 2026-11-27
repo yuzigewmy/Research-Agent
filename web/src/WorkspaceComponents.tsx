@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { errorMessage, request } from './projects'
 import './workspace-components.css'
 
@@ -45,6 +46,7 @@ function formatSize(bytes: number) {
 }
 
 export function WorkspaceComponents() {
+  const locale = useLocale()
   const [checking, setChecking] = useState(false)
   const [result, setResult] = useState<CheckResponse>()
   const [error, setError] = useState<string>()
@@ -81,12 +83,12 @@ export function WorkspaceComponents() {
     activeCheck.current = null
     setChecking(false)
   }}>
-    <summary>组件检查</summary>
+    <summary>{t(locale, 'section.workspaceComponents')}</summary>
     <div className="workspace-components-body">
       <p className="workspace-components-note">点击「检查组件」，使用固定样例检查本机组件。</p>
       <div className="workspace-components-actions">
         <button className="button outline" type="button" aria-disabled={checking || undefined} onClick={() => void check()}>
-          {result || error ? '重新检查组件' : '检查组件'}
+          {result || error ? t(locale, 'section.workspaceComponentsRecheck') : t(locale, 'section.workspaceComponentsCheck')}
         </button>
         <p className="workspace-components-note" role="status">
           {checking && '正在使用固定样例检查本机组件，最多等待 15 秒。'}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { t, useLocale } from './i18n'
 import { Conversation } from './Conversation'
 import type { CreateProjectLaunchOptions } from './CreateProjectForm'
 import { DiagramPanel } from './DiagramPanel'
@@ -50,10 +51,11 @@ export function LoadingState({ message }: { message: string }) {
 }
 
 export function RequestError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const locale = useLocale()
   return (
     <div className="request-error">
       <p role="alert">{message}</p>
-      <button className="button outline" type="button" onClick={onRetry}>重试</button>
+      <button className="button outline" type="button" onClick={onRetry}>{t(locale, 'details.retry')}</button>
     </div>
   )
 }
@@ -88,6 +90,7 @@ export function ProjectDetails({ projectId, launch, taskLink, workflowRunLink, r
   onUpdated: (project: Project) => void
   onDeleted?: (projectId: string) => void
 }) {
+  const locale = useLocale()
   const [detail, setDetail] = useState<DetailState>({ kind: 'loading' })
   const [retry, setRetry] = useState(0)
   const referenceKey = `research.references.${projectId}`
@@ -209,7 +212,7 @@ export function ProjectDetails({ projectId, launch, taskLink, workflowRunLink, r
     return () => controller.abort()
   }, [projectId, retry])
 
-  if (detail.kind === 'loading') return <LoadingState message="正在加载项目详情…" />
+  if (detail.kind === 'loading') return <LoadingState message={t(locale, 'details.loading')} />
   if (detail.kind === 'error') {
     return <RequestError message={detail.message} onRetry={() => {
       setDetail({ kind: 'loading' })
@@ -223,13 +226,13 @@ export function ProjectDetails({ projectId, launch, taskLink, workflowRunLink, r
       <h3 dir="auto">{project.displayName || project.title}</h3>
       <dl className="project-properties">
         {project.displayName && project.displayName !== project.title &&
-          <div><dt>研究题目</dt><dd dir="auto">{project.title}</dd></div>}
-        <div><dt>项目模板</dt><dd>{templates[project.templateId]}</dd></div>
-        {project.goal && <div><dt>研究目标</dt><dd className="turn-content" dir="auto">{project.goal}</dd></div>}
-        {project.deliverables && <div><dt>预期交付物</dt><dd className="turn-content" dir="auto">{project.deliverables}</dd></div>}
-        <div><dt>状态</dt><dd>{project.status === 'ARCHIVED' ? '已归档' : <span className="ready-label">已就绪</span>}</dd></div>
-        <div><dt>创建时间</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
-        <div><dt>修订</dt><dd>{project.revision}</dd></div>
+          <div><dt>{t(locale, 'details.researchTitle')}</dt><dd dir="auto">{project.title}</dd></div>}
+        <div><dt>{t(locale, 'details.template')}</dt><dd>{templates[project.templateId]}</dd></div>
+        {project.goal && <div><dt>{t(locale, 'details.goal')}</dt><dd className="turn-content" dir="auto">{project.goal}</dd></div>}
+        {project.deliverables && <div><dt>{t(locale, 'details.deliverables')}</dt><dd className="turn-content" dir="auto">{project.deliverables}</dd></div>}
+        <div><dt>{t(locale, 'details.status')}</dt><dd>{project.status === 'ARCHIVED' ? t(locale, 'details.status.archived') : <span className="ready-label">{t(locale, 'details.status.ready')}</span>}</dd></div>
+        <div><dt>{t(locale, 'details.createdAt')}</dt><dd><ProjectDate value={project.createdAt} withTime /></dd></div>
+        <div><dt>{t(locale, 'details.revision')}</dt><dd>{project.revision}</dd></div>
       </dl>
       {reviewLink && <ReviewNoticeDetail projectId={project.projectId} reviewLink={reviewLink} />}
       <ProjectAdministration project={project} onUpdated={(updated) => {

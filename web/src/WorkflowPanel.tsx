@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
+import { t, useLocale, workflowTitle } from './i18n'
 import { errorMessage, ProjectApiError } from './projects'
 import type { TemplateId } from './projects'
 import { WorkflowArtifactHistory } from './WorkflowArtifactHistory'
@@ -238,25 +239,8 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
   const isPatent = templateId === 'patent_disclosure'
   const isMathModeling = templateId === 'math_modeling'
   const defaultCheckpoints = isSoftware || isPatent
-  const title = {
-    experiment: '实验工作流',
-    literature_review: '文献综述工作流',
-    paper: '论文写作工作流',
-    topic: '研究选题工作流',
-    proposal: '开题报告工作流',
-    course_paper: '课程论文工作流',
-    course_report: '课程报告工作流',
-    software_registration: '软件著作权材料工作流',
-    patent_disclosure: '专利技术交底工作流',
-    full_research: '科研全流程工作流',
-    chinese_paper: '中文论文工作流',
-    humanities_paper: '人文社科论文工作流',
-    thesis: '学位论文工作流',
-    existing_materials: '已有材料成稿工作流',
-    market_research: '市场调查工作流',
-    math_modeling: '数学建模竞赛工作流',
-    big_data_contest: '大数据竞赛工作流',
-  }[templateId]
+  const locale = useLocale()
+  const title = workflowTitle(locale, templateId)
   const checkpointLabel = {
     experiment: '生成实验计划后，等待我确认再继续',
     literature_review: '整理主题后，等待我确认再继续',
@@ -695,7 +679,7 @@ export function WorkflowPanel({ projectId, templateId, onManuscriptSaved, refres
       <div className="workflow-heading">
         <h4 id={headingId} ref={heading} tabIndex={-1}>{title}</h4>
         <p className="workflow-run-status" role="status" data-status={run?.status}>
-          {completedWithSkip ? '本轮已完成' : run ? runStatusLabels[run.status] : snapshot && '尚未启动'}
+          {completedWithSkip ? t(locale, 'panel.workflow.completed') : run ? runStatusLabels[run.status] : snapshot && t(locale, 'panel.workflow.notStarted')}
         </p>
       </div>
       {workflowRunLink && <div className="workflow-run-detail" data-workflow-run-id={workflowRunLink.workflowRunId}>

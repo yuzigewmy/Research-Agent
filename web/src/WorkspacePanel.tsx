@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, ComponentProps, FormEvent } from 'react'
 import { EditHistoryPanel } from './EditHistoryPanel'
+import { t, useLocale } from './i18n'
 import { LatexExportPanel } from './LatexExportPanel'
 import { ManuscriptCheckPanel } from './ManuscriptCheckPanel'
 import { ManuscriptEvidence } from './ManuscriptEvidence'
@@ -276,6 +277,7 @@ export function WorkspacePanel(props: WorkspaceProps) {
 }
 
 function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscriptSelections, onManuscriptSelection, pdfReferences, bundleSelection }: WorkspaceProps) {
+  const locale = useLocale()
   const id = useId()
   const load = useCallback((signal: AbortSignal, { cursor, kind, search }: FileQuery) => listFiles(projectId, signal, cursor, kind, search), [projectId])
   const page = useFilePage(load, 'path')
@@ -514,7 +516,7 @@ function ProjectWorkspace({ projectId, publishedPaths, manuscriptIntake, manuscr
 
   return <section className="workspace-panel" id="project-workspace" aria-labelledby={id}>
     <div className="workspace-heading">
-      <h4 id={id}>文本工作区</h4>
+      <h4 id={id}>{t(locale, 'panel.textWorkspace')}</h4>
       <div className="workspace-actions">
         {manuscriptIntake && <>
           <input ref={manuscriptInput} type="file" accept=".md,.markdown" hidden onChange={importManuscript} />
